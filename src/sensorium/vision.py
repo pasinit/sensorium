@@ -47,21 +47,59 @@ class View:
             raise ValueError("brightness, contrast and saturation must be >= 0")
 
 
-def train_view(rgb: np.ndarray, rng: np.random.Generator, view: View) -> np.ndarray:
-    """``[T, H, W, 3]`` uint8 frames -> ``[T, size, size, 3]``: one random crop and jitter."""
-    side = crop_side(rgb, view)
-    top = int(rng.integers(0, rgb.shape[1] - side + 1))
-    left = int(rng.integers(0, rgb.shape[2] - side + 1))
-    frames = resize(rgb[:, top : top + side, left : left + side], view.size)
+def train_view(
+    rgb: np.ndarray, rng: np.random.Generator, view: View, source_side: int | None = None
+) -> np.ndarray:
+    """``[T, H, W, 3]`` uint8 frames -> ``[T, size, size, 3]``: one random crop and jitter.
+
+    ``source_side``: the frames are a square downscale of frames of this side (a frame cache,
+    ``sensorium.model.frame_cache``). The crop is then drawn in the source's pixel grid with the
+    same random calls as for the source frames, and taken from the downscale at the matching
+    (fractional) position, so a cached stream follows the same random path as an uncached one.
+    """
+    if source_side is not None and source_side != rgb.shape[1]:
+        side = max(1, round(source_side * view.crop))
+        top = int(rng.integers(0, source_side - side + 1))
+        left = int(rng.integers(0, source_side - side + 1))
+        frames = resize_box(rgb, (left, top, side), source_side, view.size)
+    else:
+        side = crop_side(rgb, view)
+        top = int(rng.integers(0, rgb.shape[1] - side + 1))
+        left = int(rng.integers(0, rgb.shape[2] - side + 1))
+        frames = resize(rgb[:, top : top + side, left : left + side], view.size)
     factors = [rng.uniform(1 - x, 1 + x) for x in (view.brightness, view.contrast, view.saturation)]
     return jitter(frames, *factors)
 
 
-def eval_view(rgb: np.ndarray, view: View) -> np.ndarray:
-    """``[T, H, W, 3]`` uint8 frames -> ``[T, size, size, 3]``: the centre crop, no jitter."""
+def eval_view(rgb: np.ndarray, view: View, source_side: int | None = None) -> np.ndarray:
+    """``[T, H, W, 3]`` uint8 frames -> ``[T, size, size, 3]``: the centre crop, no jitter.
+
+    ``source_side`` as in ``train_view``.
+    """
+    if source_side is not None and source_side != rgb.shape[1]:
+        side = max(1, round(source_side * view.crop))
+        corner = (source_side - side) // 2
+        return resize_box(rgb, (corner, corner, side), source_side, view.size)
     side = crop_side(rgb, view)
     top, left = (rgb.shape[1] - side) // 2, (rgb.shape[2] - side) // 2
     return resize(rgb[:, top : top + side, left : left + side], view.size)
+
+
+def resize_box(
+    frames: np.ndarray, crop: tuple[int, int, int], source_side: int, size: int
+) -> np.ndarray:
+    """Resize the square ``crop = (left, top, side)``, given in the pixel grid of a
+    ``source_side`` frame, of square downscaled ``frames`` to ``size`` x ``size`` (bilinear,
+    antialiased; the box is fractional in the downscale's grid)."""
+    left, top, side = crop
+    scale = frames.shape[1] / source_side
+    box = (left * scale, top * scale, (left + side) * scale, (top + side) * scale)
+    return np.stack(
+        [
+            np.asarray(Image.fromarray(f).resize((size, size), Image.Resampling.BILINEAR, box))
+            for f in frames
+        ]
+    )
 
 
 def crop_side(rgb: np.ndarray, view: View) -> int:

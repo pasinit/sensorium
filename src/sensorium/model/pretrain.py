@@ -121,6 +121,7 @@ class AugmentConfig:
     crop: float = 0.9
     touch_noise: bool = True
     cache_episodes: int = 16
+    frame_cache: str = ""  # a sensorium.model.frame_cache directory; "" decodes every episode
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,7 @@ class RunConfig:
             crop=self.augment.crop,
             touch_noise=self.augment.touch_noise,
             cache_episodes=self.augment.cache_episodes,
+            frame_cache=self.augment.frame_cache,
         )
 
 

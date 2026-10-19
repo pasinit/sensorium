@@ -29,7 +29,8 @@ def heldout_loss(
     against the online states (SIGReg) or the EMA states (EMA + VICReg), so compare it only
     within one objective.
     """
-    cfg = replace(layer.loader, touch_noise=False)
+    # held-out episodes are not in a training run's frame cache: decode them
+    cfg = replace(layer.loader, touch_noise=False, frame_cache="")
     dataset = SequenceDataset(
         paths, layer.space, layer.model.data_senses, cfg, seed=seed, train=False
     )
@@ -93,7 +94,7 @@ def touch_latent_r2(
     model = layer.model
     if model.teacher is None:
         return {}
-    cfg = replace(layer.loader, touch_noise=False)
+    cfg = replace(layer.loader, touch_noise=False, frame_cache="")
     dataset = SequenceDataset(paths, layer.space, model.data_senses, cfg, seed=seed, train=False)
     rng = np.random.default_rng(seed)
     device = next(model.parameters()).device

@@ -1179,6 +1179,171 @@ spread 0.012) stays under the 0.032 threshold at any n. The 2.8 is the normal-ap
 factor used throughout this document; with 3 seeds a t critical value would be larger. One data set
 (random play), the tiny model, the 20-episode probe set.
 
+## B-scale-0: does more pretraining data help the V+P JEPA? (pre-registered)
+
+**Written before the data exist.** Every V+P encoder so far was pretrained on the same 100
+random-play episodes. B-steps-0 showed the JEPA probe peaking near 1,000 steps (0.24 to 0.25) and
+draining to 0.13 by 10,000, with no overfitting in the held-out loss. One reading is that with 100
+episodes the run makes about 85 passes over the data and the objective learns to discard what it
+does not need. A tenfold larger set at the same step budget tests that reading directly. Code:
+`scripts/scale_test.py` (`split`, `train`, `probe`, `report`); paired statistics in
+`sensorium.model.paired`.
+
+**Data.**
+
+* **Source:** `configs/scale_test.toml`. 1,110 new seated babbling episodes of 600 steps (master
+  seed 2, so disjoint from `probe_test` and never mixed with it), in 30 blocks of 37:
+  `hand_seated_00..14` and `pincer_seated_00..14`.
+* **Split** (`scale_test.make_split`, drawn once with seed 0, written to `runs/scale/split.json`):
+  1. Episodes are shuffled within each block.
+  2. Held-out set: 100 episodes, 3 or 4 per block, 50 hand and 50 pincer.
+  3. Pretraining order: the rest, in rounds that take one episode of every block in a random order
+     alternating hand and pincer blocks. The subsets are the first 100, 300 and 1,000 episodes of
+     that order, so they are **nested** (100 within 300 within 1,000) and stratified by block (3–4,
+     10 and 33–34 per block, hand and pincer within one of half).
+  4. The remaining 10 episodes are spare.
+
+**Arms.**
+
+* **Common recipe:** V+P, pooled SIGReg JEPA as `long-jepa`, tiny model at 64 px, 10,000 steps x 16
+  sequences, checkpoints at 0, 250, 1,000, 2,500, 5,000 and 10,000, seeds 0 to 2.
+* **Shared normalisation:** every arm fits its channel space and normalisation on the 100-episode
+  subset (`data.space_paths`). So **the same seed gives the identical initial encoder at every data
+  size and for the floor**. The smoke test confirms it: floor seed 0, `jepa-e100` step 0 and
+  `mae-e1000` step 0 score the same.
+* **Arms:** `jepa-e100`, `jepa-e300`, `jepa-e1000`, and `mae-e1000` (masked reconstruction on the
+  1,000 episodes). With the frame cache below, all 12 runs fit on one machine at once.
+* **The variable:** the number of **steps** is held equal across sizes. What changes is the number of
+  passes: about 85 at 100 episodes, 28 at 300 and 8.5 at 1,000 (each sequence covers 32 env steps).
+  A gain from 100 to 1,000 episodes therefore means "more distinct data at a fixed compute budget",
+  and it cannot be separated from "fewer repeats of each episode". A null means more data at this
+  budget and model size does not change what the state keeps.
+
+**Bars**, all on the same 100 held-out episodes:
+
+* the random-init V+P floor (5 seeds);
+* the ridge probe on raw proprio with the K = 4 observations stacked;
+* the supervised V+P ceiling on the 1,000 episodes (`sup-e1000`, 1,000 steps, 3 seeds).
+
+**Evaluation.** The battery's probe: leave-one-episode-out ridge on windows at stride 8, here over
+the 100 held-out episodes. Every encoder and bar is saved as out-of-fold predictions, with held-out
+loss and effective rank per checkpoint.
+
+**Primary contrast:** `jepa-e1000 - jepa-e100`, reported at two checkpoints:
+
+* **The best step:** the checkpoint after step 0 where the average of the two arms' seed-mean probe
+  is highest. It is one common step, so the choice favours neither arm.
+* **10,000 steps.**
+
+Pairing is by seed (same initial encoder) and by held-out episode. Each contrast reports:
+
+* the seed SE (paired differences over 3 seeds);
+* the episode-bootstrap SE (300 resamples of the 100 held-out episodes, `rng(0)`, the same resample
+  for every encoder);
+* the combined SE (the two in quadrature) and **MDD = 2.8 x combined SE**.
+
+With 100 rather than 20 held-out episodes the episode SE should shrink by about sqrt 5 = 2.2.
+
+A contrast is **resolved** when |difference| > MDD. Outcomes, decided by `scale_test.verdict` and
+stated here in advance:
+
+| outcome | rule |
+|---|---|
+| **data scale helps** | resolved and positive at both the best step and 10,000 |
+| **helps only early** | resolved and positive at the best step, not resolved at 10,000 |
+| **helps only late** | resolved and positive at 10,000 (more data slows the drift), not resolved at the best step |
+| **more data harms** | resolved and negative at either checkpoint, positive at neither |
+| **mixed** | resolved with opposite signs at the two checkpoints |
+| **no effect** | resolved at neither (the MDDs state what could have been seen) |
+
+**Reported with it, not part of the rule.**
+
+* The secondary contrasts `e300 - e100`, `e1000 - e300` and `mae-e1000 - jepa-e1000`, at the same two
+  checkpoints.
+* The change of every arm from the same seed's step 0, at every checkpoint.
+* Every arm, at the best step and at 10,000, minus the floor and minus the raw-proprio readout. These
+  families are independent by seed, so their seed variances add, and the comparison is paired by
+  episode.
+* Held-out loss next to training loss, and effective rank.
+* Whether a positive outcome also clears the floor, which decides how it reads:
+  * *helps* and above the floor means data is a lever;
+  * *helps* but still at or below the floor means the drift slows and the encoder still has not
+    learned anything useful.
+* Expectation, written down so it can be wrong: **helps only late** or **no effect**. Fewer passes
+  should slow the drain from 0.25 to 0.13, but the early peak was never above the floor by more than
+  its MDD.
+
+**Literature** (data scaling of self-supervised encoders at small scale).
+
+* Goyal et al. (ICCV 2019, "Scaling and benchmarking self-supervised visual representation
+  learning", arXiv 1905.01235) scaled Jigsaw and Colorization pretraining from 1M to 100M images.
+  * Transfer improves with data size, but Jigsaw "saturates (log-linearly)".
+  * "Low capacity models like AlexNet do not show much improvement with more data", while
+    ResNet-50 does.
+  * Data helps only when the model has the capacity to use it.
+* Cole et al. (CVPR 2022, "When does contrastive visual representation learning work?", arXiv
+  2105.05837): on ImageNet-scale SimCLR, "the benefit of additional pretraining data beyond 500k
+  images is modest".
+* Our tiny model (2.4M parameters) and 60,000 to 600,000 env steps sit far below both. Capacity, not
+  data, may bind: a null here would be a null for this model size, not for the thesis. That leaves
+  model size as the next lever to put to the supervisor.
+* I found no JEPA or world-model study that varies pretraining episodes at fixed steps at this scale.
+  The B-steps-0 drift (better self-supervised loss, less contact information) has, as far as I
+  found, no published counterpart to compare with.
+
+**Loader cost and the frame cache.** I measured the training loop on the Mac: tiny V+P JEPA, batch
+16, `OMP_NUM_THREADS=1`, 2 loader workers, steady state over 200 steps, a 1,000-entry pool (the
+120 `probe_test` episodes repeated).
+
+| loader | wall s / step | CPU s / step (all processes) | 10,000 steps, CPU |
+|---|---|---|---|
+| decode every episode (`cache_episodes` 4: almost every pick is a miss at 100 or 1,000 episodes) | 0.25 | **1.54** | 4.3 h |
+| every episode already in memory (4-episode pool: a lower bound) | 0.089 | 0.12 | 20 min |
+| **frame cache, frames at 128 px, memory-mapped** | **0.085** | **0.11** | **18 min** |
+
+Decoding the stored 256 px mp4 (two episodes per step at `reuse` 8) is **93% of a step's CPU**, and
+the per-worker LRU cache cannot hold a pool of 100 episodes, let alone 1,000. So the cost is the
+same at every data size.
+
+`sensorium.model.frame_cache` (opt-in: `[augment] frame_cache = <dir>`, default off) writes each
+episode's `model_inputs` once as `.npy` files, which the loader memory-maps. The operating system's
+page cache is then shared by every process, and a sequence reads only its frames.
+
+* **What it stores:** only model inputs (no privileged state, no text; tested).
+* **Full size:** with frames stored at full size, **batches are identical to decoding** (tested:
+  every array, with random crops and touch noise on).
+* **Downscaled:** frames can be stored downscaled. The random crop is still drawn in the 256 px
+  grid with the same random calls, and taken from the downscale at the matching fractional box
+  (`vision.train_view(source_side=...)`). So the random stream, the sequence starts and every
+  non-vision array are identical, and vision differs only by resampling. On real episodes at 128 px
+  the mean absolute difference is **0.69 grey levels out of 255** (0.92 at 96 px).
+* **Cost and size:** building it costs about 1 CPU-s per episode. At 128 px it takes 32 MB per
+  episode, 32 GB for the 1,000, which fits in the page cache of a 128 GB machine. At full size it
+  would take 118 GB.
+* **B-scale-0 uses the 128 px cache for every JEPA and MAE arm**, so contrasts between arms are
+  unaffected. Absolute levels are not strictly comparable with B-steps-0 (decoded frames) to the
+  last grey level. Held-out probes and held-out loss always decode at full resolution.
+* **The supervised ceiling decodes**: its loader reads labels from the full episode.
+
+**Compute plan** for an n2-standard-32 (32 vCPU, 128 GB). These are Mac core timings; a vCPU is a
+hyperthread, so I allow 1.5 to 2 times longer.
+
+| stage | processes x threads | VM wall |
+|---|---|---|
+| copy data, `split`, `cache` (1,000 episodes x about 1 CPU-s, 30 processes) | 30 x 1 | about 5 min + copy |
+| 12 SSL runs at once (9 JEPA + 3 MAE), cached, 1 loader worker each | 12 x 2 threads (about 26 vCPU) | **about 30 to 50 min** |
+| 3 supervised ceilings, decoding, 2 workers each | 3 x 1 thread | about 20 to 30 min |
+| probes, 81 jobs at about 2 min each | 16 shards x 2 threads | about 15 min |
+| **total** | | **about 1.5 to 2 h** |
+
+The supervised ceilings run beside the probes. Memory: 32 GB of page cache plus 15 processes at
+about 1.5 GB each is about 55 GB.
+
+At about $1.55 per hour on demand for n2-standard-32 in us-central1 (third-party price listings, not
+GCP's own page; Spot about $0.51 to $0.61), that is **about $2.5 to $3 on demand, MAE included**,
+against about $8 to $9 and 6.5 to 7 h with decoding. Without the cache the runs would be
+decode-bound at about 1.5 CPU-s per step: 12 runs x 4.3 CPU-hours, about 52 CPU-hours.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
@@ -1218,6 +1383,9 @@ and free credit make it the cheaper way to learn *whether* the pipeline runs; Va
 anything repeated.
 
 ## Next
+
+* **B-scale-0** (pre-registered above, data generating on GCP): JEPA on 100 / 300 / 1,000 new episodes
+  at 10,000 steps, MAE on 1,000, with floor, raw-proprio and supervised bars on 100 held-out episodes.
 
 * **B-teach-long** is done (pre-registered verdict: null; see its results above). Heavy training no
   longer runs on the Mac.

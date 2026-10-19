@@ -20,7 +20,7 @@ torch = pytest.importorskip("torch", reason="needs the model extra: uv sync --ex
 from torch import Tensor, nn  # noqa: E402
 
 import sensorium.model as package  # noqa: E402
-from sensorium.episode import Episode  # noqa: E402
+from sensorium.episode import MODEL_INPUT_KEYS, Episode  # noqa: E402
 from sensorium.model import probes, subsets  # noqa: E402
 from sensorium.model.data import (  # noqa: E402
     LoaderConfig,
@@ -1420,3 +1420,180 @@ def test_the_teacher_verdict_needs_every_arm_and_is_null_when_noisy() -> None:
     for seed, shift in enumerate((-0.10, 0.0, 0.10)):
         noisy[f"long-teach-s{seed}-n10000"]["heldout"]["mean"] += shift
     assert script.teacher_verdict(noisy) == "null"  # above 0.032 but not 2.8 own standard errors
+
+
+def load_scale_script() -> Any:
+    """``scripts/scale_test.py`` as a module (scripts are not a package)."""
+    import importlib.util  # noqa: PLC0415
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "scale_test.py"
+    spec = importlib.util.spec_from_file_location("scale_test_script", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def synthetic_predictions(groups: np.ndarray, noise: float, seed: int) -> probes.Predictions:
+    """Predictions of the probe battery's shape (three binary labels, force, tip x 6): the same
+    targets for every ``seed`` (one held-out set), noise drawn per ``seed``."""
+    rng = np.random.default_rng(0)
+    n = len(groups)
+    target = np.concatenate(
+        [(rng.random((n, 3)) > 0.5).astype(float), rng.normal(size=(n, 7))], axis=1
+    )
+    pred = target + noise * np.random.default_rng(seed + 100).normal(size=target.shape)
+    blocks = [slice(0, 1), slice(1, 2), slice(2, 3), slice(3, 4), slice(4, 10)]
+    return probes.Predictions(pred, target, blocks, groups)
+
+
+def test_scale_split_is_stratified_nested_and_disjoint() -> None:
+    from collections import Counter  # noqa: PLC0415
+
+    script = load_scale_script()
+    names = script.expected_names(Path(__file__).resolve().parents[1] / "configs/scale_test.toml")
+    assert len(names) == 1110 and len({script.block_of(n) for n in names}) == 30
+    split = script.make_split(names)
+    assert split == script.make_split(names)  # drawn once: the same every time
+    held, pre, spare = split["heldout"], split["pretrain"], split["spare"]
+    assert (len(held), len(pre), len(spare)) == (100, 1000, 10)
+    assert len(set(held) | set(pre) | set(spare)) == 1110
+    hand = [n for n in held if script.block_of(n).startswith("hand")]
+    assert len(hand) == 50
+    assert set(Counter(script.block_of(n) for n in held).values()) == {3, 4}
+    for size, per_block in ((100, {3, 4}), (300, {10}), (1000, {33, 34})):
+        counts = Counter(script.block_of(n) for n in pre[:size])  # subset = prefix: nested
+        assert len(counts) == 30 and set(counts.values()) == per_block
+        n_hand = sum(v for b, v in counts.items() if b.startswith("hand"))
+        assert abs(2 * n_hand - size) <= 2
+    with pytest.raises(ValueError, match="episodes"):
+        script.make_split(names[:500])
+    with pytest.raises(ValueError, match="humanoid"):
+        script.block_of("sample-001.npz")
+
+
+def test_paired_contrast_seed_and_episode_errors() -> None:
+    from sensorium.model.paired import contrast  # noqa: PLC0415
+
+    groups = np.repeat(np.arange(10), 12)
+    same = synthetic_predictions(groups, 0.5, 0)
+    flat = contrast([same] * 3, [same] * 3, paired=True, draws=20)
+    assert flat.point == 0 and flat.seed_se == 0 and flat.episode_se == 0 and not flat.resolved
+    good = [synthetic_predictions(groups, 0.3, s) for s in range(3)]
+    bad = [synthetic_predictions(groups, 1.0, s) for s in range(3)]
+    p = contrast(good, bad, paired=True, draws=50)
+    u = contrast(good, bad, paired=False, draws=50)
+    assert p.point == pytest.approx(u.point) and p.point > 0 and p.resolved
+    assert p.se == pytest.approx(np.hypot(p.seed_se, p.episode_se)) and p.mdd == 2.8 * p.se
+    # a single deterministic readout against a family: only the family's seed variance counts
+    one = contrast([good[0]], bad, paired=False, draws=20)
+    scores = [b.scores()["mean"] for b in bad]
+    assert one.seed_se == pytest.approx(np.std(scores, ddof=1) / np.sqrt(3))
+    other = synthetic_predictions(groups[::-1].copy(), 0.5, 0)
+    with pytest.raises(ValueError, match="same held-out windows"):
+        contrast([same], [other], paired=False)
+    with pytest.raises(ValueError, match="equal size"):
+        contrast([same], [same, same], paired=True)
+
+
+@pytest.mark.parametrize(
+    ("best", "last", "verdict"),
+    [
+        (0.10, 0.10, "data scale helps"),
+        (0.10, 0.01, "helps only early"),
+        (0.01, 0.10, "helps only late"),
+        (0.01, -0.01, "no effect"),
+        (-0.10, 0.01, "more data harms"),
+        (0.10, -0.10, "mixed"),
+    ],
+)
+def test_scale_verdict_covers_each_preregistered_outcome(
+    best: float, last: float, verdict: str
+) -> None:
+    from sensorium.model.paired import Contrast  # noqa: PLC0415
+
+    script = load_scale_script()
+    # SE 0.01: 0.10 is resolved (MDD 0.028), 0.01 is not
+    assert (
+        script.verdict(Contrast(best, 0.01, 0.0, 3, 3), Contrast(last, 0.01, 0.0, 3, 3)) == verdict
+    )
+    assert script.verdict(None, Contrast(last, 0.01, 0.0, 3, 3)) == "incomplete"
+
+
+def test_scale_best_step_is_common_to_both_arms(tmp_path: Path) -> None:
+    script = load_scale_script()
+    script.ROOT = tmp_path
+    script.load_predictions.cache_clear()
+    groups = np.repeat(np.arange(10), 12)
+    # e100 peaks at 250, e1000 at 2,500; the average of the two is highest at 1,000
+    noise = {
+        "jepa-e100": {250: 0.2, 1000: 0.3, 2500: 0.9},
+        "jepa-e1000": {250: 0.9, 1000: 0.3, 2500: 0.2},
+    }
+    for arm, by_step in noise.items():
+        for step in script.CKPTS:
+            for seed in script.SEEDS:
+                pred = synthetic_predictions(groups, by_step.get(step, 1.5), seed)
+                script.save_predictions(f"{arm}-s{seed}-n{step}", pred)
+    assert script.best_step() == 1000
+    best = script.paired_at("jepa-e1000", "jepa-e100", 1000)
+    assert best is not None and best.n_a == 3 and abs(best.point) < 0.05
+    script.load_predictions.cache_clear()
+
+
+def test_frame_cache_gives_identical_batches_and_holds_only_model_inputs(tmp_path: Path) -> None:
+    from sensorium.model.frame_cache import build_cache, load_cached  # noqa: PLC0415
+
+    paths = saved_privileged_episodes(tmp_path, count=3)
+    space = ChannelSpace.from_headers(read_header(p) for p in paths)
+    senses = check_senses(("vision", "touch", "proprio_body", "audio"))
+    build_cache(paths, tmp_path / "cache", None)
+    stored = {f.name for f in (tmp_path / "cache").glob("*/*")}
+    assert stored == {"meta.json", *(f"{k}.npy" for k in MODEL_INPUT_KEYS)}
+    plain = SequenceDataset(paths, space, senses, LOADER, seed=3)
+    cached = SequenceDataset(
+        paths, space, senses, replace(LOADER, frame_cache=str(tmp_path / "cache")), seed=3
+    )
+    ra, rb = np.random.default_rng(5), np.random.default_rng(5)
+    for _ in range(12):  # touch noise and random crops on: the random streams must match too
+        a, b = plain.sample(ra), cached.sample(rb)
+        assert a.keys() == b.keys()
+        assert all(np.array_equal(a[k], b[k]) for k in a)
+    with pytest.raises(FileNotFoundError, match="frame cache"):
+        load_cached(tmp_path / "missing.npz", tmp_path / "cache", space, senses)
+
+
+def test_downscaled_frame_cache_keeps_the_random_stream_and_the_crop(tmp_path: Path) -> None:
+    from PIL import Image  # noqa: PLC0415
+
+    from sensorium.model.frame_cache import build_cache  # noqa: PLC0415
+    from sensorium.vision import View, train_view  # noqa: PLC0415
+
+    paths = saved_privileged_episodes(tmp_path, count=2)
+    space = ChannelSpace.from_headers(read_header(p) for p in paths)
+    side = Episode.load(paths[0], privileged=False).rgb.shape[1]
+    build_cache(paths, tmp_path / "half", side // 2)
+    senses = check_senses(("vision", "touch", "proprio_body"))
+    plain = SequenceDataset(paths, space, senses, LOADER, seed=1)
+    half = SequenceDataset(
+        paths, space, senses, replace(LOADER, frame_cache=str(tmp_path / "half")), seed=1
+    )
+    assert half.load(paths[0]).rgb_source_side == side
+    ra, rb = np.random.default_rng(2), np.random.default_rng(2)
+    for _ in range(8):
+        a, b = plain.sample(ra), half.sample(rb)
+        assert all(np.array_equal(a[k], b[k]) for k in a if k != "vision")
+        assert a["vision"].shape == b["vision"].shape
+    # a smooth image: the downscaled crop is the same picture up to resampling
+    ramp = np.linspace(0, 255, side, dtype=np.float32)
+    frames = np.repeat(np.stack([np.add.outer(ramp, ramp) / 2] * 3, -1)[None], 2, 0)
+    frames = frames.astype(np.uint8)
+    small = np.stack(
+        [np.asarray(Image.fromarray(f).resize((side // 2, side // 2))) for f in frames]
+    )
+    view = View(size=16, crop=0.75)
+    full = train_view(frames, np.random.default_rng(4), view)
+    down = train_view(small, np.random.default_rng(4), view, source_side=side)
+    assert np.abs(full.astype(int) - down.astype(int)).mean() < 2.0
+    same = train_view(frames, np.random.default_rng(4), view, source_side=side)
+    assert np.array_equal(same, full)  # source side == stored side: the plain path
