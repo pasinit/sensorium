@@ -253,6 +253,16 @@ still useful: its touch and contact-sound code ports onto those suites.
   objects**, while more demonstrations of the same setting plateau quickly.
   This is single-body and vision-based, and it supports our diversity bet.
   [arXiv 2410.18647](https://arxiv.org/pdf/2410.18647)
+- **Pretraining-data scaling of self-supervised encoders** (checked 2026-10-19, for B-scale-0).
+  - Goyal et al. (ICCV 2019) scaled Jigsaw and Colorization pretraining from 1M to 100M images.
+    Transfer rises with data, but Jigsaw "saturates (log-linearly)". AlexNet "do[es] not show much
+    improvement with more data" while ResNet-50 does, so capacity gates the gain from data.
+  - Cole et al. (CVPR 2022) find that with SimCLR "the benefit of additional pretraining data
+    beyond 500k images is modest".
+  - So a tiny model may not use 10x more episodes. A null in B-scale-0 is then a statement about
+    model size.
+  - [arXiv 1905.01235](https://arxiv.org/abs/1905.01235) ·
+    [arXiv 2105.05837](https://arxiv.org/abs/2105.05837)
 
 ### 7b. Simulated touch post-processing (checked 2026-10-12)
 

@@ -153,3 +153,6 @@
 - New Atlas, Shadow hand coverage (secondary; 10 N fingertip claim). https://newatlas.com/robotics/shadow-hand-robot-ai-research/
 - Wang et al., DexGraspNet (ICRA 2023). https://arxiv.org/abs/2210.02697 · https://github.com/PKU-EPIC/DexGraspNet
 
+## Added for B-scale-0 (2026-10-19)
+- Goyal, Mahajan, Gupta, Misra, *Scaling and benchmarking self-supervised visual representation learning* (ICCV 2019). https://arxiv.org/abs/1905.01235
+- Cole, Yang, Wilber, Mac Aodha, Belongie, *When does contrastive visual representation learning work?* (CVPR 2022). https://arxiv.org/abs/2105.05837

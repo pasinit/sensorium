@@ -58,6 +58,8 @@ class LoaderConfig:
         reuse: Sequences drawn from an episode each time the stream picks it. Decoding an
             episode costs more than cutting a sequence from it, so a stream that decoded one
             episode per sequence would be decode-bound (``docs/model.md``).
+        frame_cache: Optional directory of ``sensorium.model.frame_cache``: episodes are read
+            from it (memory-mapped) instead of decoded. Every training episode must be in it.
     """
 
     steps: int = 16
@@ -67,6 +69,7 @@ class LoaderConfig:
     touch_noise: bool = True
     cache_episodes: int = 16
     reuse: int = 8
+    frame_cache: str = ""
 
     @property
     def view(self) -> View:
@@ -76,11 +79,16 @@ class LoaderConfig:
 
 @dataclass
 class Loaded:
-    """One decoded episode: only what ``model_inputs`` returned, plus its names."""
+    """One decoded episode: only what ``model_inputs`` returned, plus its names.
+
+    ``rgb_source_side`` is set when ``inputs["rgb"]`` is a downscale (a frame cache) of frames of
+    that side; crops are then placed in the original grid (``vision.train_view``).
+    """
 
     header: Header
     inputs: dict[str, np.ndarray]
     columns: Columns
+    rgb_source_side: int | None = None
 
     @property
     def length(self) -> int:
@@ -275,8 +283,12 @@ def sequence_with_ends(
         touch = perturb_touch(ep.inputs["touch"][clip], names, rng, TouchNoise())
     rgb = None
     if "vision" in senses:
-        frames = ep.inputs["rgb"][ends]
-        rgb = train_view(frames, rng, cfg.view) if train else eval_view(frames, cfg.view)
+        frames = np.asarray(ep.inputs["rgb"][ends])
+        side = ep.rgb_source_side
+        if train:
+            rgb = train_view(frames, rng, cfg.view, side)
+        else:
+            rgb = eval_view(frames, cfg.view, side)
     return build(ep, space, senses, ends, k, touch=touch, touch_offset=start, rgb=rgb), ends
 
 
@@ -330,7 +342,12 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
         if path in self._cache:
             self._cache.move_to_end(path)
             return self._cache[path]
-        loaded = load_episode(Episode.load(path, privileged=False), self.space, self.senses)
+        if self.cfg.frame_cache:
+            from sensorium.model.frame_cache import load_cached  # noqa: PLC0415 (imports data)
+
+            loaded = load_cached(path, Path(self.cfg.frame_cache), self.space, self.senses)
+        else:
+            loaded = load_episode(Episode.load(path, privileged=False), self.space, self.senses)
         self._cache[path] = loaded
         while len(self._cache) > self.cfg.cache_episodes:
             self._cache.popitem(last=False)
