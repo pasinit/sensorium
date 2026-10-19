@@ -156,3 +156,7 @@
 ## Added for B-scale-0 (2026-10-19)
 - Goyal, Mahajan, Gupta, Misra, *Scaling and benchmarking self-supervised visual representation learning* (ICCV 2019). https://arxiv.org/abs/1905.01235
 - Cole, Yang, Wilber, Mac Aodha, Belongie, *When does contrastive visual representation learning work?* (CVPR 2022). https://arxiv.org/abs/2105.05837
+
+## Added for B-ft-curve (2026-10-19)
+- Hénaff, Srinivas, De Fauw, Razavi, Doersch, Eslami, van den Oord, *Data-efficient image recognition with contrastive predictive coding* (ICML 2020). https://arxiv.org/abs/1905.09272
+- Newell, Deng, *How useful is self-supervised pretraining for visual tasks?* (CVPR 2020). https://arxiv.org/abs/2003.14323
