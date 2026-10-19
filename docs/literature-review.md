@@ -263,6 +263,18 @@ still useful: its touch and contact-sound code ports onto those suites.
     model size.
   - [arXiv 1905.01235](https://arxiv.org/abs/1905.01235) ·
     [arXiv 2105.05837](https://arxiv.org/abs/2105.05837)
+- **Label-efficiency curves of self-supervised pretraining** (checked 2026-10-19, for B-ft-curve).
+  - Hénaff et al., CPC v2 (ICML 2020), Table 2: fine-tuned CPC features against a ResNet-200 on
+    pixels, top-1 52.7 vs 23.1 at 1% of ImageNet labels and 83.4 vs 80.2 at 100%. That is a 5x label
+    saving at 1% and 2x at 50 to 100%.
+  - Newell and Deng (CVPR 2020) define utility as (scratch labels needed to match / labels used) -
+    1. It is large with few labels and approaches zero as labels grow, *before* scratch plateaus,
+    which they read as regularisation, not better optimisation.
+  - In Newell and Deng, utility is larger for bigger models and harder data, and linear evaluation
+    does not predict fine-tuning utility.
+  - So gains concentrate at small budgets, and a frozen probe at the floor does not rule them out.
+  - [arXiv 1905.09272](https://arxiv.org/abs/1905.09272) ·
+    [arXiv 2003.14323](https://arxiv.org/abs/2003.14323)
 
 ### 7b. Simulated touch post-processing (checked 2026-10-12)
 

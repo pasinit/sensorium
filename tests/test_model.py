@@ -1597,3 +1597,115 @@ def test_downscaled_frame_cache_keeps_the_random_stream_and_the_crop(tmp_path: P
     assert np.abs(full.astype(int) - down.astype(int)).mean() < 2.0
     same = train_view(frames, np.random.default_rng(4), view, source_side=side)
     assert np.array_equal(same, full)  # source side == stored side: the plain path
+
+
+def load_ft_curve_script() -> Any:
+    """``scripts/ft_curve.py`` as a module (scripts are not a package)."""
+    import importlib.util  # noqa: PLC0415
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "ft_curve.py"
+    spec = importlib.util.spec_from_file_location("ft_curve_script", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_ft_curve_label_subsets_are_nested_per_seed_and_shared_by_every_start() -> None:
+    script = load_ft_curve_script()
+    for seed in (0, 1, 2):
+        subsets_of = [script.subset(seed, b) for b in script.BUDGETS]
+        for small, large in zip(subsets_of[:-1], subsets_of[1:], strict=True):
+            assert set(small) < set(large)
+        assert [len(s) for s in subsets_of] == list(script.BUDGETS)
+        assert subsets_of[-1] == list(range(100))
+        assert script.subset(seed, 8) == script.subset(seed, 8)  # no state: every start, same call
+    assert script.subset(0, 16) != script.subset(1, 16)
+    with pytest.raises(ValueError, match="budget"):
+        script.subset(0, 101)
+    # every start of a seed is paired with the same scratch run and differs only in its init
+    assert script.init_path("scratch", 1) is None
+    assert script.init_path("jepa1k", 1) == script.INIT_ROOT / "long-jepa-s1" / "ckpt-1000.pt"
+    assert script.init_path("mae10k", 2) == script.INIT_ROOT / "long-mae-s2" / "ckpt-10000.pt"
+    assert [script.steps_for(b) for b in script.BUDGETS] == [600] * 5 + [1000] * 2
+
+
+def test_ft_curve_contrasts_pair_by_seed_and_episode() -> None:
+    script = load_ft_curve_script()
+    groups = np.repeat(np.arange(10), 12)
+    same = synthetic_predictions(groups, 0.5, 0)
+    # identical predictions: zero difference, zero seed and episode SE
+    flat = script.contrast([(same, same)] * 3, draws=20)
+    assert flat.point == 0 and flat.seed_se == 0 and flat.episode_se == 0 and not flat.resolved
+    better = [
+        (synthetic_predictions(groups, 0.3, s), synthetic_predictions(groups, 1.0, s))
+        for s in range(3)
+    ]
+    c = script.contrast(better, draws=50)
+    assert c.point > 0 and c.n_a == 3 and c.se == pytest.approx(np.hypot(c.seed_se, c.episode_se))
+    assert c.mdd == pytest.approx(2.8 * c.se) and c.resolved
+    other = synthetic_predictions(np.repeat(np.arange(10), 12)[::-1].copy(), 0.5, 0)
+    with pytest.raises(ValueError, match="same held-out windows"):
+        script.contrast([(same, other)])
+
+
+@pytest.mark.parametrize(
+    ("points", "verdict"),
+    [
+        ({}, "no benefit"),
+        ({1: 0.1, 4: 0.1}, "helps at small budgets"),
+        ({2: 0.1, 100: 0.1}, "helps at small and large budgets"),
+        ({32: 0.1}, "helps at large budgets only"),
+        ({16: -0.1}, "harms"),
+        ({1: 0.1, 100: -0.1}, "mixed"),
+    ],
+)
+def test_ft_curve_verdict_covers_each_preregistered_outcome(
+    points: dict[int, float], verdict: str
+) -> None:
+    script = load_ft_curve_script()
+    # SE 0.01 everywhere: 0.1 is resolved (MDD 0.04), 0.02 is not
+    cells = {b: script.Contrast(points.get(b, 0.02), 0.01, 0.0, 3, 3) for b in script.BUDGETS}
+    assert script.verdict(cells) == verdict
+    assert script.verdict({b: c for b, c in cells.items() if b != 100}) == "incomplete"
+
+
+def test_ft_curve_labels_to_reach_interpolates_on_log_budget() -> None:
+    script = load_ft_curve_script()
+    curve = {1: 0.2, 4: 0.4, 16: 0.6}
+    assert script.labels_to_reach(curve, 0.5) == pytest.approx(8.0)
+    assert script.labels_to_reach(curve, 0.1) == 1.0
+    assert np.isnan(script.labels_to_reach(curve, 0.7))
+
+
+def test_fine_tune_from_a_pretrained_encoder_saves_a_head_that_reads_held_out_windows(
+    tmp_path: Path,
+) -> None:
+    from sensorium.model import controls  # noqa: PLC0415
+
+    paths = saved_privileged_episodes(tmp_path)
+    space = ChannelSpace.from_headers(read_header(p) for p in paths)
+    model = replace(TINY, senses=NO_TOUCH)
+    torch.manual_seed(5)
+    pretrained = SensoryModel(model, space)
+    init = tmp_path / "pre.pt"
+    save_checkpoint(init, pretrained, space, RunConfig(name="pre", model=model), 0)
+    cfg = controls.SupervisedConfig(
+        model=model, steps=4, batch_size=2, workers=0, freeze_steps=4, save_steps=(2,)
+    )
+    ckpt = controls.train_supervised(cfg, paths[:3], space, tmp_path / "ft", lambda _m: None, init)
+    # frozen throughout: the fine-tuned encoder's weights are exactly the pretrained ones it
+    # started from (batch-norm running statistics still move in training mode)
+    saved = torch.load(ckpt, weights_only=True)["model"]
+    moved = [
+        k
+        for k, v in pretrained.named_parameters()
+        if k.startswith("encoder.") and not torch.equal(saved[k], v)
+    ]
+    assert not moved, moved
+    assert (tmp_path / "ft" / "head.pt").exists() and (tmp_path / "ft" / "head-2.pt").exists()
+    data = probes.collect(load_layer(ckpt), paths[3:], 4, (), raw=False)
+    head = controls.head_predictions(data, tmp_path / "ft" / "head.pt")
+    ridge = probes.predict_probes(data, "state")
+    assert head.pred.shape == ridge.pred.shape and np.array_equal(head.target, ridge.target)
+    assert np.isfinite(head.scores()["contact_left_auroc"])

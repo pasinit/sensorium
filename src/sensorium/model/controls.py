@@ -218,7 +218,9 @@ def train_supervised(
     same labelled episodes.
 
     The checkpoint holds the encoder (and an unused predictor) in a ``SensoryModel``, so
-    ``pretrain.load_layer`` and the probes treat it like any other encoder.
+    ``pretrain.load_layer`` and the probes treat it like any other encoder. The linear head and
+    the target standardisation go next to it in ``head.pt`` (``head-<step>.pt`` at the save
+    steps), for ``head_predictions``.
     """
     torch.manual_seed(cfg.seed)
     loader_cfg = LoaderConfig(
@@ -288,10 +290,37 @@ def train_supervised(
                     RunConfig(name=out.name, model=cfg.model),
                     step,
                 )
+                torch.save({"head": head.state_dict(), "scale": scale}, out / f"head-{step}.pt")
     save_checkpoint(
         out / "ckpt.pt", model, space, RunConfig(name=out.name, model=cfg.model), cfg.steps
     )
+    torch.save({"head": head.state_dict(), "scale": scale}, out / "head.pt")
     return out / "ckpt.pt"
+
+
+def head_predictions(data: ProbeData, head_path: Path) -> Predictions:
+    """Held-out predictions of a supervised run's own linear head on encoded windows.
+
+    ``data`` comes from ``probes.collect`` on the run's checkpoint (``state`` = the encoder's
+    states, which is what the head was trained on); ``head_path`` is the ``head.pt`` written next
+    to it. The contact columns are logits (AUROC is rank-based); force and tip are mapped back to
+    label units. Only the labelled training episodes of the run fitted this readout, unlike the
+    ridge probe, which is fitted on the held-out episodes themselves.
+    """
+    saved = torch.load(head_path, weights_only=True)
+    weight = saved["head"]["weight"]
+    head = nn.Linear(weight.shape[1], weight.shape[0])
+    head.load_state_dict(saved["head"])
+    mean, std = (np.asarray(t, dtype=np.float64) for t in saved["scale"])
+    with torch.no_grad():
+        out = head(torch.as_tensor(data.features["state"], dtype=torch.float32)).double().numpy()
+    n = len(BINARY) + 7
+    pred = np.concatenate([out[:, : len(BINARY)], out[:, len(BINARY) : n] * std[:7] + mean[:7]], 1)
+    columns = [data.labels[k].reshape(len(pred), -1) for k in (*BINARY, *CONTINUOUS)]
+    target = np.concatenate(columns, axis=1)
+    edges = np.cumsum([0, *(c.shape[1] for c in columns)])
+    blocks = [slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:], strict=True)]
+    return Predictions(pred, target, blocks, data.groups)
 
 
 def _schedule(cfg: SupervisedConfig) -> TrainConfig:

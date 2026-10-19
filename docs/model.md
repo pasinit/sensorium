@@ -973,6 +973,25 @@ angles to tip position extrapolates badly to unseen episodes); stacking the four
 (velocities) fixes it. So the floor is largely what proprio gives linearly, and an encoder that
 only matches the floor has learned nothing beyond a rotation of its proprio input.
 
+**But the 0.28 is not significantly above the floor.** Paired episode bootstrap (300 resamples of the
+20 held-out episodes, `rng(0)`, the same resamples for both sides, as in `controls_test.py`), with the
+seed SE of the encoder family added in quadrature:
+
+| raw proprio K = 4 (0.285) minus | difference | episode-bootstrap SE | 95% CI over episodes | seed SE | combined SE |
+|---|---|---|---|---|---|
+| floor V+P (5 seeds) | +0.062 | 0.072 | [-0.094, +0.165] | 0.009 | 0.072 |
+| SSL c-none (6 seeds) | +0.065 | 0.065 | [-0.073, +0.157] | 0.019 | 0.068 |
+| SSL b-teacher (6 seeds) | +0.034 | 0.070 | [-0.115, +0.143] | 0.014 | 0.072 |
+| SSL d-placebo (6 seeds) | +0.043 | 0.068 | [-0.099, +0.143] | 0.018 | 0.070 |
+
+Its own 95% CI over episodes is [0.12, 0.40]. Per term against the floor it gains on force (+0.15)
+and right-hand contact (+0.08) and loses on tip position (-0.11). The lesson is about the yardstick:
+**between two different feature types the episode-sampling SE is about 0.07**, three to four times
+the 0.02 between two seeds of one encoder (B-ctrl-0), because the two make different errors on
+different episodes. With 20 held-out episodes, such comparisons resolve only differences above about
+0.2, so every later contrast here is paired on the same episodes and reports the episode-bootstrap
+SE next to the seed SE.
+
 ### Random-init baselines for linear probes: a known effect
 
 Random (untrained) convolutional features are a strong linear-probe reference in small-data vision, and
@@ -1344,6 +1363,122 @@ GCP's own page; Spot about $0.51 to $0.61), that is **about $2.5 to $3 on demand
 against about $8 to $9 and 6.5 to 7 h with decoding. Without the cache the runs would be
 decode-bound at about 1.5 CPU-s per step: 12 runs x 4.3 CPU-hours, about 52 CPU-hours.
 
+## B-ft-curve: does a pretrained encoder make supervised training more label-efficient? (pre-registered)
+
+**Written before any run of this grid exists.** B-ctrl-0 asked this at two budgets (4 and 16
+labelled episodes, a 2,000-step c-none encoder, 300 fine-tune steps) and found no benefit (SSL minus
+scratch -0.014 +- 0.011 and -0.013 +- 0.010). B-steps-0 has since shown that the JEPA probe peaks
+around 1,000 steps (0.24 to 0.25) and drains to 0.13 by 10,000, while MAE stays about 0.22. So the
+question becomes a full label-efficiency curve, from encoders at different points of that drift.
+Code: `scripts/ft_curve.py` (`train`, `probe`, `report`); the fine-tune is `controls.train_supervised`,
+the B-ctrl-0 path, unchanged except that it now also saves its linear head (`head.pt`).
+
+**Design.**
+
+* **Starts:** `scratch` (random init); `jepa1k` and `jepa10k` (`long-jepa` of B-steps-0 at 1,000 and
+  10,000 steps); `mae10k` (`long-mae` at 10,000 steps). Each seed starts from the pretrained run of the
+  same seed. Seeds 0, 1 and 2.
+* **Label budgets:** 1, 2, 4, 8, 16, 32 and 100 of the 100 pretraining episodes. Per seed, the first
+  B episodes of one permutation (`ft_curve.subset`), so the subsets are nested and **every start sees
+  the same episodes at a budget**. The head initialisation, loader stream and label standardisation
+  are also identical across starts for a seed (same `torch` seed, same subset). The encoder
+  initialisation is the only difference within a pair.
+* **Schedule (pre-declared, budget-scaled):** 600 steps x 16 sequences up to 16 episodes, 1,000 steps
+  for 32 and 100. 300 steps under-trains: B-conseq-0 measured 0.51 at 300 and 0.56 at 600 for 16
+  episodes, still rising slowly. 1,000 steps on 100 episodes is the supervised-ceiling recipe (0.64),
+  so `scratch` at 100 doubles as a check that the ceiling reproduces. A checkpoint at 300 steps is
+  also probed, for comparison with B-ctrl-0. Optimiser and loss are as in B-ctrl-0: AdamW, lr
+  3e-4, the whole network trained from step 1.
+* **Evaluation:** the 20 held-out episodes, windows at stride 8.
+  * **Primary metric:** the B-ctrl-0 fine-tune rows' probe mean, i.e. leave-one-episode-out ridge on
+    the fine-tuned state.
+  * **Second readout:** the run's own linear head applied to the held-out states. Only the B labelled
+    episodes fitted it. The ridge probe, by contrast, is fitted on 19 held-out episodes per fold
+    whatever the budget, so it measures how linearly readable the state is, not how much the B labels
+    buy end to end.
+  * Both readouts are saved as out-of-fold predictions (`runs/ftcurve/preds`).
+
+**Primary contrast:** `start - scratch` at each budget, for each of the three pretrained starts, from
+the ridge probe at the end of the schedule. Pairing is by seed (same subset, same head initialisation)
+and by held-out episode. Reported for each cell:
+
+* the mean of the 3 same-seed differences;
+* the **seed SE** (sd of those differences / sqrt 3);
+* the **episode-bootstrap SE** (sd of the seed-averaged difference over 300 resamples of the
+  held-out episodes, `rng(0)`, the same resample for both arms and every seed);
+* the **combined SE** (the two in quadrature) and **MDD = 2.8 x combined SE**.
+
+A cell is **resolved** when |difference| > its MDD. With 7 budgets per start, that threshold
+(z = 2.8, two-sided p of about 0.005 per cell) keeps the chance of a false resolved cell per start
+near 3.5% under the null. Outcomes per pretrained start, decided by `ft_curve.verdict` and stated here
+in advance:
+
+| outcome | rule |
+|---|---|
+| **helps at small budgets** | resolved positive at one or more of 1, 2, 4, 8 episodes; nothing resolved at 16 to 100; no resolved negative |
+| **helps at small and large budgets** | resolved positive at one or more small and one or more large budgets; no resolved negative |
+| **helps at large budgets only** | resolved positive only at 16, 32 or 100; no resolved negative |
+| **harms** | one or more resolved negative; no resolved positive |
+| **mixed** | resolved cells of both signs |
+| **no benefit** | nothing resolved (the MDD of each budget states what could have been seen) |
+
+"Pretraining makes supervised training more label-efficient" is claimed only for a start whose
+outcome is one of the three *helps* rows. Descriptive, not part of the rule:
+
+* the same contrasts for the own-head readout and at 300 steps;
+* the five probe terms;
+* the training-loss curves;
+* **labels needed to reach a probe mean of 0.40 and 0.50**, log-linear between budgets on the
+  seed-mean curve;
+* the **utility** of Newell and Deng (2020): the number of scratch episodes needed to match the
+  pretrained score at budget n, divided by n, minus 1.
+
+Expectation, written down so it can be wrong: from B-ctrl-0 and B-conseq-0 (no SSL init has beaten
+scratch at 4 or 16), *no benefit* for `mae10k`, at best *helps at small budgets* for `jepa1k`, and
+*no benefit* or *harms* for `jepa10k`.
+
+**Literature.** Two lines of work frame the question.
+
+* Hénaff et al. (ICML 2020, "Data-efficient image recognition with CPC", arXiv 1905.09272, Table 2)
+  fine-tune a ResNet on CPC v2 features against a ResNet-200 trained on pixels, at 1% to 100% of
+  ImageNet labels. Top-1 accuracy is 52.7 vs 23.1 at 1%, 73.1 vs 62.5 at 10% and 83.4 vs 80.2 at
+  100%. The gain is largest at small label fractions: a 5x saving of labels at 1% and 2x at 50 to
+  100%.
+* Newell and Deng (CVPR 2020, "How useful is self-supervised pretraining for visual tasks?", arXiv
+  2003.14323) define utility as the scratch labels needed to match divided by the labels used, minus
+  1.
+  * On synthetic tasks, self-supervision "has significant utility when the number of labeled samples
+    is small, but utility approaches zero as labeled data grows". The pretrained curve converges to
+    scratch *before* scratch plateaus, which they read as pretraining acting as regularisation, not
+    better optimisation.
+  * Utility is larger for bigger models and harder data.
+  * Linear evaluation does not correlate with fine-tuning utility.
+
+What this predicts here: any gain should sit at 1 to 8 episodes and vanish by 32 to 100. A frozen
+probe at the floor (all our encoders) does not by itself rule out a fine-tune gain. New here:
+whether the gain depends on *where on the drift curve* the encoder is taken (`jepa1k` vs `jepa10k`),
+measured paired on the same held-out episodes with an explicit episode-sampling SE.
+
+**Compute** (measured on the Mac under load, one process, `OMP_NUM_THREADS=1`, 2 loader workers):
+
+* **Per step.**
+  * At 1 to 4 episodes the loader cache (4 episodes per worker) holds the whole subset: 0.08 s and
+    about 0.1 CPU-s per step.
+  * From 8 episodes on, decoding episodes dominates (an episode holds 118 MB of 256 px frames):
+    0.24 s wall and 1.5 CPU-s per step at 8 episodes; 0.46 s wall and about 3 CPU-s per step at 100
+    episodes.
+  * Start-up costs 12 to 21 s.
+* **Per cell (CPU-minutes, train + both probes):** about 2 at 1 to 4 episodes, 15 at 8, 30 at 16, 50
+  at 32 and 50 at 100. That is about 160 per start and seed.
+* **Grid:** about **1,900 CPU-minutes** for the 84 cells (32 CPU-hours on the Mac's cores).
+* **Wall:** each process uses about 3 cores at the large budgets. On an n2-highcpu-32 that allows
+  about 10 processes, and with vCPUs (hyperthreads) slower than the Mac's cores, about 1.5 to 2.5 hours
+  (the Mac was loaded when measured, so this is an upper estimate per step).
+
+The decoding cost is the loader's (it reads full-resolution frames to train at 64 px). A
+pre-downscaled cache would cut it several-fold, but it changes the loader every study shares, so it
+is left for later.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
@@ -1386,6 +1521,9 @@ anything repeated.
 
 * **B-scale-0** (pre-registered above, data generating on GCP): JEPA on 100 / 300 / 1,000 new episodes
   at 10,000 steps, MAE on 1,000, with floor, raw-proprio and supervised bars on 100 held-out episodes.
+
+* **B-ft-curve** (pre-registered above): the label-efficiency curve from scratch, `long-jepa` at 1,000
+  and 10,000 steps and `long-mae` at 10,000 steps, 7 budgets x 3 seeds, on GCP.
 
 * **B-teach-long** is done (pre-registered verdict: null; see its results above). Heavy training no
   longer runs on the Mac.
