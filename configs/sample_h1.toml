@@ -1,0 +1,41 @@
+# First humanoid review sample (D0.2): the Unitree H1 with whole-body skin, in both
+# end-effector variants. 2 standing hold episodes of 300 steps, 1 free-space reach (`reach_free`) and 1 supported-standing table episode of 300 steps, and
+# 6 seated of 600 (20 Hz -> 15 s and 30 s), CPU only.
+#
+#   make h1-assets   # fetch the pinned HumanoidBench + Menagerie assets (once)
+#   make sample-h1   # generate into out_dir, then build out_dir/index.html
+#
+# Each [humanoid.<variant>] is one simulator scene (effector x posture), run in its
+# own process. Standing episodes end early if the robot falls.
+out_dir = "data/sample_h1"
+master_seed = 0
+
+[humanoid.hand_standing]          # Shadow hands, standing, arms moving slightly
+policies = ["hold"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "standing" }
+
+[humanoid.hand_seated]            # Shadow hands, pelvis fixed at a table with objects
+policies = ["seated_babble"]
+episodes_per_policy = 3
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.pincer_seated]          # Robotiq 2F-85 pincers, same table
+policies = ["seated_babble"]
+episodes_per_policy = 3
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.hand_reach_free]        # Shadow hands, standing, HumanoidBench's reach policy (may fall: end_reason "fall")
+policies = ["reach_free"]
+episodes_per_policy = 1
+steps = 300
+settings = { effector = "hand", posture = "standing" }
+
+[humanoid.pincer_stand_table]     # pincers, pelvis welded at standing height, raised table (source stand_table)
+policies = ["seated_babble"]
+episodes_per_policy = 1
+steps = 300
+settings = { effector = "pincer", posture = "stand_supported" }

@@ -1,0 +1,44 @@
+# Data for the decisive held-out-episode probe test (Track B, docs/model.md): ~120 seated
+# babbling episodes of 600 steps, 60 with Shadow hands and 60 with Robotiq pincers, generated with
+# Track A's generator at the commit recorded in the manifest (not a new source). Six blocks run in
+# parallel processes; their seeds differ by variant name.
+#
+#   uv run sensorium-generate configs/probe_test.toml    # ~10-20 min on the Mac, ~0.5 GB
+out_dir = "data/probe_test"
+master_seed = 1
+
+[humanoid.hand_seated_a]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_b]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_c]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.pincer_seated_a]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_b]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_c]
+policies = ["seated_babble"]
+episodes_per_policy = 20
+steps = 600
+settings = { effector = "pincer", posture = "seated" }

@@ -1,0 +1,60 @@
+# S2b: the experiment programs after the density changes (lower hover, faster descent and push, nearest
+# fallback for topple), with the phase log; all hand variants and the pincer variants that had waited most.
+# Fresh master seed (1): none of these episodes repeats a seed of configs/experiments_batch.toml.
+out_dir = "data/experiments_s2b"
+master_seed = 1
+workers = 3
+
+[humanoid.hand_push]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_topple]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.hand_slide]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.hand_press]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.hand_knock]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_door]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_slide]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_press]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_door]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }

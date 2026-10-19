@@ -1,0 +1,54 @@
+# D0.3 before/after comparison of the seated babbling (A1 statistics): the D0.2 policy
+# on the 0.72 m table ("before") against SafeBabblePolicy at three table heights.
+# 10 episodes of 600 steps (30 s) per variant, CPU only; report with
+#   uv run python scripts/a1_report.py data/a1_compare
+out_dir = "data/a1_compare"
+master_seed = 0
+
+[humanoid.before_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.72, reach_x = [0.4, 0.68], safe_reach = false }
+
+[humanoid.before_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.72, reach_x = [0.4, 0.68], safe_reach = false }
+
+[humanoid.safe072_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.72, reach_x = [0.4, 0.62], safe_reach = true }
+
+[humanoid.safe072_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.72, reach_x = [0.4, 0.62], safe_reach = true }
+
+[humanoid.safe080_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.8, reach_x = [0.4, 0.62], safe_reach = true }
+
+[humanoid.safe080_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.8, reach_x = [0.4, 0.62], safe_reach = true }
+
+[humanoid.safe084_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.84, reach_x = [0.4, 0.62], safe_reach = true }
+
+[humanoid.safe084_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.84, reach_x = [0.4, 0.62], safe_reach = true }

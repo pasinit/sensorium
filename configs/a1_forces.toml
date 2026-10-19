@@ -1,0 +1,29 @@
+# D0.3 step 3: the primitive babbling with soft arms and slow contact approaches, at the two table
+# heights (A1 statistics and contact forces). 10 episodes of 600 steps per variant, CPU only; report with
+#   uv run python scripts/a1_report.py data/a1_forces
+out_dir = "data/a1_forces"
+master_seed = 0
+
+[humanoid.t072_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.72 }
+
+[humanoid.t082_hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated", table_top = 0.82 }
+
+[humanoid.t072_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.72 }
+
+[humanoid.t082_pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated", table_top = 0.82 }

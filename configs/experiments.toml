@@ -1,0 +1,78 @@
+# Experiments with consequences (docs/experiments.md): one scripted program per variant, both effectors,
+# hidden properties and effort channels on. `workers` caps the processes (the machine is shared).
+# This is the short check; the S2 batch for Track B uses configs/experiments_batch.toml.
+out_dir = "data/experiments"
+master_seed = 0
+workers = 3
+
+[humanoid.hand_push]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_push]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_topple]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_topple]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.hand_slide]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_slide]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.hand_press]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_press]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.hand_knock]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_knock]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_door]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "hand", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_door]
+policies = ["experiment"]
+episodes_per_policy = 2
+steps = 300
+settings = { effector = "pincer", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }

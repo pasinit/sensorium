@@ -1,0 +1,190 @@
+# Data for the episode-scaling check (Track B, docs/model.md): 1,110 seated babbling episodes of
+# 600 steps, half Shadow hands, half Robotiq pincers, in 30 blocks of 37 (one process each, so a
+# 32-vCPU machine runs them all at once). A fresh master seed: these episodes are disjoint from
+# configs/probe_test.toml's and are not mixed with them (one generator commit for the whole set).
+# The pretraining subsets (100 / 300 / 1,000) and the 100 held-out episodes are chosen by the
+# training script, stratified by block.
+#
+#   uv run sensorium-generate configs/scale_test.toml    # ~4 h on 32 vCPUs (software rendering)
+out_dir = "data/scale_test"
+master_seed = 2
+
+[humanoid.hand_seated_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.hand_seated_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.pincer_seated_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }
+
+[humanoid.pincer_seated_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated" }

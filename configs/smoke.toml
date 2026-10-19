@@ -1,0 +1,25 @@
+# Tiny end-to-end check of every body: one short episode each (~1 minute on a laptop).
+out_dir = "data/smoke"
+master_seed = 0
+
+[car]
+policies = ["expert"]
+episodes_per_policy = 1
+steps = 30
+
+[drone]
+policies = ["explore"]
+episodes_per_policy = 1
+steps = 60
+
+[piano]
+policies = ["expert"]
+episodes_per_policy = 1
+steps = 40
+settings = { rp1m_path = "data/external/rp1m_toy/rp1m_toy.zarr" }
+
+[humanoid.hand_seated]            # needs `make h1-assets`
+policies = ["seated_babble"]
+episodes_per_policy = 1
+steps = 30
+settings = { effector = "hand", posture = "seated" }

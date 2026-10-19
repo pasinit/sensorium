@@ -1,0 +1,26 @@
+# Review sample for Experiment 1: a few short episodes per body and policy,
+# small enough to generate on a laptop CPU in a few minutes and browse by hand.
+#
+#   make sample     # generate into out_dir
+#   make browse     # build out_dir/index.html
+
+out_dir = "data/sample"
+master_seed = 0
+
+[car]                         # source body A: MetaDrive
+policies = ["expert", "noisy", "explore"]
+episodes_per_policy = 2
+steps = 300                   # 10 Hz -> 30 s
+settings = { num_scenarios = 1000, traffic_density = 0.1 }
+
+[drone]                       # source body B: gym-pybullet-drones
+policies = ["expert", "noisy", "explore"]
+episodes_per_policy = 2
+steps = 600                   # 40 Hz -> 15 s
+settings = { waypoints = 6 }
+
+[piano]                       # target body: RP1M expert data, re-rendered
+policies = ["expert"]
+episodes_per_policy = 4
+steps = 400                   # 20 Hz -> 20 s
+settings = { rp1m_path = "data/external/rp1m_toy/rp1m_toy.zarr" }

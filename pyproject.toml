@@ -1,0 +1,101 @@
+[project]
+name = "sensorium"
+version = "0.0.1"
+description = "A body-agnostic sensorimotor world model learned from simulated multisensory experience; language as a readout."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "numpy>=2.0",
+    "imageio-ffmpeg>=0.5",  # bundled ffmpeg binary: no system install needed
+    "pillow>=10",
+    "pyarrow>=17",  # episode index (parquet)
+]
+
+[project.optional-dependencies]
+# Simulators are pinned to exact commits/versions: data must be regenerable bit-for-bit.
+sims = [
+    "metadrive-simulator @ git+https://github.com/metadriverse/metadrive@325d9e2f9c20e495bde66f30e0ef2b40efbce39c",
+    "gym-pybullet-drones @ git+https://github.com/utiasDSL/gym-pybullet-drones@7ebad1ecabd28a7000add2d05f888aa2e837c2cc",
+    "robopianist==1.0.10",
+    "mujoco==3.15.0",  # H1 humanoid; also what robopianist runs on. touch_grid plugin is built in
+    "audioop-lts>=0.2",
+    "zarr>=2.18",  # reads the RP1M expert piano dataset (zarr v2 + blosc)  # pydub (via robopianist -> note-seq) needs audioop, removed in Python 3.13
+]
+
+# The sensory-layer model (Track B). torch is the only dependency; pinned like the simulators.
+model = [
+    "torch==2.14.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+sensorium-generate = "sensorium.generate:main"
+sensorium-browse = "sensorium.browse:main"
+sensorium-index = "sensorium.index:main"
+sensorium-pool = "sensorium.pool:main"
+sensorium-pretrain = "sensorium.model.pretrain:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sensorium"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Ruff — enforcing lint/format config, owned by the dotfiles kit. install.sh
+# appends this snippet to the project's pyproject.toml (once), so the kit's rules
+# are enforced consistently across projects, not merely suggested in the prompt.
+[tool.ruff]
+extend-exclude = [".claude"]  # agent worktrees live under .claude/worktrees
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+  "E", "F",     # pycodestyle + pyflakes (E722 = no bare except)
+  "I",          # isort — import ordering
+  "UP",         # pyupgrade — X | None, list[int], f-strings (no Optional / % / .format)
+  "B",          # bugbear
+  "C4",         # comprehensions
+  "C901",       # mccabe complexity — keep functions focused
+  "PTH",        # use pathlib, not os.path
+  "T20",        # no print() — use logging
+  "BLE",        # no blind `except Exception`
+  "TID",        # tidy-imports — bans relative imports + `__future__` annotations
+  "D100", "D101", "D102", "D103",  # docstrings: module, class, public method, public function
+  "ANN401",     # no `Any` in annotations
+  "PLC0415",    # no imports outside top level (no lazy/optional runtime imports)
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"   # absolute imports only
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"__future__.annotations" = { msg = "Native in Python >= 3.11; do not import it." }
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D100", "D101", "D102", "D103", "ANN401", "T20", "PLC0415"]
+"scripts/**" = ["T20"]
+"**/__init__.py" = ["D104", "F401"]
+
+[tool.uv]
+# Drop transitive deps we never import, to keep setup pure-pip on every platform:
+# - pyaudio (robopianist): live playback only; needs system portaudio. We synthesise audio offline.
+# - labmaze (dm-control): maze generation for locomotion tasks; no cp313 wheels, needs Bazel.
+override-dependencies = [
+    "pyaudio; sys_platform == 'never'",
+    "labmaze; sys_platform == 'never'",
+]

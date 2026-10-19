@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+data/
+runs/
+.tmp/
+*.npz
+*.mp4
+.DS_Store
+MUJOCO_LOG.TXT
+.claude/worktrees/

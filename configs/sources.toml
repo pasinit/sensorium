@@ -1,0 +1,340 @@
+# Experience-source registry. A source is one (body, effector, task) triple.
+# Loaded and validated by src/sensorium/registry.py; see docs/pools.md for how
+# to add one. Manifests carry body, policy, task, instance and (for bodies with
+# end-effector variants) effector; [default_task] covers manifests that predate
+# the task field.
+
+# Recorded policy name -> kind of experience.
+[policy_kinds]
+expert = "expert"
+noisy = "noisy"
+explore = "babbling"
+hold = "babbling"           # humanoid: stands with small arm noise, task-free
+seated_babble = "babbling"  # humanoid: touch, poke, slide, grasp at a table, task-free
+reach_free = "babbling"     # humanoid: whole-body free-space reaching (HumanoidBench policy)
+experiment = "experiment"   # humanoid: a scripted experiment program with outcomes (its own stratum)
+
+# Task assumed for manifest entries that have no "task" field.
+[default_task]
+car = "drive"
+drone = "waypoints"
+piano = "rp1m"
+
+# effector: "hand" | "pincer" | "none" | "alien"
+# tags: exactly one of "contact_rich" | "vision_dominated" (plus anything else)
+
+[[source]]
+name = "car/drive"
+body = "car"
+effector = "alien"
+task = "drive"
+family = "driving"
+tags = ["vision_dominated"]
+
+[[source]]
+name = "drone/waypoints"
+body = "drone"
+effector = "alien"
+task = "waypoints"
+family = "flight"
+tags = ["vision_dominated"]
+
+[[source]]
+name = "piano/rp1m"
+body = "piano"
+effector = "hand"
+task = "rp1m"
+family = "piano"
+tags = ["contact_rich"]
+
+# Humanoid (Unitree H1, D0.2). One source per (effector, task); the task names
+# are written by the recorder (TASK_BY_POSTURE in bodies/humanoid.py).
+
+[[source]]
+name = "humanoid/hand/stand"
+body = "humanoid"
+effector = "hand"
+task = "stand"
+family = "humanoid"
+tags = ["vision_dominated"]
+
+[[source]]
+name = "humanoid/hand/table"
+body = "humanoid"
+effector = "hand"
+task = "table"
+family = "humanoid"
+tags = ["contact_rich"]
+
+[[source]]
+name = "humanoid/pincer/stand"
+body = "humanoid"
+effector = "pincer"
+task = "stand"
+family = "humanoid"
+tags = ["vision_dominated"]
+
+[[source]]
+name = "humanoid/pincer/table"
+body = "humanoid"
+effector = "pincer"
+task = "table"
+family = "humanoid"
+tags = ["contact_rich"]
+
+# Standing at a raised table with the pelvis welded (posture "stand_supported", split v2): the same
+# primitives as "table" but a different body, vestibular signal and camera height, so its own source.
+
+[[source]]
+name = "humanoid/hand/stand_table"
+body = "humanoid"
+effector = "hand"
+task = "stand_table"
+family = "humanoid"
+tags = ["contact_rich"]
+
+[[source]]
+name = "humanoid/pincer/stand_table"
+body = "humanoid"
+effector = "pincer"
+task = "stand_table"
+family = "humanoid"
+tags = ["contact_rich"]
+
+# Experiments with consequences (Track A, D0.3 step 5+): scripted experiment programs with outcomes
+# (docs/experiments.md). One source per (effector, program); `programs` and `props` are what a split
+# checks so that a held-out task's program and prop configuration never appear in pretraining.
+# Humanoid sources record the program as their task. Posture is in each episode's meta.
+
+[[source]]
+name = "humanoid/hand/exp_push"
+body = "humanoid"
+effector = "hand"
+task = "exp_push"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["push"]
+props = ["objects"]
+
+[[source]]
+name = "humanoid/pincer/exp_push"
+body = "humanoid"
+effector = "pincer"
+task = "exp_push"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["push"]
+props = ["objects"]
+
+[[source]]
+name = "humanoid/hand/exp_topple"
+body = "humanoid"
+effector = "hand"
+task = "exp_topple"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["topple"]
+props = ["tall_block"]
+
+[[source]]
+name = "humanoid/pincer/exp_topple"
+body = "humanoid"
+effector = "pincer"
+task = "exp_topple"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["topple"]
+props = ["tall_block"]
+
+[[source]]
+name = "humanoid/hand/exp_slide"
+body = "humanoid"
+effector = "hand"
+task = "exp_slide"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["slide"]
+props = ["friction_patches"]
+
+[[source]]
+name = "humanoid/pincer/exp_slide"
+body = "humanoid"
+effector = "pincer"
+task = "exp_slide"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["slide"]
+props = ["friction_patches"]
+
+[[source]]
+name = "humanoid/hand/exp_press"
+body = "humanoid"
+effector = "hand"
+task = "exp_press"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["press"]
+props = ["soft_hard_objects", "button"]
+
+[[source]]
+name = "humanoid/pincer/exp_press"
+body = "humanoid"
+effector = "pincer"
+task = "exp_press"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["press"]
+props = ["soft_hard_objects", "button"]
+
+[[source]]
+name = "humanoid/hand/exp_knock"
+body = "humanoid"
+effector = "hand"
+task = "exp_knock"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["knock"]
+props = ["objects"]
+
+[[source]]
+name = "humanoid/pincer/exp_knock"
+body = "humanoid"
+effector = "pincer"
+task = "exp_knock"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["knock"]
+props = ["objects"]
+
+[[source]]
+name = "humanoid/hand/exp_door"
+body = "humanoid"
+effector = "hand"
+task = "exp_door"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["door"]
+props = ["hinged_flap"]
+
+[[source]]
+name = "humanoid/pincer/exp_door"
+body = "humanoid"
+effector = "pincer"
+task = "exp_door"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["door"]
+props = ["hinged_flap"]
+
+[[source]]
+name = "humanoid/pincer/exp_lift_drop"
+body = "humanoid"
+effector = "pincer"
+task = "exp_lift_drop"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["lift_drop"]
+props = ["objects"]
+
+[[source]]
+name = "humanoid/hand/exp_turn"
+body = "humanoid"
+effector = "hand"
+task = "exp_turn"
+family = "humanoid"
+tags = ["vision_dominated"]
+programs = ["turn"]
+props = []
+
+[[source]]
+name = "humanoid/pincer/exp_turn"
+body = "humanoid"
+effector = "pincer"
+task = "exp_turn"
+family = "humanoid"
+tags = ["vision_dominated"]
+programs = ["turn"]
+props = []
+
+# Held-out few-shot tasks (T1-T4 of the experiments design) and their BiGym human counterparts.
+
+[[source]]
+name = "humanoid/pincer/stack"
+body = "humanoid"
+effector = "pincer"
+task = "stack"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["stack"]
+props = ["stack_blocks"]
+
+[[source]]
+name = "humanoid/pincer/drawer_open"
+body = "humanoid"
+effector = "pincer"
+task = "drawer_open"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["drawer_open"]
+props = ["drawer"]
+
+[[source]]
+name = "humanoid/hand/push_to_target"
+body = "humanoid"
+effector = "hand"
+task = "push_to_target"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["push_to_target"]
+props = ["target_disc"]
+
+[[source]]
+name = "humanoid/pincer/push_to_target"
+body = "humanoid"
+effector = "pincer"
+task = "push_to_target"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["push_to_target"]
+props = ["target_disc"]
+
+[[source]]
+name = "humanoid/hand/turn_reach"
+body = "humanoid"
+effector = "hand"
+task = "turn_reach"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["turn_reach"]
+props = ["far_objects"]
+
+[[source]]
+name = "humanoid/pincer/turn_reach"
+body = "humanoid"
+effector = "pincer"
+task = "turn_reach"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["turn_reach"]
+props = ["far_objects"]
+
+[[source]]
+name = "bigym/pincer/stack_blocks"
+body = "bigym"
+effector = "pincer"
+task = "stack_blocks"
+family = "home"
+tags = ["contact_rich"]
+programs = ["stack"]
+props = ["stack_blocks"]
+
+[[source]]
+name = "bigym/pincer/drawer_top_open"
+body = "bigym"
+effector = "pincer"
+task = "drawer_top_open"
+family = "home"
+tags = ["contact_rich"]
+programs = ["drawer_open"]
+props = ["drawer"]
+

@@ -1,0 +1,18 @@
+# D0.3 step 4: the A1 babbling-quality run at the default table (0.82 m), both effectors. 10 episodes
+# of 600 steps (30 s) each, CPU only. Check with
+#   make a1-gate            (pass/fail lines; A1_DIR=data/a1)
+#   uv run python scripts/a1_report.py data/a1
+out_dir = "data/a1"
+master_seed = 0
+
+[humanoid.hand]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "hand", posture = "seated" }
+
+[humanoid.pincer]
+policies = ["seated_babble"]
+episodes_per_policy = 10
+steps = 600
+settings = { effector = "pincer", posture = "seated" }

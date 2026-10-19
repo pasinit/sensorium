@@ -1,0 +1,67 @@
+# S2 batch for Track B (experiments with consequences): about one hour of pushes, topples, slides, presses
+# and knocks, both effectors, hidden properties and effort channels on. 12 episodes of 600 steps per
+# (program, effector) = 72,000 steps. `workers` caps the processes (the machine is shared).
+#   uv run sensorium-generate configs/experiments_batch.toml
+out_dir = "data/experiments_batch"
+master_seed = 0
+workers = 3
+
+[humanoid.hand_push]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_push]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_topple]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_topple]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.hand_slide]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_slide]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.hand_press]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_press]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.hand_knock]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_knock]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }

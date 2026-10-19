@@ -1,0 +1,69 @@
+# Frozen split file, v3. Fixed before any training; pools only draw from the
+# section named by their spec's `split` (normally "pretrain"), and neither a
+# held-out task nor a held-out instance may appear in a pool
+# (sensorium.pool.validate_pool).
+#
+# Changelog:
+#   v3 (2026-10-15): the experiments-with-consequences sources (scripted programs with outcomes), and the
+#      held-out few-shot tasks T1-T4 (stack, drawer-open, push-to-target, turn-reach) with BiGym's
+#      StackBlocks and DrawerTopOpen. Written before any experiment episode exists. The programs and
+#      props of held-out sources must not appear in pretraining sources (checked on load). v2 does not
+#      assign the new sources and no longer loads; it is kept for the record.
+#   v2 (2026-10-14): `stand_supported` episodes are their own sources, humanoid/{hand,pincer}/stand_table,
+#      instead of sharing "table" with the seated ones (decision 2 of the D0.3 step 3 review). Both
+#      join the pretraining section; nothing is held out. There was no v1 file. v0 no longer loads
+#      against configs/sources.toml (it does not assign the new sources) and is kept for the record.
+#   v0: the first split (car, drone, piano, four humanoid sources).
+#
+# Every source in configs/sources.toml must be listed in exactly one section;
+# sensorium.pool.load_splits checks this. Changing this file changes its hash,
+# which every pool records.
+version = "v3"
+
+[pretrain]
+sources = [
+  "car/drive", "drone/waypoints", "piano/rp1m",
+  "humanoid/hand/stand", "humanoid/hand/table", "humanoid/pincer/stand", "humanoid/pincer/table",
+  "humanoid/hand/stand_table", "humanoid/pincer/stand_table",
+  "humanoid/hand/exp_push",
+  "humanoid/pincer/exp_push",
+  "humanoid/hand/exp_topple",
+  "humanoid/pincer/exp_topple",
+  "humanoid/hand/exp_slide",
+  "humanoid/pincer/exp_slide",
+  "humanoid/hand/exp_press",
+  "humanoid/pincer/exp_press",
+  "humanoid/hand/exp_knock",
+  "humanoid/pincer/exp_knock",
+  "humanoid/hand/exp_door",
+  "humanoid/pincer/exp_door",
+  "humanoid/pincer/exp_lift_drop",
+  "humanoid/hand/exp_turn",
+  "humanoid/pincer/exp_turn",
+]
+
+# Held-out *tasks*: whole sources never seen in pretraining. T1-T4 of the experiments design (their
+# scripted programs are the demonstrators) and BiGym's human demos of the same families. Each needs a
+# reason and a tag, reported per side.
+[heldout.tasks]
+"humanoid/pincer/stack" = { reason = "T1: stack two blocks, pincer side", tag = "contact_rich" }
+"humanoid/pincer/drawer_open" = { reason = "T2: open the drawer, pincer side", tag = "contact_rich" }
+"humanoid/hand/push_to_target" = { reason = "T3: push a block onto a marked target", tag = "contact_rich" }
+"humanoid/pincer/push_to_target" = { reason = "T3: push a block onto a marked target", tag = "contact_rich" }
+"humanoid/hand/turn_reach" = { reason = "T4: reach the far-side object by turning the torso", tag = "contact_rich" }
+"humanoid/pincer/turn_reach" = { reason = "T4: reach the far-side object by turning the torso", tag = "contact_rich" }
+"bigym/pincer/stack_blocks" = { reason = "T1: stack two blocks, pincer side", tag = "contact_rich" }
+"bigym/pincer/drawer_top_open" = { reason = "T2: open the drawer, pincer side", tag = "contact_rich" }
+
+# Held-out *instances*: specific content within a task that otherwise stays in the
+# pretraining pool (a song of the piano, a mocap clip of a walk, a demo of a BiGym
+# task, an object layout of a play task). Keyed by task name (as in sources.toml),
+# not by source; the task must be registered and must not itself be held out.
+# None yet. TODO (D0.5): generate the RP1M entry from RP1M's own in-distribution /
+# out-of-distribution song lists with a small script, as:
+#
+#   [heldout.instances.rp1m]
+#   ids = ["song_0123", "song_0456"]
+#   reason = "RP1M out-of-distribution songs, hand side"
+#   tag = "contact_rich"
+[heldout.instances]

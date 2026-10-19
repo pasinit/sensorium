@@ -1,0 +1,20 @@
+# Example pool spec for the review sample (data/sample): car and drone only,
+# equal thirds of expert / noisy / babbling. See docs/pools.md.
+#
+#   make index      # data/sample/manifest.json -> data/sample/index.parquet
+#   make pool       # this spec -> data/sample/pool.json
+name = "sample-alien-mix"
+total_steps = 2700          # 900 per kind: the sample holds 916 alien babbling steps (drone explore crashes at ~4 s)
+senses = ["rgb", "audio_logmel", "proprio", "touch", "action"]
+seed = 0
+n_sources = "all"          # an int takes the first n of the seeded source ranking
+split = "pretrain"
+tolerance = 0.02
+
+[kinds]                    # relative weights
+expert = 1
+noisy = 1
+babbling = 1
+
+[effector_ratio]           # relative weights; absent or 0 = excluded
+alien = 1

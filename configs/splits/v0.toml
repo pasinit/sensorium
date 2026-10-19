@@ -1,0 +1,38 @@
+# SUPERSEDED by v2.toml (see its changelog; this file no longer loads against configs/sources.toml).
+# Frozen split file, v0. Fixed before any training; pools only draw from the
+# section named by their spec's `split` (normally "pretrain"), and neither a
+# held-out task nor a held-out instance may appear in a pool
+# (sensorium.pool.validate_pool).
+#
+# Every source in configs/sources.toml must be listed in exactly one section;
+# sensorium.pool.load_splits checks this. Changing this file changes its hash,
+# which every pool records.
+version = "v0"
+
+[pretrain]
+sources = [
+  "car/drive", "drone/waypoints", "piano/rp1m",
+  "humanoid/hand/stand", "humanoid/hand/table", "humanoid/pincer/stand", "humanoid/pincer/table",
+]
+
+# Held-out *tasks*: whole sources never seen in pretraining, by source name. None
+# exist yet: the planned ones (8 BiGym tasks, tabletop sort and roll, scripted
+# hand tasks) arrive with D0.4/D0.5 and the D0.7 choice. Each needs a reason and
+# a tag ("contact_rich" or "vision_dominated"), reported per side:
+#
+#   [heldout.tasks]
+#   "bigym/drawer" = { reason = "pincer side, k-shot target", tag = "contact_rich" }
+[heldout.tasks]
+
+# Held-out *instances*: specific content within a task that otherwise stays in the
+# pretraining pool (a song of the piano, a mocap clip of a walk, a demo of a BiGym
+# task, an object layout of a play task). Keyed by task name (as in sources.toml),
+# not by source; the task must be registered and must not itself be held out.
+# None yet. TODO (D0.5): generate the RP1M entry from RP1M's own in-distribution /
+# out-of-distribution song lists with a small script, as:
+#
+#   [heldout.instances.rp1m]
+#   ids = ["song_0123", "song_0456"]
+#   reason = "RP1M out-of-distribution songs, hand side"
+#   tag = "contact_rich"
+[heldout.instances]

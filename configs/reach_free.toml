@@ -1,0 +1,17 @@
+# D0.3 step 3: HumanoidBench's reach policy on the standing H1 (free-space whole-body reaching),
+# 20 episodes of 300 steps (15 s) per effector: how often it falls and how far it drifts.
+# CPU only; look at the result with the episodes' meta (end_reason, fell) and privileged/qpos.
+out_dir = "data/reach_free"
+master_seed = 0
+
+[humanoid.hand_standing]
+policies = ["reach_free"]
+episodes_per_policy = 20
+steps = 300
+settings = { effector = "hand", posture = "standing" }
+
+[humanoid.pincer_standing]
+policies = ["reach_free"]
+episodes_per_policy = 20
+steps = 300
+settings = { effector = "pincer", posture = "standing" }
