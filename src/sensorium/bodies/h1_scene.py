@@ -31,7 +31,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from sensorium.bodies.h1_props import TALL_OBJECTS, prop_xml
+from sensorium.bodies.h1_props import STACK_OBJECTS, TALL_OBJECTS, prop_xml
 
 EFFECTORS = ("hand", "pincer")
 POSTURES = ("standing", "seated", "stand_supported")
@@ -506,7 +506,8 @@ def seated_props(
             f'size="0.02 0.02 {(top - 0.04) / 2}" material="table_wood"/>\n'
         )
     extra = TALL_OBJECTS if "tall_block" in props else ()
-    for name, material, shape, size in (*OBJECTS, *extra):
+    base = STACK_OBJECTS if "stack_blocks" in props else OBJECTS  # two cubes instead of the six
+    for name, material, shape, size in (*base, *extra):
         rgba, friction, density, solref = MATERIALS[material]
         lines.append(
             f'    <body name="{name}" pos="0.55 0 {top + 0.05}">\n'

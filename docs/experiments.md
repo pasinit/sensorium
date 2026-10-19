@@ -90,3 +90,17 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
 * `configs/experiments_batch.toml` (S2 part 1, stopped), `experiments_batch2.toml` (knock, hands'
   door), `experiments_s2b.toml` (denser programs, fresh master seed).
 
+
+## Known gaps (2026-10-15)
+
+* **Pincer slide, press and door wait 72-79% of the time** (S2b: 12 episodes each, `data/experiments_s2b`):
+  a near-vertical pincer plans targets no further than x of about 0.5 m and cannot plan a low approach
+  next to an object (the forearm meets the table). They are kept as a diagnostic, not as training data:
+  pool specs should leave `humanoid/pincer/exp_slide`, `exp_press` and `exp_door` out until a pincer
+  planner fixes them (pincer knock, topple, push and lift-drop plan well enough). **Pincer press has one
+  episode with a 300 N effector-object peak**, above the 2F-85's 235 N grip and under the 470 N gate limit.
+* **Push to the target (T3) is weak:** 3 of 12 demonstrator episodes succeed with hands and 1 of 12 with
+  pincers; only the successful episodes should be offered as few-shot demonstrations.
+* Some `displaced` events of the hand programs come from the hand sweeping objects during a low hover
+  (6 cm over the table, below the tops of the 7 cm objects), not only from the intended contact; the
+  push-to-target program hovers at 10 cm for this reason.

@@ -118,3 +118,12 @@ def test_bouts_bridge_short_gaps() -> None:
     touching[10:13, 0] = True
     touching[15:18, 0] = True  # a gap of two steps is bridged
     assert contact_bouts(touching)[0] == [(10, 18)]
+
+
+def test_a_recorded_target_is_per_step_and_is_read_from_the_first() -> None:
+    pose = resting_pose()
+    pose[0, 0, :2] = [0.45, 0.1]
+    pose[-1, 0, :2] = [0.7, 0.0]
+    ep = episode(pose, np.zeros((STEPS, 4)), touching_between(10, 14))
+    ep.privileged["target"] = np.tile(np.array([0.7, 0.0, TOP], dtype=np.float32), (STEPS, 1))
+    assert caused_change(ep).counts["pushed_to_target"] == 1

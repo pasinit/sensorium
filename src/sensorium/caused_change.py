@@ -283,7 +283,11 @@ def caused_change(episode: Episode) -> CausedChange:
             counts["pressed"] = joint_events(travel[:, cols], near)[0]
     target = priv.get("target")
     if target is not None:
-        counts["pushed_to_target"] = pushed_to_target_events(pose, np.asarray(target), touching)
+        counts["pushed_to_target"] = pushed_to_target_events(
+            pose,
+            np.asarray(target, dtype=float)[0],
+            touching,  # [T, 3], the same every step
+        )
     counts["body_moved"] = body_moved_events(episode)
     return CausedChange(minutes=episode.length * episode.dt / 60.0, counts=dict(counts))
 

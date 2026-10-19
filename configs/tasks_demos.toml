@@ -1,0 +1,18 @@
+# S5: scripted demonstrators of the held-out few-shot tasks (task mode: one job, the episode ends 1 s after
+# its success test holds, `meta.success` says whether it did). 12 episodes each, master seed 3.
+#   T1 stack two blocks (pincers)   T2 open the drawer (pincers)   T3 push to the target (hands, pincers)
+out_dir = "data/tasks_demos"
+master_seed = 3
+workers = 3
+
+[humanoid.pincer_stack]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "stack", props = ["stack_blocks", "target_disc"], task = true, hidden_properties = true, effort = true }
+
+[humanoid.pincer_drawer_open]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "drawer_open", props = ["drawer"], task = true, hidden_properties = true, effort = true }
