@@ -227,6 +227,16 @@ programs = ["door"]
 props = ["hinged_flap"]
 
 [[source]]
+name = "humanoid/hand/exp_lift_drop"
+body = "humanoid"
+effector = "hand"
+task = "exp_lift_drop"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["lift_drop"]
+props = ["objects"]
+
+[[source]]
 name = "humanoid/pincer/exp_lift_drop"
 body = "humanoid"
 effector = "pincer"

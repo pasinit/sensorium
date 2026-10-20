@@ -1,4 +1,4 @@
-# S3: the pretraining program that needs a grasp: lift and drop from 5, 10 and 15 cm (pincers). 12
+# S3: the pretraining program that needs a grasp: lift and drop from 5, 10 and 15 cm (pincers; hands too since the claw pinch). 12
 # episodes of 600 steps, fresh master seed (2). Stack and drawer are held-out tasks: their
 # demonstrators are in configs/tasks_demos.toml.
 out_dir = "data/experiments_s3"

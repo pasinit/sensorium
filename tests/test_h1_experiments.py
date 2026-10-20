@@ -7,6 +7,8 @@ import pytest
 
 pytest.importorskip("mujoco", reason="needs the simulator extra: make setup")
 
+import mujoco  # noqa: E402
+
 from sensorium.bodies.h1_experiments import PINCER_PROGRAMS, PROGRAMS, ExperimentPolicy  # noqa: E402
 from sensorium.bodies.h1_scene import assets_available  # noqa: E402
 from sensorium.bodies.humanoid import HumanoidRecorder  # noqa: E402
@@ -109,6 +111,27 @@ def test_stack_blocks_replace_the_objects_and_share_a_side() -> None:
             assert pose.shape[0] == 2  # two blocks, not the six objects
             assert np.sign(pose[0, 1]) == np.sign(pose[1, 1])  # one arm's side
             assert np.linalg.norm(pose[0, :2] - pose[1, :2]) > 0.09
+
+
+@needs_assets
+def test_a_stack_counts_only_when_the_top_block_rests_released_on_the_other() -> None:
+    with HumanoidRecorder({**settings("pincer", "stack"), "task": True}) as recorder:
+        policy = recorder.make_policy("experiment", np.random.default_rng(0))
+        assert isinstance(policy, ExperimentPolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        model, data = recorder.model, recorder.data
+        top, base = (model.jnt_qposadr[model.body_jntadr[b]] for b in recorder.objects)
+        size = model.geom_size[int(model.body_geomadr[recorder.objects[0]])]
+        data.qpos[base : base + 2] = (0.62, 0.0)  # clear of both arms' starts
+        data.qpos[top : top + 3] = data.qpos[base : base + 3] + [0.0, 0.0, 2 * size[2] + 0.03]
+        data.qpos[top + 3 : top + 7] = data.qpos[base + 3 : base + 7]
+        data.qvel[:] = 0.0
+        mujoco.mj_forward(model, data)
+        assert not policy.succeeded(data)  # above the other block, not on it
+        for _ in range(400):  # let it fall onto the base and settle
+            mujoco.mj_step(model, data)
+        mujoco.mj_forward(model, data)
+        assert policy.succeeded(data)
 
 
 @needs_assets

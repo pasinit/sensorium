@@ -37,6 +37,7 @@ sources = [
   "humanoid/pincer/exp_knock",
   "humanoid/hand/exp_door",
   "humanoid/pincer/exp_door",
+  "humanoid/hand/exp_lift_drop",
   "humanoid/pincer/exp_lift_drop",
   "humanoid/hand/exp_turn",
   "humanoid/pincer/exp_turn",

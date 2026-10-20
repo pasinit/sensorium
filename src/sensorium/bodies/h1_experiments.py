@@ -45,11 +45,12 @@ PROGRAMS = (
     "drawer_open",
     "push_to_target",
 )
-PINCER_PROGRAMS = ("lift_drop", "stack", "drawer_open")  # hands cannot lift or pinch a knob
+PINCER_PROGRAMS = ("stack", "drawer_open")  # hands lift (the claw pinch) but do not place or pull
 # The demonstrators of the held-out few-shot tasks (T1 stack, T2 drawer, T3 push to the target):
 # their episodes carry the held-out task as their task name, not ``exp_<program>``.
 HELD_OUT_PROGRAMS = ("stack", "drawer_open", "push_to_target")
 SUCCESS_STEPS = 20  # a task counts as done when its test has held this long (1 s)
+RESTING_MPS = 0.02  # m/s: a stacked block must be slower than this (babble_stats.MOVING_MPS)
 TARGET_NEAR_M = 0.03  # push to target: the object's centre this close to the disc's centre
 TARGET_FAR_M = 0.15  # ... for an object that began this far away
 PUSH_M = 0.12  # push distance of ``push``
@@ -280,7 +281,8 @@ class ExperimentPolicy(BabblePolicy):
         """The success test of this program's task at this step (see ``done``)."""
         if self.program == "stack":
             blocks = [i for i, n in enumerate(self.names) if "stackbox" in n]
-            return len(blocks) == 2 and self.stacked_on(data, blocks) is not None
+            state = self.stacked_on(data, blocks) if len(blocks) == 2 else None
+            return state is not None and self.resting_on(data, *state)
         if self.program == "drawer_open":
             for letter in ("l", "r"):
                 joint = self.model.joint(f"prop_drawer_{letter}")
@@ -460,6 +462,25 @@ class ExperimentPolicy(BabblePolicy):
                     return top, base
         return None
 
+    def resting_on(self, data: mujoco.MjData, top: int, base: int) -> bool:
+        """True if block ``top`` rests on ``base``: still, on it, and touched by no robot part.
+
+        A block held over the other, or still being set down, is not a stack.
+        """
+        dof = self.model.jnt_dofadr[self.model.body_jntadr[self.objects[top]]]
+        if float(np.linalg.norm(data.qvel[dof : dof + 3])) >= RESTING_MPS:
+            return False
+        top_geoms, base_geoms = set(self.body_geoms(top)), set(self.body_geoms(base))
+        on_base = False
+        for i in range(data.ncon):
+            pair = (int(data.contact[i].geom1), int(data.contact[i].geom2))
+            for mine, other in (pair, pair[::-1]):
+                if mine in top_geoms:
+                    if self.classes.robot[other]:
+                        return False  # still held or pushed
+                    on_base |= other in base_geoms
+        return on_base
+
     def spot_beside(self, base: np.ndarray, side: str, half_height: float) -> np.ndarray:
         """A table spot 9 cm from ``base`` that this arm can reach: in y, else in x."""
         sign = ROLL_YAW_SIGN[side]
@@ -526,7 +547,7 @@ def check_program(program: str | None, effector: str) -> str | None:
     if program is not None and program not in PROGRAMS:
         raise ValueError(f"program must be one of {PROGRAMS}, got {program!r}")
     if program in PINCER_PROGRAMS and effector != "pincer":
-        raise ValueError(f"program {program!r} needs the pincer (hands cannot lift)")
+        raise ValueError(f"program {program!r} needs the pincer")
     return program
 
 

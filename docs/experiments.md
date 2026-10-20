@@ -89,6 +89,11 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
   descent, contact, wait, retreat) so the split of arm time is measured, not inferred.
 * `configs/experiments_batch.toml` (S2 part 1, stopped), `experiments_batch2.toml` (knock, hands'
   door), `experiments_s2b.toml` (denser programs, fresh master seed).
+* `lift_drop` runs with hands too since the hand's claw pinch (`docs/touch.md`), as the source
+  `humanoid/hand/exp_lift_drop`; stack and the drawer stay pincer-only.
+* The stack task's success test (T1) needs the top block at rest on the other one (slower than
+  2 cm/s, touching it, touched by no robot part) for its 1 s: a block held over the other does not
+  count.
 
 
 ## Known gaps (2026-10-15)
