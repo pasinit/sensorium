@@ -4,7 +4,9 @@ Two data sets of the same layout (600-step seated episodes, half Shadow hand, ha
 properties and effort recorded): ``configs/variety.toml`` (the seven experiment programs plus
 babbling with props) and ``configs/babble_v2.toml`` (babbling only, as ``scale_test.toml`` on the
 current physics). ``split`` draws one split per set with ``scale_test.make_split`` (stratified by
-block): 100 held-out episodes and an ordered list whose first 1,000 are the pretraining set.
+block): 100 held-out episodes, then the pretraining set, the first n of the rest in stratified
+order, with n the same for both sets: the smaller set's count of non-held-out episodes (620 for
+30 blocks x 24; generation is time-capped, so blocks may be partly filled).
 
 Arms (V+P, as B-scale-0: 10,000 steps x 16 sequences; checkpoints at 0, 250, 1,000, 2,500, 5,000
 and 10,000; seeds 0 to 2): ``jepa-variety``, ``jepa-babble``, ``mae-variety``, ``mae-babble``, and
@@ -18,7 +20,7 @@ The SSL arms read their episodes from a 128 px frame cache per set (opt-in, as B
 ``--no-cache`` decodes). Probes always decode the held-out episodes at full resolution.
 
     uv run python scripts/variety_test.py split [--from-config] [--dry-run]
-    uv run python scripts/variety_test.py cache --jobs 30            # both sets, 2,000 episodes
+    uv run python scripts/variety_test.py cache --jobs 30   # both sets' pretraining episodes
     uv run python scripts/variety_test.py train --arm mae-variety --seed 0
     uv run python scripts/variety_test.py probe [--shard 0/16]
     uv run python scripts/variety_test.py report
@@ -77,7 +79,8 @@ ROOT = Path("runs/variety")
 BASE = scale.BASE
 CACHE_SIZE = scale.CACHE_SIZE
 HELDOUT = scale.HELDOUT
-PRETRAIN = 1000
+PRETRAIN = 0
+"""Pretraining episodes per set; 0 = the matched available count (``matched_size``)."""
 SPACE_PER_SET = 50
 DROP = ("eff_",)
 STEPS = scale.STEPS
@@ -145,8 +148,33 @@ def summary(split: dict[str, list[str]]) -> str:
 
 
 def make_splits(names: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
-    """One ``scale_test.make_split`` per set (seed 0, 100 held-out, 1,000 pretraining)."""
-    return {s: scale.make_split(names[s], heldout=HELDOUT, pretrain=PRETRAIN) for s in SETS}
+    """One ``scale_test.make_split`` per set (seed 0, ``HELDOUT`` held-out), both with the same
+    pretraining size: ``PRETRAIN`` if set, else ``matched_size``.
+
+    Raises:
+        ValueError: if a set has no more than ``HELDOUT`` episodes.
+    """
+    n = PRETRAIN or matched_size(names)
+    return {s: scale.make_split(names[s], heldout=HELDOUT, pretrain=n) for s in SETS}
+
+
+def matched_size(names: dict[str, list[str]]) -> int:
+    """The pretraining size of every arm: the smaller set's count of non-held-out episodes.
+
+    Raises:
+        ValueError: if a set has no more than ``HELDOUT`` episodes.
+    """
+    n = min(len(names[s]) for s in SETS) - HELDOUT
+    if n <= 0:
+        raise ValueError(
+            f"need more than {HELDOUT} episodes per set, got {[len(v) for v in names.values()]}"
+        )
+    return n
+
+
+def pretrain_size() -> int:
+    """The pretraining size written in the split (every arm's episode count)."""
+    return len(json.loads((ROOT / "split.json").read_text())[SETS[0]]["pretrain"])
 
 
 def write_split(from_config: bool, dry_run: bool) -> None:
@@ -165,6 +193,7 @@ def write_split(from_config: bool, dry_run: bool) -> None:
                 "%s: %d episodes on disk, the config names %d", s, len(names[s]), len(expected)
             )
     splits = make_splits(names)
+    logging.info("pretraining episodes per set: %d (matched)", len(splits[SETS[0]]["pretrain"]))
     for s in SETS:
         logging.info("%s: %s", s, summary(splits[s]))
     if not dry_run:
@@ -196,7 +225,7 @@ def shared_space() -> ChannelSpace:
 
 
 def write_cache(jobs: int, names: tuple[str, ...]) -> None:
-    """The 128 px frame caches of the 1,000 pretraining episodes of each set in ``names``."""
+    """The 128 px frame caches of the pretraining episodes of each set in ``names``."""
     for s in names:
         build_cache(files(s, "pretrain"), cache_dir(s), CACHE_SIZE, jobs)
 
@@ -600,7 +629,8 @@ def plot_curves(test: str, out: Path) -> None:
             "--arms",
             *ARMS,
             "--title",
-            f"B-variety-0: V+P on 1,000 variety or babble_v2 episodes; probe on {DIRS[test]}",
+            f"B-variety-0: V+P on {pretrain_size():,} variety or babble_v2 episodes; "
+            f"probe on {DIRS[test]}",
             "--out",
             str(out),
         ],
@@ -614,6 +644,7 @@ def report() -> None:
     for test in SETS:
         tables(test)
         last[test] = contrasts(test)
+    say(f"\nPretraining episodes per set (every arm): {pretrain_size():,}")
     say(f"\n## Pre-registered outcomes ({STEPS:,} steps; docs/model.md, B-variety-0)\n")
     say("| objective | variety - babble on babble (primary) | on variety (secondary) | reading |")
     say("|---|---|---|---|")

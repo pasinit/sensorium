@@ -56,29 +56,43 @@ def write_config(path: Path, blocks: dict[str, tuple[str, int]]) -> Path:
     return path
 
 
-def test_variety_splits_are_stratified_and_disjoint_per_set(script: Any, tmp_path: Path) -> None:
+def test_variety_splits_are_stratified_disjoint_and_matched_in_size(
+    script: Any, tmp_path: Path
+) -> None:
     programs = ("push", "slide", "press", "knock", "door", "topple", "lift_drop")
-    blocks = {f"{e}_{p}_00": ("experiment", 35) for e in ("hand", "pincer") for p in programs}
-    blocks |= {
-        f"{e}_babble_{i:02d}": ("seated_babble", 35) for e in ("hand", "pincer") for i in range(9)
-    }
+    blocks = {f"{e}_{p}_00": ("experiment", 24) for e in ("hand", "pincer") for p in programs}
+    blocks |= {f"{e}_{p}_01": ("experiment", 24) for e in ("hand", "pincer") for p in programs}
+    blocks |= {f"{e}_babble_00": ("seated_babble", 24) for e in ("hand", "pincer")}
     variety = script.scale.expected_names(write_config(tmp_path / "variety.toml", blocks))
-    babble = script.scale.expected_names(
-        Path(__file__).resolve().parents[1] / "configs/scale_test.toml"
-    )
-    assert len(variety) == 32 * 35
-    splits = script.make_splits({"variety": variety, "babble": babble})
-    assert splits == script.make_splits({"variety": variety, "babble": babble})
-    for name, names in (("variety", variety), ("babble", babble)):
+    seated = {
+        f"{e}_seated_{i:02d}": ("seated_babble", 24) for e in ("hand", "pincer") for i in range(15)
+    }
+    babble = script.scale.expected_names(write_config(tmp_path / "babble.toml", seated))
+    assert len(variety) == len(babble) == 720
+    full = script.make_splits({"variety": variety, "babble": babble})
+    assert {len(full[s]["pretrain"]) for s in script.SETS} == {620}
+    # a time-capped run: one babble block stopped after 14 of its 24 episodes
+    capped = [
+        n
+        for n in babble
+        if not (script.scale.block_of(n) == "hand_seated_03" and n[-7:-4] >= "014")
+    ]
+    assert len(capped) == 710
+    names = {"variety": variety, "babble": capped}
+    splits = script.make_splits(names)
+    assert splits == script.make_splits(names)
+    for name in script.SETS:
         held, pre, spare = (splits[name][k] for k in ("heldout", "pretrain", "spare"))
-        assert (len(held), len(pre)) == (100, 1000)
-        assert len(set(held) | set(pre) | set(spare)) == len(names)
+        assert (len(held), len(pre)) == (100, 610)  # matched: the smaller set's 710 - 100
+        assert len(set(held) | set(pre) | set(spare)) == len(names[name])
         effectors = Counter(script.scale.block_of(n).split("_")[0] for n in held)
         assert effectors == {"hand": 50, "pincer": 50}
     per_block = Counter(script.scale.block_of(n) for n in splits["variety"]["heldout"])
-    assert len(per_block) == 32 and set(per_block.values()) <= {3, 4}  # every program held out
+    assert len(per_block) == 30 and set(per_block.values()) <= {3, 4}  # every program held out
     assert script.program_of("hand_lift_drop_00") == "lift_drop"
     assert script.program_of("pincer_seated") == "seated"
+    with pytest.raises(ValueError, match="more than 100"):
+        script.make_splits({"variety": variety, "babble": babble[:90]})
 
 
 @pytest.mark.parametrize(
@@ -141,7 +155,6 @@ def test_variety_end_to_end_tiny(
         "CACHE": tmp_path / "data",
         "ROOT": tmp_path / "runs",
         "HELDOUT": 4,
-        "PRETRAIN": 4,
         "SPACE_PER_SET": 2,
         "CKPTS": (0, 2),
         "STEPS": 2,
@@ -153,11 +166,12 @@ def test_variety_end_to_end_tiny(
     save_episodes(
         tmp_path / "data/babble_v2/humanoid", ("hand_seated_00", "pincer_seated_00"), 4, 0
     )
-    save_episodes(tmp_path / "data/variety/humanoid", ("hand_push_00", "pincer_knock_00"), 4, 50)
+    save_episodes(tmp_path / "data/variety/humanoid", ("hand_push_00", "pincer_knock_00"), 5, 50)
     monkeypatch.chdir(tmp_path)  # no configs/ here: the split warns about nothing
     script.write_split(from_config=False, dry_run=False)
     split = json.loads((tmp_path / "runs/split.json").read_text())
     assert {len(split[s]["heldout"]) for s in script.SETS} == {4}
+    assert {len(split[s]["pretrain"]) for s in script.SETS} == {4}  # matched to babble's 8 - 4
     script.write_cache(1, script.SETS)
     for arm in ("jepa-babble", "jepa-variety", "sup-babble"):
         for seed in (0, 1):

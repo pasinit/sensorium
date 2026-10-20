@@ -1559,8 +1559,8 @@ is left for later.
 **Written before either data set exists.** B-scale-0 found that tenfold more babbling episodes at the
 same 10,000 steps changes nothing for the JEPA, and that masked reconstruction (MAE) is the only SSL
 objective to resolve above its random-init floor, tying the raw proprio readout. The supervisor's
-decision: **more variety, not more volume.** This study holds the volume fixed (1,000 episodes of 600
-steps, 10,000 steps x 16 sequences) and changes what the episodes contain: the seven scripted experiment
+decision: **more variety, not more volume.** This study holds the volume fixed (the same number of
+600-step episodes per arm, 10,000 steps x 16 sequences) and changes what the episodes contain: the seven scripted experiment
 programs with outcomes, against babbling only. Code: `scripts/variety_test.py` (`split`, `cache`,
 `train`, `probe`, `report`), which reuses `scale_test`'s split and table helpers; paired statistics in
 `sensorium.model.paired`.
@@ -1569,16 +1569,24 @@ programs with outcomes, against babbling only. Code: `scripts/variety_test.py` (
 `hidden_properties = true`, `effort = true`, the current physics: claw-pinch hand grasp, elliptic cones;
 hands now lift objects, about 1.3 lifts per babbling episode).
 
-* **`variety`** (`configs/variety.toml`, at least 1,100 episodes in 30 or more blocks): blocks of the
-  seven pretraining programs (push, slide, press, knock, door, topple, lift_drop) and `seated_babble`
-  with props. So the variety set also contains babbling; the contrast is "programs plus babbling" against
+* **Size, set by the compute budget:** each config has 30 blocks x 24 = 720 episodes, and generation is
+  time-capped, so blocks may end up partly filled.
+* **`variety`** (`configs/variety.toml`, 30 blocks): the seven pretraining programs (push, slide,
+  press, knock, door, topple, lift_drop) and `seated_babble` with props. Hands: 2 blocks of each
+  program and 1 of babbling; pincers: 3 lift_drop, 3 babbling, 2 each of push, knock and topple, 1 each
+  of slide, press and door. So the variety set also contains babbling; the contrast is "programs plus babbling" against
   "babbling only".
 * **`babble`** (`configs/babble_v2.toml`): the layout of `scale_test.toml` (15 hand + 15 pincer
-  `seated_babble` blocks of 37, 1,110 episodes), master seed 5.
+  `seated_babble` blocks), master seed 5.
 * **Split**, one per set (`scale_test.make_split`, seed 0, written to `runs/variety/split.json`): episodes
   shuffled within each block; 100 held-out episodes drawn in stratified rounds (every block, hand and
-  pincer alternating: 50 + 50, every program represented); the pretraining set is the first 1,000 of
-  the rest in the same stratified order; the remainder is spare. `split --from-config --dry-run`
+  pincer alternating: 50 + 50, every program represented); the pretraining set is the first n of the
+  rest in the same stratified order; the remainder is spare.
+* **Pretraining size, decided now:** **620 (or the matched available count) pretraining episodes per
+  set**: n = the smaller set's count of non-held-out episodes, the same n for every arm of both sets
+  (`variety_test.matched_size`). 620 is 720 - 100 with every block full. The split log and `report.txt`
+  state n. At n = 620 a run makes about 14 passes over its data (B-scale-0: 8.5 at 1,000), the same for
+  both sets. `split --from-config --dry-run`
   previews it from the config names before the data exist.
 
 **Arms** (common recipe of B-scale-0: V+P, tiny model at 64 px, 10,000 steps x 16 sequences,
@@ -1586,11 +1594,11 @@ checkpoints at 0, 250, 1,000, 2,500, 5,000 and 10,000, seeds 0 to 2, every check
 
 | arm | objective | pretraining data |
 |---|---|---|
-| `jepa-variety` | pooled SIGReg JEPA (`long-jepa`) | 1,000 variety |
-| `jepa-babble` | pooled SIGReg JEPA | 1,000 babble |
-| `mae-variety` | masked reconstruction | 1,000 variety |
-| `mae-babble` | masked reconstruction | 1,000 babble |
-| `sup-variety`, `sup-babble` | supervised V+P ceiling (contact battery labels), 1,000 steps | 1,000 of that set |
+| `jepa-variety` | pooled SIGReg JEPA (`long-jepa`) | n variety |
+| `jepa-babble` | pooled SIGReg JEPA | n babble |
+| `mae-variety` | masked reconstruction | n variety |
+| `mae-babble` | masked reconstruction | n babble |
+| `sup-variety`, `sup-babble` | supervised V+P ceiling (contact battery labels), 1,000 steps | the same n of that set |
 
 * **One input space.** The effort channels (`eff_*`) are dropped from the channel space
   (`data.drop_prefix = ("eff_",)`) in every arm, bar and probe, so the model input is the same in both
@@ -1663,13 +1671,14 @@ JEPA arms below the floor; the JEPA drain has survived every data change so far.
 
 | stage | processes | VM wall | vCPU-h |
 |---|---|---|---|
-| copy data, `split`, `cache --jobs 30` (2,000 episodes) | 30 | about 5 min + copy | about 2.5 |
+| copy data, `split`, `cache --jobs 30` (2 x 620 episodes) | 30 | about 5 min + copy | about 1.5 |
 | 12 SSL runs at once (cached, `--workers 1`) | 12 x 2 threads | about 45 to 50 min | about 20 |
 | 6 supervised ceilings (decoding, `--workers 2`) | beside the probes | about 30 min | about 5 |
 | probes: (5 floors + raw + 72 checkpoints + 6 ceilings) x 2 test sets = 168 jobs | 16 shards x 2 threads | about 75 min | about 37 |
-| **total** | | **about 2.5 to 3 h** | **about 65** |
+| **total** | | **about 2.5 to 3 h** | **about 64** |
 
-Memory: two caches of 32 GB each in the page cache plus 12 processes at about 1.5 GB, about 85 GB. At
+Memory: two caches of about 20 GB each (620 x 32 MB) in the page cache plus 12 processes at about
+1.5 GB, about 60 GB. Training cost does not depend on n (fixed steps). At
 about $1.55 per hour on demand (Spot about $0.5 to $0.6) that is about $4 to $5 on demand.
 
 ## GPU smoke test (prepared, not run)
@@ -1712,8 +1721,8 @@ anything repeated.
 
 ## Next
 
-* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on 1,000 variety against
-  1,000 babble_v2 episodes at 10,000 steps, probed on both held-out sets.
+* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on 620 (matched) variety
+  against 620 babble_v2 episodes at 10,000 steps, probed on both held-out sets.
 * **B-scale-0** is done (verdict: no effect of data volume on the JEPA; MAE resolves above its floor;
   results above).
 
