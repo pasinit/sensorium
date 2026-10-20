@@ -91,6 +91,15 @@ def test_variety_splits_are_stratified_disjoint_and_matched_in_size(
     assert len(per_block) == 30 and set(per_block.values()) <= {3, 4}  # every program held out
     assert script.program_of("hand_lift_drop_00") == "lift_drop"
     assert script.program_of("pincer_seated") == "seated"
+    # the expected time-boxed case: babble full at 30 x 37, variety stopped at 27 of 37 per block
+    babble37 = script.scale.expected_names(
+        Path(__file__).resolve().parents[1] / "configs/scale_test.toml"
+    )
+    stopped = {b: ("experiment" if "babble" not in b else "seated_babble", 27) for b in blocks}
+    partial = script.scale.expected_names(write_config(tmp_path / "partial.toml", stopped))
+    splits = script.make_splits({"variety": partial, "babble": babble37})
+    assert {len(splits[s]["pretrain"]) for s in script.SETS} == {27 * 30 - 100}
+    assert len(splits["babble"]["spare"]) == 1110 - 100 - 710
     with pytest.raises(ValueError, match="more than 100"):
         script.make_splits({"variety": variety, "babble": babble[:90]})
 

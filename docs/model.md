@@ -1569,8 +1569,10 @@ programs with outcomes, against babbling only. Code: `scripts/variety_test.py` (
 `hidden_properties = true`, `effort = true`, the current physics: claw-pinch hand grasp, elliptic cones;
 hands now lift objects, about 1.3 lifts per babbling episode).
 
-* **Size, set by the compute budget:** each config has 30 blocks x 24 = 720 episodes, and generation is
-  time-capped, so blocks may end up partly filled.
+* **Size:** each config has 30 blocks x 37 = 1,110 episodes, but generation is time-boxed (about
+  7 h 20 min on one GPU box) and program episodes are 1.5 to 2.5 times slower to simulate than
+  babbling, so the variety set will likely end partial (estimate 700 to 1,000 episodes, blocks partly
+  filled, roughly uniformly).
 * **`variety`** (`configs/variety.toml`, 30 blocks): the seven pretraining programs (push, slide,
   press, knock, door, topple, lift_drop) and `seated_babble` with props. Hands: 2 blocks of each
   program and 1 of babbling; pincers: 3 lift_drop, 3 babbling, 2 each of push, knock and topple, 1 each
@@ -1582,11 +1584,12 @@ hands now lift objects, about 1.3 lifts per babbling episode).
   shuffled within each block; 100 held-out episodes drawn in stratified rounds (every block, hand and
   pincer alternating: 50 + 50, every program represented); the pretraining set is the first n of the
   rest in the same stratified order; the remainder is spare.
-* **Pretraining size, decided now:** **620 (or the matched available count) pretraining episodes per
-  set**: n = the smaller set's count of non-held-out episodes, the same n for every arm of both sets
-  (`variety_test.matched_size`). 620 is 720 - 100 with every block full. The split log and `report.txt`
-  state n. At n = 620 a run makes about 14 passes over its data (B-scale-0: 8.5 at 1,000), the same for
-  both sets. `split --from-config --dry-run`
+* **Pretraining size, decided now:** **the matched pretraining count, the smaller of the two sets'
+  available episodes after the 100 held out, fixed by the split step before any training**
+  (`variety_test.matched_size`). The same n for every arm of both sets; the split takes the 100
+  held-out episodes stratified by block from the episodes that exist. The split log and `report.txt`
+  state n. At n = 600 to 1,010 a run makes about 14 to 8.5 passes over its data, the same for both
+  sets. `split --from-config --dry-run`
   previews it from the config names before the data exist.
 
 **Arms** (common recipe of B-scale-0: V+P, tiny model at 64 px, 10,000 steps x 16 sequences,
@@ -1671,14 +1674,14 @@ JEPA arms below the floor; the JEPA drain has survived every data change so far.
 
 | stage | processes | VM wall | vCPU-h |
 |---|---|---|---|
-| copy data, `split`, `cache --jobs 30` (2 x 620 episodes) | 30 | about 5 min + copy | about 1.5 |
+| copy data, `split`, `cache --jobs 30` (2 x n episodes) | 30 | about 5 min + copy | about 1.5 to 2.5 |
 | 12 SSL runs at once (cached, `--workers 1`) | 12 x 2 threads | about 45 to 50 min | about 20 |
 | 6 supervised ceilings (decoding, `--workers 2`) | beside the probes | about 30 min | about 5 |
 | probes: (5 floors + raw + 72 checkpoints + 6 ceilings) x 2 test sets = 168 jobs | 16 shards x 2 threads | about 75 min | about 37 |
 | **total** | | **about 2.5 to 3 h** | **about 64** |
 
-Memory: two caches of about 20 GB each (620 x 32 MB) in the page cache plus 12 processes at about
-1.5 GB, about 60 GB. Training cost does not depend on n (fixed steps). At
+Memory: two caches of n x 32 MB each in the page cache (20 to 32 GB) plus 12 processes at about
+1.5 GB, about 60 to 85 GB. Training cost does not depend on n (fixed steps). At
 about $1.55 per hour on demand (Spot about $0.5 to $0.6) that is about $4 to $5 on demand.
 
 ## GPU smoke test (prepared, not run)
@@ -1721,8 +1724,8 @@ anything repeated.
 
 ## Next
 
-* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on 620 (matched) variety
-  against 620 babble_v2 episodes at 10,000 steps, probed on both held-out sets.
+* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on n (matched) variety
+  against n babble_v2 episodes at 10,000 steps, probed on both held-out sets.
 * **B-scale-0** is done (verdict: no effect of data volume on the JEPA; MAE resolves above its floor;
   results above).
 

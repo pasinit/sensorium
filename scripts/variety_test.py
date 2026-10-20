@@ -5,8 +5,8 @@ properties and effort recorded): ``configs/variety.toml`` (the seven experiment 
 babbling with props) and ``configs/babble_v2.toml`` (babbling only, as ``scale_test.toml`` on the
 current physics). ``split`` draws one split per set with ``scale_test.make_split`` (stratified by
 block): 100 held-out episodes, then the pretraining set, the first n of the rest in stratified
-order, with n the same for both sets: the smaller set's count of non-held-out episodes (620 for
-30 blocks x 24; generation is time-capped, so blocks may be partly filled).
+order, with n the same for both sets: the smaller set's count of non-held-out episodes, fixed
+here before any training (generation is time-boxed, so blocks may be partly filled).
 
 Arms (V+P, as B-scale-0: 10,000 steps x 16 sequences; checkpoints at 0, 250, 1,000, 2,500, 5,000
 and 10,000; seeds 0 to 2): ``jepa-variety``, ``jepa-babble``, ``mae-variety``, ``mae-babble``, and
