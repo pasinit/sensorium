@@ -130,8 +130,9 @@ MuJoCo is pinned to 3.15.0 in `pyproject.toml`.
   sitting pose, and a table with a rim holds six free objects (wood, plastic,
   metal, rubber; boxes, spheres, a cylinder) placed at random per episode, within 0.30 m of the
   middle so that the babbling stays in the head camera's view ([touch.md](touch.md#the-a1-gate-and-the-head-camera-framing-d03-step-4)).
-  The pincer scene uses elliptic friction cones with `impratio` 10, as
-  Menagerie recommends for the 2F-85's linkage.
+  Both scenes use elliptic friction cones with `impratio` 10, as
+  Menagerie recommends for the 2F-85's linkage; the hand scene too since the hand grasp work
+  (with the pyramidal default, spheres rolled out of a closed pinch; [touch.md](touch.md#hand-grasping-the-claw-pinch)).
 - **Sound** (`ContactSound`): per step, every pair of bodies in contact is
   classified by two *voices*: the robot part (feet, legs, torso, arms, hands)
   and the surface (floor, table, wood, plastic, metal, rubber). A pair that was

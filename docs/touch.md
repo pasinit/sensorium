@@ -151,7 +151,7 @@ there, never after looking at a result.
 |---|---|---|---|
 | forces: effector-object peak per episode | every episode <= 2 x 235 N | median <= 70 N, p90 <= 175 N, max <= 280 N | 235 N is the 2F-85's maximum grip (Robotiq); Shadow publishes no fingertip force, so the yardstick is the arm's static push, 70 N (x 2.5 and x 4 for the tail) |
 | contact | object contact >= 0.28 and >= 10 bouts / min | >= 0.23 and >= 10 | step 3's means at the 0.82 m table (the review: not below step 3); bouts: step 3's lowest |
-| lifts | >= 1 per episode (mean) | INFO only | the step-3 review's bar; hands do not lift yet |
+| lifts | >= 1 per episode (mean) | INFO only | the step-3 review's bar; hands lift since the claw pinch (0.9, see below), not gated yet |
 | visibility | each tip outside the head camera's image <= 10% of steps | same | the step-3 review |
 | waiting | an arm without a plan <= 15% of its steps | same | the step-4 review |
 | repertoire | every primitive planned >= 1 per episode (mean) | same | count-based choice must reach all of them |
@@ -213,6 +213,102 @@ attempt at the envelope had the arms waiting in 35-47% of steps; the Cartesian t
 and oriented approaches), the larger plan budget and the parking repaired that. A reflex now
 starts a 10-step cooldown and backs the arm out along its last travel posture (the older hover
 posture can lie behind the object, which pinned a cylinder at 260 N for 80 steps); loops are gone.
+
+## Hand grasping: the claw pinch
+
+Until this change the hands never lifted anything (0.0 lifts per episode at step 4; pincers 1.1).
+The question was whether the hand's physics could hold an object at all, or whether the poses were
+wrong. Answer: mostly the poses, plus one physics setting.
+
+**Stage 1, physics or poses** (`scripts/hand_grasp_probe.py`, no planner). The old `power` grasp
+could not work by construction: its grasp point lay 3.5 cm off the palm along the palm normal, but
+the palm's face is already 2.8 cm out, so for every object (radius 2.5-5 cm) the palm landed inside
+the object and pushed it away; and its closure (fingers and thumb flexed together) made a fist
+with no thumb opposition. Put by script into a good pose, the hand holds: a claw pinch from above
+(the palm faces the table over the object, the thumb is pre-placed under the palm on the near side,
+the fingers, flexed at the knuckles, sweep the object against it), descend 4 cm, close 0.8 s, lift
+10 cm in 1 s, hold 1 s, the right hand, one object alone at (0.50, -0.20) m:
+
+| object (mass) | elliptic cone: rise max, steps >= 5 cm | lift | pyramidal cone (old hand scene) | lift | peak hand-object N (elliptic) |
+|---|---|---|---|---|---|
+| wood box (0.21 kg) | 12.2 cm, 32 | yes | 11.3 cm, 31 | yes | 28 |
+| plastic sphere (0.07 kg) | 13.6 cm, 35 | yes | 5.6 cm, 3 | no | 23 |
+| metal cylinder (0.77 kg) | 7.2 cm, 14 | yes | 6.8 cm, 9 | no | 129 |
+| rubber sphere (0.12 kg) | 12.7 cm, 34 | yes | 7.8 cm, 8 | no | 17 |
+| plastic box (0.10 kg, 4 cm tall) | 0.1 cm | no | 0.0 cm | no | 7 |
+| metal box (1.17 kg) | 1.1 cm | no | 0.9 cm | no | 15 |
+
+(A lift is 10 steps at 5 cm or more, as in `babble_stats`.) Figures: `runs/hand_grasp/grasp_height.png`
+(object height against time, both cones) and `grasp_forces.png` (per-finger force), written by the
+script. Two findings:
+
+- **Physics: the friction cone.** The hand scene had MuJoCo's pyramidal default, the pincer scene
+  Menagerie's `cone="elliptic" impratio="10"` (the option line of the pinned `2f85.xml`). With the
+  pyramidal cone the spheres and the cylinder creep out of a closed pinch although the fingers'
+  friction (1.0; MuJoCo takes the larger of the two geoms') would hold them: 1 of 6 objects lifts,
+  4 of 6 with the elliptic cone. Both scenes now use the elliptic cone (`h1_scene.scene_xml`). Also
+  tried with the pyramidal cone, scripted, on three or four objects x three poses: torsional
+  friction (`condim` 4 or 6 on the hand: no gain), `noslip_iterations` 10 (no gain), finger gains
+  x 3 (no gain; a gain change would also change every other primitive).
+- **Strength: the metal box** (1.17 kg, metal friction 0.3) lifts with nothing tried. Only the
+  index finger and the thumb carry the load, 4-10 N each: the HumanoidBench hand's finger actuators
+  have kp 1 N m/rad and `forcerange` 1 N m, about 10 N at a fingertip at most, and the pinch reaches
+  part of it. The published figure is about 10 N per fingertip, from press coverage *(verify)*.
+  Left as it is: a heavy object that does not come up is also experience.
+
+**Stage 2, the grasp in the planner** (`h1_babble`, `HAND_PINCH`). No grasp synthesis library was
+needed: the pinch is analytic (a pre-shape, then closure targets past the contact, so that the
+position actuators squeeze with the remaining error). DexGraspNet was not used. What the
+`power` primitive does now, each part with the reason it is there:
+
+1. Frame: the grasp point is the pinch's near point, 7.5 cm along the fingers and 8.5 cm along the
+   palm normal, sideways midway between the thumb and the index and middle fingers. It is put on the
+   object's near face (the centre minus the object's half extent along the fingers), with the
+   fingers level or 6 degrees down and the palm normal 18 degrees off vertical (`HAND_PALM_Z` -0.95;
+   with -0.87 the per-grasp rate was 32% against 57%, 96 attempts each).
+2. Wrist: held flexed and deviated (WRJ1 -0.35, WRJ2 -0.3 rad) through the grasp. With the wrist
+   straight, the five arm joints reach a level palm-down hand at a third of the goals; with this,
+   at all (30 goals per setting; the planner keeps its 5-joint IK).
+3. Travel open, pre-shape over the object (0.4 s hold), then descend: pre-shaped while travelling,
+   the thumb hangs 10 cm under the palm and swept objects off the table.
+4. Replan if the object moved more than 1.5 cm between planning and the descent (`replans` in
+   `plan_stats`): the travel may brush objects (effector contacts are allowed on the way), and a
+   grasp planned for where a sphere was closes on air.
+5. Closure: fingers to J3 1.57 and J1 + J2 3.0, thumb tip joint to 1.5 (the first version, 2.0 and
+   1.2, squeezed less: 26% against 19% per grasp over 96 attempts, before the other changes).
+
+Measured with `scripts/hand_grasp_bench.py` (one planned grasp at a time through the planner, the
+object alone at a random place and yaw on that arm's half, 20 placements per object and arm, Mac
+CPU): a grasp counts once it is planned; success is a lift.
+
+| object | planned / tried | lifts | success [Wilson 95%] | effector-object peak N, median / max |
+|---|---|---|---|---|
+| wood box | 27 / 40 | 16 | 59% [41, 75] | 28 / 759 |
+| plastic sphere | 30 / 40 | 19 | 63% [46, 78] | 15 / 27 |
+| metal cylinder | 26 / 40 | 14 | 54% [35, 71] | 303 / 1,850 |
+| rubber sphere | 26 / 40 | 19 | 73% [54, 86] | 13 / 27 |
+| plastic box | 29 / 40 | 14 | 48% [31, 66] | 20 / 63 |
+| metal box | 27 / 40 | 0 | 0% [0, 12] | 21 / 538 |
+| all | 165 / 240 | 82 | 50% [42, 57] | |
+| all but the metal box | 138 / 200 | 82 | 59% [51, 67] | |
+
+In the babbling itself (full repertoire, A1 settings, 10 episodes of 600 steps, `make a1-gate` on
+them) hands lift **0.9 per episode [bootstrap 95%: 0.4, 1.4]** (step 4: 0.0; pincers 1.1). Of the
+power grasps planned in four instrumented episodes, 6 of 26 lifted (23%): the bench's 59% does not
+carry over to a crowded table yet. Gate lines, step 4 -> now: forces median 78 -> 72 N, p90 267 ->
+158, max 338 -> 190 (the median still fails its 70 N line by 2 N; p90 and max now pass); object
+contact 0.26 -> 0.41; visibility 4.1 / 8.4% -> 5.2 / 6.8%; waiting 6% -> 8.6%; repertoire passes
+(power 7.2 plans per episode). The pincer scene and the pincers' planner are unchanged.
+
+Not good yet:
+- 50-59% per grasp alone, about 23% on the crowded table, against the 70% target; 0.9 lifts per
+  episode against the pincers' 1.1. The difference between the bench and the babbling is not
+  understood yet (candidates: neighbouring objects in the fingers' sweep, objects at the rim or
+  tipped by earlier pokes, replanned attempts counted as attempts).
+- The metal cylinder's grasps peak at 300 N in the median and up to 1.9 kN: one-step spikes on the
+  index fingertip against the stiff metal contact (`solref` 0.002, see the step-3 section). A
+  softer mix on the hand (`solmix` 10) made them larger.
+- The metal box does not lift (strength, above); the 4 cm plastic box is the weakest of the rest.
 
 ## Load-time noise (`touch_noise.perturb_touch`)
 

@@ -360,11 +360,11 @@ def scene_xml(
 ) -> str:
     """The full scene: options, room, robot, posture-specific props, IMU sensors.
 
-    The pincer scene uses Menagerie's recommended elliptic friction cones with
-    ``impratio`` 10 (they keep the gripper linkage and its grasps stable); the
-    hand scene keeps HumanoidBench's defaults.
+    Both effectors use Menagerie's recommended elliptic friction cones with ``impratio`` 10 (they
+    keep the gripper linkage and its grasps stable). The hand scene had HumanoidBench's pyramidal
+    default until the hand grasp work: with it, spheres rolled out of a closed pinch.
     """
-    cone = ' cone="elliptic" impratio="10"' if effector == "pincer" else ""
+    cone = ' cone="elliptic" impratio="10"'
     materials = "\n".join(
         f'    <material name="{name}" rgba="{rgba}"/>' for name, (rgba, *_) in MATERIALS.items()
     )

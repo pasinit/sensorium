@@ -12,7 +12,7 @@ pytest.importorskip("mujoco", reason="needs the simulator extra: make setup")
 
 import mujoco  # noqa: E402
 
-from sensorium.bodies.h1_babble import BabblePolicy, Waypoint
+from sensorium.bodies.h1_babble import HAND_PINCH, BabblePolicy, Waypoint
 from sensorium.bodies.h1_forces import (  # noqa: E402
     CORE,
     LEFT_ARM,
@@ -266,14 +266,65 @@ def test_hand_closure_reaches_the_actuators() -> None:
     with HumanoidRecorder({"effector": "hand", "posture": "seated"}) as recorder:
         policy = recorder.make_policy("seated_babble", np.random.default_rng(0))
         assert isinstance(policy, BabblePolicy)
-        assert len(policy.closure["left"]) == 11  # the flexing actuators of one hand
+        assert len(policy.closure["left"]) == len(HAND_PINCH)  # the pinch's actuators
+        assert len(policy.flexors["left"]) == 11  # those that follow the closure outside a grasp
         recorder.reset(policy, np.random.default_rng(0))
 
-        def action_with(grip: float) -> np.ndarray:
+        def action_with(grip: float, preshape: bool) -> np.ndarray:
             policy.grip["left"] = grip
-            policy.queue["left"] = [Waypoint(policy.cmd_q["left"].copy(), 0.1, 5, grip)]
+            waypoint = Waypoint(policy.cmd_q["left"].copy(), 0.1, 5, grip, preshape=preshape)
+            policy.queue["left"] = [waypoint]
             return policy.act(0, recorder.data)
 
-        opened, closed = action_with(0.0), action_with(1.0)
-        flexors = [recorder.space.effector["left"][j] for j in policy.closure["left"]]
+        flexors = [recorder.space.effector["left"][j] for j in policy.flexors["left"]]
+        opened, closed = action_with(0.0, False), action_with(1.0, False)
         assert (closed[flexors] > opened[flexors] + 0.3).all()
+        closing = [
+            recorder.space.effector["left"][j]
+            for j, (start, end) in policy.closure["left"].items()
+            if end > start
+        ]
+        shaped, pinched = action_with(0.0, True), action_with(1.0, True)
+        assert (pinched[closing] > shaped[closing] + 0.1).all()
+        thumb = recorder.space.index["lh_A_THJ4"]  # the thumb is under the palm from the start
+        assert shaped[thumb] > opened[thumb] + 1.0
+
+
+@needs_assets
+def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
+    with HumanoidRecorder(
+        {"effector": "hand", "posture": "seated", "primitives": ["power"]}
+    ) as recorder:
+        queue: list[Waypoint] = []
+        for seed in range(6):  # a layout in which some grasp is plannable
+            policy = recorder.make_policy("seated_babble", np.random.default_rng(seed))
+            assert isinstance(policy, BabblePolicy)
+            recorder.reset(policy, np.random.default_rng(seed))
+            for side in ("left", "right"):
+                policy.plan(side, recorder.data)
+                queue = policy.queue[side]
+                if len(queue) > 10:
+                    break
+            if len(queue) > 10:
+                break
+        assert len(queue) > 10, "no hand grasp was planned on either side in six layouts"
+        assert isinstance(policy, BabblePolicy)
+        shaped = [w.preshape for w in queue]
+        first = shaped.index(True)
+        assert first > 0 and all(shaped[first:])  # travels open, pre-shaped from over the object
+        assert queue[first].hold == policy.PRESHAPE_HOLD and queue[first].grip == 0.0
+        watched = [i for i, w in enumerate(queue) if w.watch is not None]
+        assert watched == [first + 1]  # the descent's first waypoint checks the object
+        grips = [w.grip for w in queue]
+        assert max(grips) == 1.0 and grips[-1] == 0.0
+
+        watch = queue[first + 1].watch
+        assert watch is not None
+        body = watch[0]
+        adr = recorder.model.jnt_qposadr[recorder.model.body_jntadr[body]]
+        recorder.data.qpos[adr] += 0.05  # the object was pushed on the way
+        mujoco.mj_forward(recorder.model, recorder.data)
+        policy.queue[side] = queue[first + 1 :]
+        policy.advance(side, recorder.data, 0.0)
+        assert policy.replans == 1
+        assert policy.queue[side][0] is not queue[first + 1]
