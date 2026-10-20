@@ -8,7 +8,9 @@ episode), the parameters of each attempt are random.
 Primitives (``PRIMITIVES``): ``hover`` (a point above the table), ``touch`` (press an
 object's top or a table point lightly), ``poke`` (touch an object's side and push it
 5 to 10 cm), ``slide`` (drag the tip over the table), and for pincers ``grasp`` or for
-hands ``power``: an oriented approach, a closing reflex, a lift, a hold and a drop.
+hands ``power``: an oriented approach, a closing reflex, a lift, a hold and a drop. The hand's
+``power`` is a claw pinch from above (``HAND_PINCH``): it travels open, takes the pre-shape over
+the object, and replans if the object was pushed away on the way.
 Each attempt is checked before it starts: every waypoint and the paths between them
 must keep ``CLEARANCE`` between the non-effector robot parts and the table, objects
 and other limbs (``GeomClasses.limb_contacts``), and the tip must reach the goal.
@@ -44,12 +46,30 @@ PRIMITIVES = {
     "hand": ("hover", "touch", "poke", "slide", "power"),
     "pincer": ("hover", "touch", "poke", "slide", "grasp"),
 }
-# Hand actuators that flex when the hand closes, and their targets at full closure (rad).
-HAND_CLOSURE = {
-    "FFJ3": 1.4, "FFJ0": 2.8, "MFJ3": 1.4, "MFJ0": 2.8, "RFJ3": 1.4, "RFJ0": 2.8,
-    "LFJ3": 1.4, "LFJ0": 2.8, "THJ4": 1.1, "THJ1": 1.0, "THJ2": 0.3,
+# The hand's grasp is a claw pinch from above (docs/touch.md, "Hand grasping"): the palm faces
+# down over the object, the thumb is pre-placed under the palm on the near side, and the fingers,
+# flexed at the knuckles, sweep the object against it. Hand actuator -> (pre-shape, closed) target
+# (rad; the J0 tendons drive J1 + J2). The closed targets lie past where the fingers meet the
+# object: the position actuators (kp 1 N m/rad) squeeze with the remaining error, 4-10 N per
+# fingertip. The wrist is held flexed (palm towards the table) and deviated while grasping: with
+# it straight the five arm joints reach a level, palm-down hand at a third of the goals, with this
+# at all of them.
+HAND_PINCH = {
+    "FFJ3": (0.5, 1.57), "FFJ0": (0.0, 3.0), "MFJ3": (0.5, 1.57), "MFJ0": (0.0, 3.0),
+    "RFJ3": (0.5, 1.57), "RFJ0": (0.0, 3.0), "LFJ3": (0.5, 1.57), "LFJ0": (0.0, 3.0),
+    "THJ5": (-0.25, -0.25), "THJ4": (1.22, 1.22), "THJ3": (0.0, 0.0), "THJ2": (0.35, 0.35),
+    "THJ1": (0.9, 1.5), "WRJ2": (-0.3, -0.3), "WRJ1": (-0.35, -0.35),
 }  # fmt: skip
+# Outside a grasp these follow the closure from 0 (open); the other hand actuators babble.
+HAND_FLEXORS = (
+    "FFJ3", "FFJ0", "MFJ3", "MFJ0", "RFJ3", "RFJ0", "LFJ3", "LFJ0", "THJ4", "THJ1", "THJ2",
+)  # fmt: skip
 GRASP_HEIGHTS = (-0.8, -0.9, -1.0)  # z-component of the approach axis: how steeply it points down
+# Hands: the fingers point about level and the palm normal down at this z-component.
+HAND_GRASP_HEIGHTS = (0.0, -0.1)
+HAND_PALM_Z = -0.95  # the palm normal 18 degrees off vertical (-0.87: 57% -> 32% lifts per grasp)
+PINCH_GAP = 0.075  # m along the fingers from the palm to the object's near face (the thumb's pad)
+PINCH_DEPTH = 0.085  # m along the palm normal from the palm to the pinch (thumb and finger tips)
 
 
 @dataclass
@@ -61,6 +81,8 @@ class Waypoint:
     hold: int = 0  # control steps to stay once there
     grip: float = 0.0  # effector closure to move towards: 0 open, 1 closed
     wait: bool = False  # the arm has no plan: parking and holding, counted as waiting
+    preshape: bool = False  # hand: the grasp's pre-shape, closing towards the pinch with ``grip``
+    watch: tuple[int, np.ndarray] | None = None  # (object body, planned position): see ``advance``
     phase: int = 0  # for the experiment programs: PHASES index (travel, descent, contact, ...)
 
 
@@ -77,6 +99,8 @@ class GraspFrame:
         advance: ``"approach"`` or ``"axis"``: the world direction the effector moves along
             when going onto the object (a pincer along its fingers, a hand along its palm normal).
         back_off: distance (m) of the pre-grasp point from the object along ``advance``.
+        axis_z: the world height ``axis`` is held at (0: horizontal).
+        fixed: (qpos address, value) pairs held while planning (the hand's wrist).
     """
 
     body: int
@@ -85,6 +109,8 @@ class GraspFrame:
     axis: np.ndarray
     advance: str
     back_off: float
+    axis_z: float = 0.0
+    fixed: tuple[tuple[int, float], ...] = ()
 
 
 class OrientedIK:
@@ -108,6 +134,8 @@ class OrientedIK:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """World grasp point, approach axis and other axis with the arm at ``q`` (5 joints)."""
         self.scratch.qpos[:] = qpos
+        for adr, value in self.frame.fixed:
+            self.scratch.qpos[adr] = value
         self.scratch.qpos[self.qpos_adr] = q
         mujoco.mj_kinematics(self.model, self.scratch)
         rotation = self.scratch.xmat[self.frame.body].reshape(3, 3)
@@ -131,6 +159,8 @@ class OrientedIK:
         """
         scratch, model, frame = self.scratch, self.model, self.frame
         scratch.qpos[:] = qpos
+        for adr, value in frame.fixed:
+            scratch.qpos[adr] = value
         q = np.clip(start, self.low, self.high)
         jac_p, jac_r = np.zeros((3, model.nv)), np.zeros((3, model.nv))
         pos_error, ori_error = 1.0, 1.0
@@ -142,7 +172,8 @@ class OrientedIK:
             point = scratch.xpos[frame.body] + rotation @ frame.offset
             approach, axis = rotation @ frame.approach, rotation @ frame.axis
             error = goal - point
-            e_approach, e_axis = approach_z - approach[2], (0.0 - axis[2]) * (axis_weight > 0)
+            e_approach = approach_z - approach[2]
+            e_axis = (frame.axis_z - axis[2]) * (axis_weight > 0)
             pos_error, ori_error = float(np.linalg.norm(error)), max(abs(e_approach), abs(e_axis))
             if pos_error < 0.003 and ori_error < 0.02:
                 break
@@ -173,8 +204,10 @@ def grasp_frame(model: mujoco.MjModel, effector: str, side: str) -> GraspFrame:
     """The grasp frame of one effector.
 
     Pincer: the pinch point, approach along the fingers, pads closing along the base's y.
-    Hand: a point beside the palm (0.035 m along the palm normal, 0.08 m along the fingers),
-    approach along the fingers, palm normal as the axis, found from how the fingers curl.
+    Hand: the claw pinch's near point (``PINCH_GAP`` along the fingers, ``PINCH_DEPTH`` along
+    the palm normal: where the object's near face meets the thumb), approach along the fingers,
+    the palm normal as the axis (found from how the fingers curl), held at ``HAND_PALM_Z``; the
+    hand advances along the palm normal (down onto the object), its wrist at the pinch's angles.
     """
     tips = find_tips(model, "pincer" if effector == "pincer" else "hand")[side]
     if effector == "pincer":
@@ -201,7 +234,25 @@ def grasp_frame(model: mujoco.MjModel, effector: str, side: str) -> GraspFrame:
     curl = tip_closed - tip_open
     normal = curl - fingers * float(curl @ fingers)
     normal /= np.linalg.norm(normal)
-    return GraspFrame(palm, 0.08 * fingers + 0.035 * normal, fingers, normal, "axis", 0.10)
+    wrist = tuple(
+        (int(model.jnt_qposadr[model.joint(f"{prefix}{name}").id]), HAND_PINCH[name][0])
+        for name in ("WRJ1", "WRJ2")
+    )
+    # Sideways, the pinch lies midway between the thumb and the index and middle fingers, closed.
+    for name, (_, closed) in HAND_PINCH.items():
+        joints = (name[:2] + "J1", name[:2] + "J2") if name.endswith("J0") else (name,)
+        for joint in joints:
+            adr = model.jnt_qposadr[model.joint(f"{prefix}{joint}").id]
+            data.qpos[adr] = closed / len(joints)
+    mujoco.mj_kinematics(model, data)
+    distal = {
+        f: to_local @ (data.xpos[model.body(f"{prefix}{f}distal").id] - data.xpos[palm])
+        for f in ("th", "ff", "mf")
+    }
+    across = np.cross(normal, fingers)
+    middle = float(across @ (distal["th"] + (distal["ff"] + distal["mf"]) / 2)) / 2
+    offset = PINCH_GAP * fingers + PINCH_DEPTH * normal + middle * across
+    return GraspFrame(palm, offset, fingers, normal, "axis", 0.10, HAND_PALM_Z, wrist)
 
 
 class BabblePolicy:
@@ -238,6 +289,8 @@ class BabblePolicy:
     ELBOW_CANDIDATES = 3  # clear near postures compared for the lowest elbow
     FLOOR = 0.12  # m: no tip further under the table's surface (fingertips hang under the palm)
     TRAVEL_STEP = 0.04  # m between the waypoints of a Cartesian travel
+    PRESHAPE_HOLD = 8  # control steps a hand waits over the object while its thumb moves under
+    MOVED = 0.015  # m an object may have moved since its grasp was planned before it is replanned
     LINE_POS_TOL = 0.012  # m: an oriented waypoint of a line may miss its point by this much
     ENVELOPE_JUMP = 0.5  # rad: a joint move this big is checked against the tip envelope
     WIDE_FROM = 12  # oriented IK: from this restart on, seeds are drawn over the joint ranges
@@ -309,6 +362,8 @@ class BabblePolicy:
         self.queue: dict[str, list[Waypoint]] = {s: [] for s in SIDES}
         self.grip = dict.fromkeys(SIDES, 0.0)
         self.closure = {s: self.closure_actuators(s) for s in SIDES}
+        self.flexors = {s: self.closure_actuators(s, HAND_FLEXORS) for s in SIDES}
+        self.preshape = dict.fromkeys(SIDES, False)  # the hand holds the grasp's pre-shape
         self.primitive_counts = dict.fromkeys(self.primitives, 0)
         self.object_counts = np.zeros(len(object_bodies))
         self.reflexes = 0
@@ -316,20 +371,27 @@ class BabblePolicy:
         self.wait_steps = 0  # arm-steps spent without a plan (both arms)
         self.planning_failures = 0
         self.failures = dict.fromkeys(self.primitives, 0)  # plans dropped, per primitive
+        self.replans = 0  # grasps dropped at the descent because the object had moved
 
     def effector_mean(self, side: str) -> np.ndarray:
         """Normalised home action of this side's effector actuators (open)."""
         return self.space.to_action(self.home_ctrl)[self.space.effector[side]]
 
-    def closure_actuators(self, side: str) -> dict[int, float]:
-        """Hand: effector-action index -> closed ctrl value, for the flexing actuators."""
+    def closure_actuators(
+        self, side: str, names: tuple[str, ...] | None = None
+    ) -> dict[int, tuple[float, float]]:
+        """Hand: effector-action index -> (pre-shape, closed) ctrl value of the grasp's actuators.
+
+        ``names`` restricts it to those actuators (``HAND_PINCH`` keys).
+        """
         if self.pincer:
             return {}
         prefix = "lh_A_" if side == "left" else "rh_A_"
         indices = self.space.effector[side]
         return {
-            indices.index(self.space.index[prefix + name]): value
-            for name, value in HAND_CLOSURE.items()
+            indices.index(self.space.index[prefix + name]): values
+            for name, values in HAND_PINCH.items()
+            if names is None or name in names
         }
 
     # ------------------------------------------------------------------ checks
@@ -540,6 +602,7 @@ class BabblePolicy:
             "attempts": dict(self.primitive_counts),
             "failures": dict(self.failures),
             "planning_failures": self.planning_failures,
+            "replans": self.replans,
             "wait_steps": self.wait_steps,
         }
 
@@ -770,18 +833,25 @@ class BabblePolicy:
         if index is None:
             return None
         centre, _, _ = self.object_geometry(data, index)
+        goal = centre
         body = self.objects[index]  # the forearm may graze the object it grasps, nothing else
         self.exempt[:] = False
         self.exempt[
             self.model.body_geomadr[body] : self.model.body_geomadr[body]
             + self.model.body_geomnum[body]
         ] = True
-        approach_z = float(self.rng.choice(GRASP_HEIGHTS))
+        approach_z = float(self.rng.choice(GRASP_HEIGHTS if self.pincer else HAND_GRASP_HEIGHTS))
         found = self.oriented_pose(data, side, centre, approach_z)
+        if found is not None and not self.pincer:
+            # The hand's frame point is the object's near face: back it off along the fingers by
+            # the object's half extent in their direction, and solve again from there.
+            approach = self.oriented[side].frame_at(data.qpos, found[0])[1]
+            goal = centre - self.half_extent(data, index, approach) * approach
+            found = self.oriented_pose(data, side, goal, approach_z)
         if found is None:
             return None
         q_grasp, advance = found
-        pre = centre - self.frames[side].back_off * advance
+        pre = goal - self.frames[side].back_off * advance
         above = pre + np.array([0.0, 0.0, self.APPROACH_MARGIN])
         q_above, pos_error, ori_error = self.oriented[side].solve(
             data.qpos, q_grasp, above, approach_z, self.axis_weight
@@ -790,13 +860,13 @@ class BabblePolicy:
             return None
         to_pre = self.line(data, side, q_above, above, pre, self.SLOW, 0.02, approach_z)
         onto = (
-            self.line(data, side, to_pre[-1].q, pre, centre, self.SLOW, 0.012, approach_z)
+            self.line(data, side, to_pre[-1].q, pre, goal, self.SLOW, 0.012, approach_z)
             if to_pre
             else None
         )
         up = (
             self.line(
-                data, side, onto[-1].q, centre, centre + [0, 0, lift], self.LIFT, 0.012, approach_z
+                data, side, onto[-1].q, goal, goal + [0, 0, lift], self.LIFT, 0.012, approach_z
             )
             if onto
             else None
@@ -812,13 +882,34 @@ class BabblePolicy:
             if via is None:
                 return None
             lead = via
-        queue = [*lead, *to_pre, *onto]
+        if not self.pincer:
+            # The travel can brush the object aside (effector contacts are allowed on the way):
+            # the hand's descent checks that it is still where the grasp was planned.
+            to_pre[0].watch = (body, np.array(data.xpos[body]))
+        # A hand travels open (its pre-shaped thumb hangs under the palm and would sweep the
+        # table) and takes the pre-shape over the object, before the descent.
+        shape = [] if self.pincer else [Waypoint(q_above, self.SLOW, self.PRESHAPE_HOLD)]
+        queue = [*lead, *shape, *to_pre, *onto]
         queue.append(Waypoint(onto[-1].q, self.SLOW, 3, 0.0))
         queue.append(Waypoint(onto[-1].q, self.SLOW, 14, 1.0))  # close
         queue += [Waypoint(w.q, w.speed, 0, 1.0) for w in up]
         queue.append(Waypoint(up[-1].q, self.LIFT, 12, 1.0))  # hold
         queue.append(Waypoint(up[-1].q, self.LIFT, 6, 0.0))  # drop
-        return self.finish(side, queue, q_above)
+        queue = self.finish(side, queue, q_above)
+        for waypoint in queue[len(lead) :]:  # a hand keeps its pre-shape until the retreat
+            waypoint.preshape = not self.pincer
+        return queue
+
+    def half_extent(self, data: mujoco.MjData, index: int, direction: np.ndarray) -> float:
+        """An object's horizontal half extent along ``direction`` (its radius if round)."""
+        body = self.objects[index]
+        geom = int(self.model.body_geomadr[body])
+        if self.model.geom_type[geom] != mujoco.mjtGeom.mjGEOM_BOX:
+            return float(self.model.geom_size[geom][0])
+        flat = np.array([direction[0], direction[1], 0.0])
+        flat /= max(float(np.linalg.norm(flat)), 1e-9)
+        axes = data.xmat[body].reshape(3, 3)
+        return float(sum(abs(flat @ axes[:, k]) * self.model.geom_size[geom][k] for k in range(3)))
 
     # ------------------------------------------------------------------ acting
 
@@ -895,10 +986,15 @@ class BabblePolicy:
                 retreat = self.rest_q[side]  # hit again and again: go to the rest
                 self.reflex_ticks[side] = []
             self.queue[side] = [Waypoint(retreat.copy(), self.FAST, hold=5)]
+        watch = self.queue[side][0].watch if self.queue[side] else None
+        if watch is not None and np.linalg.norm(data.xpos[watch[0]] - watch[1]) > self.MOVED:
+            self.replans += 1  # the object was pushed on the way: plan again from here
+            self.queue[side] = []
         if not self.queue[side]:
             self.plan(side, data)
         waypoint = self.queue[side][0]
         self.wait_steps += int(waypoint.wait)
+        self.preshape[side] = waypoint.preshape
         self.phase[side] = PHASE_WAIT if waypoint.wait else waypoint.phase
         # One scale for all joints, so that the command follows the straight joint-space path that
         # ``path_ok`` checked (clipping each joint separately bends it, and swings the arm).
@@ -934,9 +1030,10 @@ class BabblePolicy:
             if self.pincer:
                 noise = np.clip(noise, -1, 1) * 0.2 + (-1.0 + 2.0 * grip)
             else:
-                for j, closed in self.closure[side].items():
+                shaped = self.preshape[side]
+                for j, (open_, closed) in (self.closure if shaped else self.flexors)[side].items():
                     actuator = self.space.effector[side][j]
-                    value = grip * closed
+                    value = open_ + grip * (closed - open_) if shaped else grip * closed
                     noise[j] = (
                         2
                         * (value - self.space.low[actuator])
