@@ -23,6 +23,7 @@ from sensorium.bodies.h1_forces import (  # noqa: E402
 )
 from sensorium.bodies.h1_policies import SeatedBabblePolicy  # noqa: E402
 from sensorium.bodies.h1_scene import (  # noqa: E402
+    HAND_FULL_FORCE_ERROR,
     TABLE_TOP_Z,
     TABLE_X_BASE_Z,
     assets_available,
@@ -328,3 +329,21 @@ def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
         policy.advance(side, recorder.data, 0.0)
         assert policy.replans == 1
         assert policy.queue[side][0] is not queue[first + 1]
+
+
+@needs_assets
+def test_shadow_hands_have_shadows_effort_limits() -> None:
+    with HumanoidRecorder({"effector": "hand", "posture": "seated"}) as recorder:
+        model = recorder.model
+        for name, effort in (
+            ("rh_A_FFJ3", 2.0), ("lh_A_MFJ0", 2.0), ("rh_A_LFJ5", 2.0), ("lh_A_RFJ4", 2.0),
+            ("rh_A_THJ5", 5.0), ("lh_A_THJ4", 3.0), ("rh_A_THJ2", 2.0), ("lh_A_THJ1", 1.0),
+        ):  # fmt: skip
+            actuator = model.actuator(name).id
+            assert tuple(model.actuator_forcerange[actuator]) == (-effort, effort)
+            kp = model.actuator_gainprm[actuator, 0]
+            assert kp == pytest.approx(effort / HAND_FULL_FORCE_ERROR, rel=1e-4)
+            assert model.actuator_biasprm[actuator, 1] == pytest.approx(-kp)
+        wrist = model.actuator("rh_A_WRJ2").id  # the wrist keeps Menagerie's values
+        assert tuple(model.actuator_forcerange[wrist]) == (-10.0, 10.0)
+        assert model.actuator_gainprm[wrist, 0] == 10.0
