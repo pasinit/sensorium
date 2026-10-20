@@ -311,7 +311,8 @@ def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
         assert isinstance(policy, BabblePolicy)
         shaped = [w.preshape for w in queue]
         first = shaped.index(True)
-        assert first > 0 and all(shaped[first:])  # travels open, pre-shaped from over the object
+        assert first > 0 and all(shaped[first:])  # pre-shaped from over the object on
+        assert all(w.carry for w in queue[:first])  # the travel: wrist and fingers set, thumb open
         assert queue[first].hold == policy.PRESHAPE_HOLD and queue[first].grip == 0.0
         watched = [i for i, w in enumerate(queue) if w.watch is not None]
         assert watched == [first + 1]  # the descent's first waypoint checks the object
@@ -328,3 +329,22 @@ def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
         policy.advance(side, recorder.data, 0.0)
         assert policy.replans == 1
         assert policy.queue[side][0] is not queue[first + 1]
+
+
+@needs_assets
+def test_hands_grasp_resting_objects_only() -> None:
+    with HumanoidRecorder({"effector": "hand", "posture": "seated"}) as recorder:
+        policy = recorder.make_policy("seated_babble", np.random.default_rng(0))
+        assert isinstance(policy, BabblePolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        data = recorder.data
+        for side in ("left", "right"):
+            candidates = policy.free_objects(data, side)
+            if candidates:
+                break
+        assert candidates, "no object on either side"
+        for index in candidates:  # all rolling now: none may be grasped
+            dof = recorder.model.jnt_dofadr[recorder.model.body_jntadr[policy.objects[index]]]
+            data.qvel[dof] = 0.2
+        assert policy.pick_object(side, data, resting=True) is None
+        assert policy.pick_object(side, data) in candidates

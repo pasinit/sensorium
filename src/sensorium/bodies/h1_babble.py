@@ -64,6 +64,9 @@ HAND_PINCH = {
 HAND_FLEXORS = (
     "FFJ3", "FFJ0", "MFJ3", "MFJ0", "RFJ3", "RFJ0", "LFJ3", "LFJ0", "THJ4", "THJ1", "THJ2",
 )  # fmt: skip
+# Travelling to a grasp the hand holds these (the thumb's flexors open): with the wrist straight
+# and the fingers flat, the fingertips hung 6 cm lower and swept the object off its place.
+HAND_CARRY = tuple(n for n in HAND_PINCH if not n.startswith("TH")) + ("THJ4", "THJ1", "THJ2")
 GRASP_HEIGHTS = (-0.8, -0.9, -1.0)  # z-component of the approach axis: how steeply it points down
 # Hands: the fingers point about level and the palm normal down at this z-component.
 HAND_GRASP_HEIGHTS = (0.0, -0.1)
@@ -82,6 +85,7 @@ class Waypoint:
     grip: float = 0.0  # effector closure to move towards: 0 open, 1 closed
     wait: bool = False  # the arm has no plan: parking and holding, counted as waiting
     preshape: bool = False  # hand: the grasp's pre-shape, closing towards the pinch with ``grip``
+    carry: bool = False  # hand, travelling to a grasp: wrist and fingers pre-shaped, thumb open
     watch: tuple[int, np.ndarray] | None = None  # (object body, planned position): see ``advance``
     phase: int = 0  # for the experiment programs: PHASES index (travel, descent, contact, ...)
 
@@ -290,6 +294,7 @@ class BabblePolicy:
     FLOOR = 0.12  # m: no tip further under the table's surface (fingertips hang under the palm)
     TRAVEL_STEP = 0.04  # m between the waypoints of a Cartesian travel
     PRESHAPE_HOLD = 8  # control steps a hand waits over the object while its thumb moves under
+    RESTING = 0.02  # m/s: a hand grasps only objects slower than this
     MOVED = 0.015  # m an object may have moved since its grasp was planned before it is replanned
     LINE_POS_TOL = 0.012  # m: an oriented waypoint of a line may miss its point by this much
     ENVELOPE_JUMP = 0.5  # rad: a joint move this big is checked against the tip envelope
@@ -363,7 +368,16 @@ class BabblePolicy:
         self.grip = dict.fromkeys(SIDES, 0.0)
         self.closure = {s: self.closure_actuators(s) for s in SIDES}
         self.flexors = {s: self.closure_actuators(s, HAND_FLEXORS) for s in SIDES}
+        # travelling to a grasp: the pinch's pre-shape but the thumb's flexors open (from 0)
+        self.carried = {
+            s: {
+                j: ((0.0, self.flexors[s][j][1]) if j in self.flexors[s] else values)
+                for j, values in self.closure_actuators(s, HAND_CARRY).items()
+            }
+            for s in SIDES
+        }
         self.preshape = dict.fromkeys(SIDES, False)  # the hand holds the grasp's pre-shape
+        self.carry = dict.fromkeys(SIDES, False)  # the hand travels to a grasp
         self.primitive_counts = dict.fromkeys(self.primitives, 0)
         self.object_counts = np.zeros(len(object_bodies))
         self.reflexes = 0
@@ -670,14 +684,25 @@ class BabblePolicy:
             target = rest  # no plan: park low and to the side rather than freezing mid-air
         self.queue[side] = [Waypoint(target, self.FAST, hold=10, wait=True)]
 
-    def pick_object(self, side: str, data: mujoco.MjData) -> int | None:
-        """An object on this hand's side, fewest tried first; counts it as tried."""
+    def pick_object(self, side: str, data: mujoco.MjData, resting: bool = False) -> int | None:
+        """An object on this hand's side, fewest tried first; counts it as tried.
+
+        ``resting``: only objects slower than ``RESTING`` (a grasp planned on a rolling sphere
+        closes where it was).
+        """
         candidates = self.free_objects(data, side)
+        if resting:
+            candidates = [i for i in candidates if self.object_speed(data, i) < self.RESTING]
         if not candidates:
             return None
         index = candidates[self.choose(self.object_counts[candidates])]
         self.object_counts[index] += 1
         return index
+
+    def object_speed(self, data: mujoco.MjData, index: int) -> float:
+        """An object's linear speed (m/s)."""
+        dof = self.model.jnt_dofadr[self.model.body_jntadr[self.objects[index]]]
+        return float(np.linalg.norm(data.qvel[dof : dof + 3]))
 
     def tilt(self) -> float | None:
         """The approach height of a pincer's contact movements (its forearm stays clear)."""
@@ -829,7 +854,7 @@ class BabblePolicy:
 
     def plan_oriented(self, side: str, data: mujoco.MjData, lift: float) -> list[Waypoint] | None:
         """Approach an object oriented, close (1), lift, hold, release (0), retreat."""
-        index = self.pick_object(side, data)
+        index = self.pick_object(side, data, resting=not self.pincer)
         if index is None:
             return None
         centre, _, _ = self.object_geometry(data, index)
@@ -873,21 +898,15 @@ class BabblePolicy:
         )
         if not (to_pre and onto and up):
             return None
-        lead = [Waypoint(q_above, self.FAST)]
-        if not self.path_ok(data, side, self.cmd_q[side], q_above):
-            # The direct joint path arcs out of the envelope: travel along the line instead.
-            start = self.cmd_q[side]
-            tip = self.ik[side].tip_at(data.qpos, start)
-            via = self.line(data, side, start, tip, above, self.FAST, self.TRAVEL_STEP, approach_z)
-            if via is None:
-                return None
-            lead = via
+        lead = self.grasp_travel(data, side, q_above, above, approach_z)
+        if lead is None:
+            return None
         if not self.pincer:
             # The travel can brush the object aside (effector contacts are allowed on the way):
             # the hand's descent checks that it is still where the grasp was planned.
             to_pre[0].watch = (body, np.array(data.xpos[body]))
-        # A hand travels open (its pre-shaped thumb hangs under the palm and would sweep the
-        # table) and takes the pre-shape over the object, before the descent.
+        # A hand travels with its thumb open (pre-shaped, it hangs under the palm and would sweep
+        # the table) and takes the full pre-shape over the object, before the descent.
         shape = [] if self.pincer else [Waypoint(q_above, self.SLOW, self.PRESHAPE_HOLD)]
         queue = [*lead, *shape, *to_pre, *onto]
         queue.append(Waypoint(onto[-1].q, self.SLOW, 3, 0.0))
@@ -896,9 +915,43 @@ class BabblePolicy:
         queue.append(Waypoint(up[-1].q, self.LIFT, 12, 1.0))  # hold
         queue.append(Waypoint(up[-1].q, self.LIFT, 6, 0.0))  # drop
         queue = self.finish(side, queue, q_above)
-        for waypoint in queue[len(lead) :]:  # a hand keeps its pre-shape until the retreat
-            waypoint.preshape = not self.pincer
+        for k, waypoint in enumerate(queue):  # a hand keeps its pre-shape until the retreat
+            waypoint.preshape = not self.pincer and k >= len(lead)
+            waypoint.carry = not self.pincer and k < len(lead)
         return queue
+
+    def grasp_travel(
+        self,
+        data: mujoco.MjData,
+        side: str,
+        q_above: np.ndarray,
+        above: np.ndarray,
+        approach_z: float,
+    ) -> list[Waypoint] | None:
+        """The travel to ``q_above`` (the grasp point at ``above``), or None if none is clear.
+
+        A pincer moves in joint space if the path is clear, else along the straight line. A hand
+        low over the table first rises straight up (a touch or poke may have ended against this
+        very object), then always travels along the straight line at that height: its joint
+        paths dipped and swept other objects into the one to be grasped.
+        """
+        start = self.cmd_q[side]
+        tip = self.ik[side].tip_at(data.qpos, start)
+        if self.pincer:
+            if self.path_ok(data, side, start, q_above):
+                return [Waypoint(q_above, self.FAST)]
+            return self.line(data, side, start, tip, above, self.FAST, self.TRAVEL_STEP, approach_z)
+        rise: list[Waypoint] = []
+        if tip[2] < self.table_top + self.HOVER - 0.01:
+            top = np.array([tip[0], tip[1], self.table_top + self.HOVER])
+            rise = self.line(data, side, start, tip, top, self.FAST, 0.02) or []
+            if rise:
+                start = rise[-1].q
+        point = self.oriented[side].frame_at(data.qpos, start)[0]
+        via = self.line(data, side, start, point, above, self.FAST, self.TRAVEL_STEP, approach_z)
+        if via is None and self.path_ok(data, side, start, q_above):
+            via = [Waypoint(q_above, self.FAST)]
+        return None if via is None else [*rise, *via]
 
     def half_extent(self, data: mujoco.MjData, index: int, direction: np.ndarray) -> float:
         """An object's horizontal half extent along ``direction`` (its radius if round)."""
@@ -994,7 +1047,7 @@ class BabblePolicy:
             self.plan(side, data)
         waypoint = self.queue[side][0]
         self.wait_steps += int(waypoint.wait)
-        self.preshape[side] = waypoint.preshape
+        self.preshape[side], self.carry[side] = waypoint.preshape, waypoint.carry
         self.phase[side] = PHASE_WAIT if waypoint.wait else waypoint.phase
         # One scale for all joints, so that the command follows the straight joint-space path that
         # ``path_ok`` checked (clipping each joint separately bends it, and swings the arm).
@@ -1030,8 +1083,9 @@ class BabblePolicy:
             if self.pincer:
                 noise = np.clip(noise, -1, 1) * 0.2 + (-1.0 + 2.0 * grip)
             else:
-                shaped = self.preshape[side]
-                for j, (open_, closed) in (self.closure if shaped else self.flexors)[side].items():
+                shaped = self.preshape[side] or self.carry[side]
+                held = self.closure if self.preshape[side] else self.carried
+                for j, (open_, closed) in (held if shaped else self.flexors)[side].items():
                     actuator = self.space.effector[side][j]
                     value = open_ + grip * (closed - open_) if shaped else grip * closed
                     noise[j] = (
