@@ -1,0 +1,188 @@
+# The babbling set regenerated with the current hands (claw pinch, elliptic friction cones):
+# configs/scale_test.toml's layout (15 hand and 15 pincer seated_babble blocks of 37, 600 steps),
+# fresh master seed (5). The variety experiment's control set (configs/variety.toml): hidden object
+# properties and effort on as there, so that both sets share the physics distribution and channels.
+#
+#   uv run sensorium-generate configs/babble_v2.toml
+out_dir = "data/babble_v2"
+master_seed = 5
+
+[humanoid.hand_seated_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.hand_seated_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
+
+[humanoid.pincer_seated_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", hidden_properties = true, effort = true }
