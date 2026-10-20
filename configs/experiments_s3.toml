@@ -1,0 +1,12 @@
+# S3: the pretraining program that needs a grasp: lift and drop from 5, 10 and 15 cm (pincers; hands too since the claw pinch). 12
+# episodes of 600 steps, fresh master seed (2). Stack and drawer are held-out tasks: their
+# demonstrators are in configs/tasks_demos.toml.
+out_dir = "data/experiments_s3"
+master_seed = 2
+workers = 3
+
+[humanoid.pincer_lift_drop]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }

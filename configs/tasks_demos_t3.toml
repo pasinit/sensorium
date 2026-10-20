@@ -1,0 +1,16 @@
+# S5: the push-to-target demonstrators (T3), hands and pincers; see configs/tasks_demos.toml. Run after it.
+out_dir = "data/tasks_demos_t3"
+master_seed = 3
+workers = 3
+
+[humanoid.hand_push_to_target]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "push_to_target", props = ["target_disc"], task = true, hidden_properties = true, effort = true }
+
+[humanoid.pincer_push_to_target]
+policies = ["experiment"]
+episodes_per_policy = 12
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "push_to_target", props = ["target_disc"], task = true, hidden_properties = true, effort = true }

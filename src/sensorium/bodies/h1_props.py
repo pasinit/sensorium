@@ -13,7 +13,24 @@ does not depend on them.
 
 import numpy as np
 
-PROPS = ("tall_block", "friction_patches", "button", "hinged_flap", "drawer", "target_disc")
+PROPS = (
+    "tall_block",
+    "friction_patches",
+    "button",
+    "hinged_flap",
+    "drawer",
+    "target_disc",
+    "stack_blocks",
+)
+
+# The two blocks of ``stack_blocks`` (4 cm cubes), which replace the six standard objects.
+STACK_OBJECTS = (
+    ("obj_wood_stackbox_a", "wood", "box", "0.02 0.02 0.02"),
+    ("obj_plastic_stackbox_b", "plastic", "box", "0.02 0.02 0.02"),
+)
+STACK_X = (0.42, 0.52)  # both blocks go on one arm's side, in this x range and |y| range
+STACK_Y = (0.12, 0.26)
+STACK_MIN_GAP = 0.10
 
 # (body name, material, geom type, size): free bodies added by ``tall_block``.
 TALL_OBJECTS = (
@@ -22,8 +39,8 @@ TALL_OBJECTS = (
 )
 
 # Where each prop stands (m, in front of and to the side of the pelvis; the table's surface is z).
-DRAWER_POS = (0.62, 0.22)  # the drawer front; it opens towards the robot (-x) by DRAWER_TRAVEL
-DRAWER_TRAVEL = 0.10
+DRAWER_POS = (0.45, 0.30)  # the left drawer's front (the right one mirrors it); it opens towards
+DRAWER_TRAVEL = 0.08  # the robot (-x) by this much: its knob stays within a pincer's reach
 FLAP_POS = (0.50, 0.34)  # the left hinge; the right one mirrors it. The flap extends towards the
 FLAP_LENGTH = (
     0.06  # m from the hinge to the free end: it stays clear of an open pincer at its start
@@ -31,8 +48,8 @@ FLAP_LENGTH = (
 FLAP_RANGE = 1.6  # rad  ... middle (-y on the left) and swings away from the robot when pushed
 BUTTON_POS = (0.47, 0.12)  # the left button; the right one mirrors it
 BUTTON_TRAVEL = 0.008
-TARGET_X = (0.45, 0.60)  # the target disc is drawn in this x range and |y| in TARGET_Y
-TARGET_Y = (0.12, 0.26)
+TARGET_X = (0.50, 0.56)  # the target disc is drawn in this x range (a pincer's reach edge) and |y|
+TARGET_Y = (0.12, 0.17)  # in this one, so that an object can start 17 cm or more away on its side
 TARGET_RADIUS = 0.04
 PATCH_FRICTION = (0.1, 0.5, 1.2)  # sliding friction of the three patches
 PATCH_X = (0.435, 0.515, 0.595)  # three strips across x, each 7 cm wide and 60 cm long in y
@@ -40,7 +57,7 @@ PATCH_HALF = (0.035, 0.30)
 
 # Axis-aligned zones (x0, x1, y0, y1) in which objects are not placed when the prop is present.
 EXCLUSION = {
-    "drawer": (0.44, 0.74, 0.08, 0.36),
+    "drawer": (0.34, 0.62, 0.20, 0.42),  # and its mirror image
     "hinged_flap": (0.42, 0.62, 0.20, 0.38),  # and its mirror image (see ``in_exclusion``)
     "button": (0.42, 0.53, 0.05, 0.19),
 }
@@ -67,7 +84,7 @@ def in_exclusion(xy: np.ndarray, props: tuple[str, ...]) -> bool:
             continue
         x0, x1, y0, y1 = EXCLUSION[p]
         left = x0 <= xy[0] <= x1 and y0 <= xy[1] <= y1
-        mirrored = p != "drawer" and x0 <= xy[0] <= x1 and y0 <= -xy[1] <= y1
+        mirrored = x0 <= xy[0] <= x1 and y0 <= -xy[1] <= y1
         if left or mirrored:
             return True
     return False
@@ -112,30 +129,38 @@ def patches_xml(top: float) -> str:
 
 
 def drawer_xml(top: float) -> str:
-    """A cabinet shell and a drawer on a slide joint with a pinchable knob on its front top."""
-    x, y = DRAWER_POS
+    """Two cabinets (left and right), each a drawer on a slide joint with a pinchable knob."""
     depth, half_w, high = 0.12, 0.08, 0.05
-    cx = x + depth / 2  # the drawer's centre when closed
-    return (
-        f'    <geom name="table_drawer_base" type="box" pos="{cx} {y} {top + 0.005}" '
-        f'size="{depth / 2 + 0.01} {half_w + 0.012} 0.005" material="table_wood"/>\n'
-        f'    <geom name="table_drawer_left" type="box" pos="{cx} {y + half_w + 0.007} '
-        f'{top + 0.010 + high / 2}" size="{depth / 2} 0.005 {high / 2}" material="table_wood"/>\n'
-        f'    <geom name="table_drawer_right" type="box" pos="{cx} {y - half_w - 0.007} '
-        f'{top + 0.010 + high / 2}" size="{depth / 2} 0.005 {high / 2}" material="table_wood"/>\n'
-        f'    <geom name="table_drawer_back" type="box" pos="{x + depth + 0.005} {y} '
-        f'{top + 0.010 + high / 2}" size="0.005 {half_w + 0.012} {high / 2}" '
-        'material="table_wood"/>\n'
-        f'    <body name="prop_drawer" pos="{cx} {y} {top + 0.012 + high / 2}">\n'
-        f'      <joint name="prop_drawer" type="slide" axis="-1 0 0" range="0 {DRAWER_TRAVEL}" '
-        'damping="3" frictionloss="0.5" solreflimit="0.004 1"'
-        ' solimplimit="0.95 0.99 0.001"/>\n'
-        f'      <geom name="table_drawer_box" type="box" size="{depth / 2 - 0.003} {half_w} '
-        f'{high / 2 - 0.002}" mass="0.3" material="metal"/>\n'
-        f'      <geom name="table_drawer_knob" type="cylinder" pos="{-depth / 2 + 0.02} 0 '
-        f'{high / 2 + 0.018}" size="0.012 0.02" mass="0.02" material="metal"/>\n'
-        "    </body>\n"
-    )
+    parts = []
+    for side, sign in (("l", 1.0), ("r", -1.0)):
+        x, y = DRAWER_POS[0], sign * DRAWER_POS[1]
+        cx = x + depth / 2  # the drawer's centre when closed
+        wall_z = top + 0.010 + high / 2
+        parts.append(
+            f'    <geom name="table_drawer_{side}_base" type="box" pos="{cx} {y} {top + 0.005}" '
+            f'size="{depth / 2 + 0.01} {half_w + 0.012} 0.005" material="table_wood"/>\n'
+            f'    <geom name="table_drawer_{side}_wall_a" type="box" '
+            f'pos="{cx} {y + half_w + 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
+            'material="table_wood"/>\n'
+            f'    <geom name="table_drawer_{side}_wall_b" type="box" '
+            f'pos="{cx} {y - half_w - 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
+            'material="table_wood"/>\n'
+            f'    <geom name="table_drawer_{side}_back" type="box" '
+            f'pos="{x + depth + 0.005} {y} {wall_z}" size="0.005 {half_w + 0.012} {high / 2}" '
+            'material="table_wood"/>\n'
+            f'    <body name="prop_drawer_{side}" pos="{cx} {y} {top + 0.012 + high / 2}">\n'
+            f'      <joint name="prop_drawer_{side}" type="slide" axis="-1 0 0" '
+            f'range="0 {DRAWER_TRAVEL}" damping="3" frictionloss="0.5" solreflimit="0.004 1" '
+            'solimplimit="0.95 0.99 0.001"/>\n'
+            f'      <geom name="table_drawer_{side}_box" type="box" '
+            f'size="{depth / 2 - 0.003} {half_w} {high / 2 - 0.002}" mass="0.3" '
+            'material="metal"/>\n'
+            f'      <geom name="table_drawer_{side}_knob" type="cylinder" '
+            f'pos="{-depth / 2 + 0.02} 0 {high / 2 + 0.018}" size="0.012 0.02" mass="0.02" '
+            'material="metal"/>\n'
+            "    </body>\n"
+        )
+    return "".join(parts)
 
 
 def flap_xml(top: float) -> str:

@@ -276,6 +276,7 @@ class BabblePolicy:
     REFLEX_N = 80.0  # N of limb contact that triggers a withdrawal
     PRESS_DEPTH = 0.004  # m below a surface the tip is sent to (a light press)
     OBJECT_GOAL = 0.7  # share of touches aimed at an object
+    START_Y = 0.2  # m, how far to its side each arm starts
     START_HEIGHT = 0.10  # m above the table the arms start at
     APPROACH_MARGIN = 0.02  # m above the pre-grasp point the approach starts
     LIFT_HEIGHT = 0.10  # m a grasped object is lifted (8 cm gave 4-6 cm rises: under a 5 cm lift)
@@ -924,7 +925,7 @@ class BabblePolicy:
         state.qpos[:] = data.qpos
         plain = {}
         for side in SIDES:
-            start = np.array([0.5, ROLL_YAW_SIGN[side] * 0.2, self.table_top + 0.2])
+            start = np.array([0.5, ROLL_YAW_SIGN[side] * self.START_Y, self.table_top + 0.2])
             home = ctrl[self.space.arm[side][:4]]
             plain[side] = self.with_wrist(side, self.ik[side].solve(data.qpos, home, start, 80))
             state.qpos[self.ik[side].qpos_adr5] = plain[side]
@@ -933,7 +934,7 @@ class BabblePolicy:
             # Descend to the start height in small steps, so that the posture stays on the same IK
             # branch (a plain solve for a low goal can land on a folded arm).
             for height in (0.2, 0.16, 0.13, self.START_HEIGHT):
-                start = np.array([0.5, ROLL_YAW_SIGN[side] * 0.2, self.table_top + height])
+                start = np.array([0.5, ROLL_YAW_SIGN[side] * self.START_Y, self.table_top + height])
                 lower = self.solve_valid(state, side, q, start)
                 if lower is None:
                     break

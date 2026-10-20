@@ -48,7 +48,8 @@ def test_unknown_prop_is_rejected_and_zones_cover_the_big_props() -> None:
         prop_xml(("trampoline",), 0.82)
     with pytest.raises(ValueError, match="overlap"):
         prop_xml(("drawer", "hinged_flap"), 0.82)
-    assert in_exclusion(np.array([0.60, 0.22]), ("drawer",))
+    assert in_exclusion(np.array([0.50, 0.22]), ("drawer",))
+    assert in_exclusion(np.array([0.50, -0.22]), ("drawer",))  # mirrored
     assert not in_exclusion(np.array([0.60, 0.22]), ())
     assert set(EXCLUSION) == {"drawer", "hinged_flap", "button"}
 
@@ -88,10 +89,11 @@ def test_props_move_under_force_and_stay_in_their_range(recorder: HumanoidRecord
 
 @needs_assets
 def test_the_drawer_slides_under_force() -> None:
-    with HumanoidRecorder({**SETTINGS, "props": ["drawer", "target_disc"]}) as drawer:
+    settings = {**SETTINGS, "props": ["drawer", "target_disc"], "program": "drawer_open"}
+    with HumanoidRecorder(settings) as drawer:
         model, data, rng = drawer.model, drawer.data, np.random.default_rng(0)
-        drawer.reset(drawer.make_policy("seated_babble", rng), rng)
-        joint = model.joint("prop_drawer")
+        drawer.reset(drawer.make_policy("experiment", rng), rng)  # the arms start clear of it
+        joint = model.joint("prop_drawer_r")
         data.qfrc_applied[joint.dofadr[0]] = 6.0
         for _ in range(500):
             mujoco.mj_step(model, data)

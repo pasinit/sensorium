@@ -16,6 +16,7 @@ EXPERIMENT_SOURCES = {
         "push_to_target turn_reach"
     ).split()
 } | {
+    "humanoid/hand/exp_lift_drop",
     "humanoid/pincer/exp_lift_drop",
     "humanoid/pincer/stack",
     "humanoid/pincer/drawer_open",

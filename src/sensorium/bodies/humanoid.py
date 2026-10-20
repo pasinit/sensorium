@@ -44,6 +44,7 @@ slide, hover, and a grasp-lift-drop with a pincer or a power closure with a hand
 ``h1_babble``). Episodes end on the step budget, or when a standing robot falls.
 """
 
+import math
 import os
 import sys
 import time
@@ -63,7 +64,11 @@ from sensorium.bodies.h1_babble import (
     PRIMITIVES,
     BabblePolicy,
 )
-from sensorium.bodies.h1_experiments import PROGRAMS, ExperimentPolicy  # noqa: E402
+from sensorium.bodies.h1_experiments import (  # noqa: E402
+    ExperimentPolicy,
+    check_program,
+    task_name,
+)
 from sensorium.bodies.h1_forces import (
     LEFT_ARM,
     PEAK_CLASSES,
@@ -85,6 +90,9 @@ from sensorium.bodies.h1_policies import (  # noqa: E402
 from sensorium.bodies.h1_props import (  # noqa: E402
     HIDDEN_COLUMNS,
     PROPS,
+    STACK_MIN_GAP,
+    STACK_X,
+    STACK_Y,
     TARGET_X,
     TARGET_Y,
     draw_hidden,
@@ -196,9 +204,10 @@ class HumanoidRecorder:
         unknown = set(self.props) - set(PROPS)
         if unknown:
             raise ValueError(f"unknown props {sorted(unknown)}; known: {PROPS}")
-        self.program = str(settings["program"]) if "program" in settings else None
-        if self.program is not None and self.program not in PROGRAMS:
-            raise ValueError(f"program must be one of {PROGRAMS}, got {self.program!r}")
+        self.program = check_program(
+            str(settings["program"]) if "program" in settings else None, self.effector
+        )
+        self.task = bool(settings.get("task", False))  # demonstrator mode of an experiment program
         self.hidden_properties = bool(settings.get("hidden_properties", False))
         self.effort = bool(settings.get("effort", False))
         chosen = settings.get("primitives")
@@ -217,6 +226,8 @@ class HumanoidRecorder:
                 self.settings["hidden_properties"] = True
             if self.program:
                 self.settings["program"] = self.program
+            if self.task:
+                self.settings["task"] = True
         if self.effort:
             self.settings["effort"] = True
 
@@ -381,8 +392,9 @@ class HumanoidRecorder:
             action = actor.act(step, self.data)
             self.observe(log, contacts, gravity, bool(fell), action, sound)
             self.note_phase(log, actor)
-            if fell:
-                end_reason = "fall"
+            stop = self.stop_reason(actor, bool(fell))
+            if stop:
+                end_reason = stop
                 break
             ctrl = self.space.to_ctrl(action)
             if getattr(actor, "gravity_compensation", True):
@@ -437,6 +449,7 @@ class HumanoidRecorder:
                 classes=self.classes,
                 program=self.program,
                 props=self.props,
+                task_mode=self.task,
             )
         if self.safe_reach:
             return BabblePolicy(
@@ -481,14 +494,28 @@ class HumanoidRecorder:
     def place_objects(self, rng: np.random.Generator) -> None:
         """Scatter the table objects at random non-overlapping positions and yaws."""
         placed: list[np.ndarray] = []
+        # the stack blocks share an arm's side (a draw only when they are there: old layouts hold)
+        stack_side = float(rng.choice([-1.0, 1.0])) if "stack_blocks" in self.props else 1.0
         for body in self.objects:
             geom = int(self.model.body_geomadr[body])
             half_height = object_half_height(self.model, geom)
+            stack = "stackbox" in self.model.body(body).name
+            # push to target: the first object starts 17 cm or more from the disc, on its side
+            far = self.program == "push_to_target" and not placed
             for attempt in range(200 + 2 * PLACEMENT_RETRIES):
                 # 200 tries at a spacing of 11 cm; a crowded table (props) then relaxes it twice
                 spacing = SPACINGS[0 if attempt < 200 else 1 + (attempt - 200) // PLACEMENT_RETRIES]
-                y = rng.uniform(-OBJECT_HALF_WIDTH, OBJECT_HALF_WIDTH)
-                xy = np.array([rng.uniform(*self.reach_x), y])
+                if stack:
+                    xy = np.array([rng.uniform(*STACK_X), stack_side * rng.uniform(*STACK_Y)])
+                    spacing = STACK_MIN_GAP
+                else:
+                    y = rng.uniform(-OBJECT_HALF_WIDTH, OBJECT_HALF_WIDTH)
+                    xy = np.array([rng.uniform(*self.reach_x), y])
+                if far:
+                    side = math.copysign(1.0, self.target[1])
+                    xy = np.array([rng.uniform(0.38, 0.56), side * rng.uniform(0.12, 0.30)])
+                    if np.linalg.norm(xy - self.target[:2]) < 0.17:
+                        continue
                 clear = all(np.linalg.norm(xy - other) > spacing for other in placed)
                 if clear and not in_exclusion(xy, self.props):
                     break
@@ -499,6 +526,13 @@ class HumanoidRecorder:
                 xy[0], xy[1], self.table_top + half_height + 0.003,
                 np.cos(yaw / 2), 0.0, 0.0, np.sin(yaw / 2),
             )  # fmt: skip
+
+    def stop_reason(self, actor: Policy, fell: bool) -> str:
+        """``"fall"``, ``"success"`` (a demonstrator whose task is done) or ``""`` to go on."""
+        if fell:
+            return "fall"
+        done = getattr(actor, "done", None)
+        return "success" if done is not None and done(self.data) else ""
 
     @staticmethod
     def note_phase(log: Log, actor: Policy) -> None:
@@ -676,10 +710,11 @@ class HumanoidRecorder:
         meta = {
             "seed": seed,
             "policy": policy,
-            "task": f"exp_{self.program}"
+            "task": task_name(self.program or "")
             if policy == "experiment"
             else TASK_BY_POSTURE[self.posture],
             "program": self.program if policy == "experiment" else None,
+            "success": end_reason == "success",
             "instance": f"layout-{seed}" if self.objects else "default",  # object layout
             "effector": self.effector,
             "settings": self.settings,
