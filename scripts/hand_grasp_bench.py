@@ -11,8 +11,9 @@ first travel would sweep), with a random yaw; the other objects go to the floor.
 compensation, 25 physics steps per control step) while the other arm holds still. An attempt is a
 planned grasp; it is a success if the object counts a lift (``babble_stats.count_lifts``: 5 cm
 above rest for 0.5 s, touched). Prints per object the planned attempts, successes, the rate with
-its Wilson 95% interval and the median and maximum effector-object force (N, the peak over
-physics steps of the summed normal force), and writes every attempt to ``out.json``.
+its Wilson 95% interval and the median and maximum effector-object force (N, peak over physics
+steps: of the largest single contact, the A1 gate's measure, and of the summed normal force),
+and writes every attempt to ``out.json``.
 """
 
 import json
@@ -80,17 +81,22 @@ def plan_grasp(policy: BabblePolicy, side: str, data: mujoco.MjData) -> list[Way
     return None
 
 
-def effector_force(rec: HumanoidRecorder, body: int) -> float:
-    """Summed normal force (N) of the effector contacts on ``body``."""
+def effector_force(rec: HumanoidRecorder, body: int) -> tuple[float, float]:
+    """Normal force (N) of the effector contacts on ``body``: summed, and the largest one.
+
+    The largest single contact is what the A1 gate's force line measures (``PeakForces``); the
+    sum adds up the many contact points of the hand's mesh pieces and runs several times higher.
+    """
     m, d = rec.model, rec.data
-    total, wrench = 0.0, np.zeros(6)
+    total, largest, wrench = 0.0, 0.0, np.zeros(6)
     for i in range(d.ncon):
         pair = (int(d.contact[i].geom1), int(d.contact[i].geom2))
         for g, other in (pair, pair[::-1]):
             if m.geom_bodyid[other] == body and rec.classes.effector[g]:
                 mujoco.mj_contactForce(m, d, i, wrench)
                 total += float(wrench[0])
-    return total
+                largest = max(largest, float(wrench[0]))
+    return total, largest
 
 
 def attempt(rec: HumanoidRecorder, index: int, side: str, seed: int) -> dict[str, object]:
@@ -109,7 +115,7 @@ def attempt(rec: HumanoidRecorder, index: int, side: str, seed: int) -> dict[str
     if queue is None:
         return {"planned": False}
     policy.queue[side] = queue
-    heights, touched, peak = [], [], 0.0
+    heights, touched, peak, contact_peak = [], [], 0.0, 0.0
     for step in range(MAX_STEPS):
         mujoco.mj_forward(m, d)
         action = policy.act(step, d)
@@ -117,14 +123,22 @@ def attempt(rec: HumanoidRecorder, index: int, side: str, seed: int) -> dict[str
         force = 0.0
         for _ in range(rec.substeps):
             mujoco.mj_step(m, d)
-            force = max(force, effector_force(rec, body))
+            total, largest = effector_force(rec, body)
+            force = max(force, total)
+            contact_peak = max(contact_peak, largest)
         peak = max(peak, force)
         heights.append(float(d.xpos[body][2]) - rest)
         touched.append(force > 0.0)
         if not policy.queue[side]:
             break
     lifted = count_lifts(np.array(heights), np.array(touched)) > 0
-    return {"planned": True, "lift": bool(lifted), "rise": max(heights), "peak": peak}
+    return {
+        "planned": True,
+        "lift": bool(lifted),
+        "rise": max(heights),
+        "peak": peak,
+        "contact_peak": contact_peak,
+    }
 
 
 def main() -> None:
@@ -136,8 +150,11 @@ def main() -> None:
     primitive = "grasp" if effector == "pincer" else "power"
     rec = HumanoidRecorder({"effector": effector, "posture": "seated", "primitives": [primitive]})
     results: list[dict[str, object]] = []
-    print("| object | attempts (planned / tried) | lifts | rate [95% CI] | peak N, median / max |")
-    print("|---|---|---|---|---|")
+    print(
+        "| object | attempts (planned / tried) | lifts | rate [95% CI] "
+        "| largest contact N, median / max | summed N, median / max |"
+    )
+    print("|---|---|---|---|---|---|")
     for index, name in enumerate(rec.object_names):
         rows = []
         for side in ("left", "right"):
@@ -151,10 +168,12 @@ def main() -> None:
         lifts = sum(bool(r["lift"]) for r in planned)
         low, high = wilson(lifts, len(planned))
         peaks = [float(r["peak"]) for r in planned] or [0.0]  # type: ignore[arg-type]
+        single = [float(r["contact_peak"]) for r in planned] or [0.0]  # type: ignore[arg-type]
         rate = lifts / max(len(planned), 1)
         print(
             f"| {name[4:]} | {len(planned)} / {len(rows)} | {lifts} | {rate:.0%} "
-            f"[{low:.0%}, {high:.0%}] | {np.median(peaks):.0f} / {max(peaks):.0f} |",
+            f"[{low:.0%}, {high:.0%}] | {np.median(single):.0f} / {max(single):.0f} "
+            f"| {np.median(peaks):.0f} / {max(peaks):.0f} |",
             flush=True,
         )
     out.write_text(json.dumps(results))

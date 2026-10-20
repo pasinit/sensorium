@@ -305,10 +305,87 @@ Not good yet:
   episode against the pincers' 1.1. The difference between the bench and the babbling is not
   understood yet (candidates: neighbouring objects in the fingers' sweep, objects at the rim or
   tipped by earlier pokes, replanned attempts counted as attempts).
-- The metal cylinder's grasps peak at 300 N in the median and up to 1.9 kN: one-step spikes on the
-  index fingertip against the stiff metal contact (`solref` 0.002, see the step-3 section). A
-  softer mix on the hand (`solmix` 10) made them larger.
+- ~~The metal cylinder's grasps peak at 300 N in the median and up to 1.9 kN~~: corrected below
+  ("Forces"); those were sums over the hand's many contact points, not the gate's single-contact
+  peak, which stays under 160 N.
 - The metal box does not lift (strength, above); the 4 cm plastic box is the weakest of the rest.
+
+### Follow-up: the crowded table, forces, and the real hand's strength
+
+**Why grasps fail on the crowded table** (`scripts/hand_grasp_crowd.py`: the full babbling
+repertoire with all six objects, no rendering, every planned `power` grasp followed to the arm's
+next plan and given one cause; 32 episodes of 600 steps, seeds 0-31; attempts cut by the episode's
+end left out). On main:
+
+| cause | attempts | share [Wilson 95%] |
+|---|---|---|
+| object moved more than 1.5 cm before the descent: replanned | 75 | 39% [32, 46] |
+| ... of them touched by the grasping hand itself first | 24 | 12% [9, 18] |
+| no pinch at closure (fingers and thumb not both on the object) | 59 | 31% [25, 38] |
+| success (a lift) | 21 | 11% [7, 16] |
+| metal box (1.17 kg): pinched, no lift | 23 | 12% [8, 17] |
+| other objects: pinched, no rise or slipped in the lift | 14 | 7% [4, 12] |
+
+(192 attempts; the planner also dropped 8.1 power plans per episode before queueing them.) The
+bench's 50-59% does not carry over for three reasons: two of five grasps are abandoned before the
+descent because the object moved (rolling spheres were planned on where they were; the hand's
+travel and earlier primitives push objects), the metal box, which the hand cannot lift, draws a third of all
+attempts (64 of 192: it stays on the table while light objects get pushed away or roll), and
+closures miss more often (candidates, from the closures' geometry: neighbouring objects in the
+fingers' way, tipped boxes and lying cylinders).
+
+**What was tried against it** (branch `feat/hand-grasp-crowded-planner`, not proposed for merge):
+grasp only objects slower than 2 cm/s; travel with the wrist and fingers already pre-shaped and the
+thumb open (with the wrist straight the fingertips hung 6 cm lower and swept objects); rise
+straight up first when the hand is low; travel along the straight line instead of a joint-space
+move. On the same 32 episodes the replans fell from 39% to 18% and the share of successes rose from
+11% [7, 16] to 21% [15, 27] (169 attempts; `runs/hand_grasp/failure_causes.png`), but the misses
+grew (31% -> 41%), and what the A1 gate counts did not move: lifts per episode in recorded babbling
+1.20 [bootstrap 95%: 0.95, 1.42] on main (60 episodes) against 1.14 [0.86, 1.44] (50 episodes), and
+success per grasp with the object alone fell from 50% [42, 57] to 38% [31, 46] (162 attempts). Not
+worth merging as it is. Also tried and dropped: a thumb that swings in from further back (24% vs
+24% per attempt over 165-169 attempts), smaller grasp gaps, slower travel near the table (below).
+
+**Forces.** Two corrections first:
+
+- The 1.9 kN "cylinder spikes" of the bench were sums over all the hand's contact points on the
+  object (a fingertip mesh touches with several). The gate counts the largest single contact. For
+  the metal cylinder, 22 planned grasps on main: largest single contact median 62 N, max 157 N;
+  summed median 302 N, max 1,866 N. `hand_grasp_bench.py` now prints both.
+- The 72 N median of the 10-episode A1 run was a draw: over 60 episodes, main's per-episode
+  effector-object peak has median 76 N [bootstrap 95%: 62, 96], p90 177 N, max 529 N, so main does
+  not meet the 70 N median line (nor the 280 N max) on a larger sample either; 10-episode runs of
+  the same or nearly the same code gave medians from 54 to 123 N. Visibility is as noisy: over 30 episodes main has 4.2% /
+  7.8% of tip-steps outside the image (left / right), but single 10-episode runs gave up to 12-13%
+  for the right tip with the experimental branch, which over 30 episodes has 7.5% / 6.1%.
+
+Where the peaks come from (16 episodes, each episode's largest effector-object contact attributed
+to the primitive and phase): hands travelling into the metal box or cylinder during `slide`, `poke`,
+`hover` and the parking wait, at the fast travel speed; once the closing of a grasp. Not the grasps.
+Two remedies tried, neither reduced the peaks measurably over 32 episodes: a withdrawal when a
+travelling hand meets an object with more than 30 N (the peak happens in the impact, before any
+reaction; median 69 N, max 468), and slower travel (x 0.4) below 8 cm over the table (median 57 N,
+p90 174, max 468, but fewer grasp attempts and lifts per episode). Keeping objects from being placed
+under a hand's start removed some first-step impacts, but those fall in the settle steps that the
+gate does not count. Left as is; the force line needs either a gate decision (it is not met by main
+on 60 episodes) or slower babbling overall.
+
+**The real hand's strength** (for the supervisor's decision; the model is unchanged):
+
+| quantity | real Shadow Dexterous Hand | the model (HumanoidBench = Menagerie `shadow_hand`) |
+|---|---|---|
+| grasp payload | "The Hand, while in a power grasp, can hold up to 4 kg." | not tested in a power grasp; the claw pinch holds 0.07-0.77 kg, not 1.17 kg |
+| fingertip force | not published; joint force/torque control "is not available" (force control protects the hand or makes joints back-drivable); tendon force sensors of "about 30mN" resolution | finger flexion `kp` 1 N m/rad, `forcerange` +-1 N m (MCP and the coupled J1 + J2 tendon): at most about 10 N at the fingertip over the finger's ~0.1 m; 4-10 N measured in the pinch |
+| other figures | about 10 N per fingertip (New Atlas, press, secondary, version not stated); "at least 8 N force at fingertip" is the newer DEX-EE hand, a different product | |
+
+Sources: Shadow Robot Company, *Shadow Dexterous Hand - Technical Specification*, September 2025,
+sections 2.4 "Weight and Payload" (also: hand and forearm 4.3 kg), 4.2 "Force" and the note to
+section 1 (shadowrobot.com, `shadow_dexterous_hand_e_technical_specification.pdf`); MuJoCo
+Menagerie `shadow_hand/right_hand.xml` (class `right_hand`: `<position forcerange="-1 1"/>`, the
+J1 + J2 class `kp="0.5"`, and `<option cone="elliptic" impratio="10"/>`). The specification gives a
+4 kg power-grasp payload and no fingertip figure, so it does not say whether the model's fingertips
+are too weak for a pinch; it does say the real hand holds far more than 1.17 kg when it wraps an
+object.
 
 ## Load-time noise (`touch_noise.perturb_touch`)
 
