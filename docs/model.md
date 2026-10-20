@@ -1365,6 +1365,79 @@ GCP's own page; Spot about $0.51 to $0.61), that is **about $2.5 to $3 on demand
 against about $8 to $9 and 6.5 to 7 h with decoding. Without the cache the runs would be
 decode-bound at about 1.5 CPU-s per step: 12 runs x 4.3 CPU-hours, about 52 CPU-hours.
 
+### B-scale-0: results (GCP, 32 vCPU, 3 seeds; `scripts/scale_test.py report`)
+
+All 12 SSL runs, 3 supervised ceilings and 81 probe jobs finished. Every number below is on the same
+100 held-out babbling episodes (50 hand, 50 pincer). Figures (`runs/scale/figures/`, not committed):
+probe against steps per arm with the bars, and loss curves per seed per arm.
+
+Held-out probe mean (contact L / R / object AUROC, log-force R^2, tip R^2; mean +- sd over 3 seeds):
+
+| arm | 0 | 250 | 1,000 | 2,500 | 5,000 | 10,000 |
+|---|---|---|---|---|---|---|
+| jepa-e100 | 0.44 +- 0.01 | 0.40 +- 0.02 | 0.38 +- 0.02 | 0.37 +- 0.02 | 0.36 +- 0.02 | 0.36 +- 0.01 |
+| jepa-e300 | 0.44 +- 0.01 | 0.40 +- 0.03 | 0.37 +- 0.02 | 0.37 +- 0.01 | 0.36 +- 0.01 | 0.36 +- 0.01 |
+| jepa-e1000 | 0.44 +- 0.01 | 0.40 +- 0.02 | 0.38 +- 0.02 | 0.38 +- 0.01 | 0.37 +- 0.01 | 0.37 +- 0.01 |
+| mae-e1000 | 0.44 +- 0.01 | 0.46 +- 0.01 | 0.47 +- 0.01 | 0.48 +- 0.01 | 0.48 +- 0.01 | 0.49 +- 0.01 |
+
+| bar | probe mean |
+|---|---|
+| floor V+P (random init, 5 seeds) | 0.44 +- 0.01 |
+| raw proprio K = 4, linear | 0.49 |
+| supervised V+P ceiling, 1,000 episodes (`sup-e1000`, 3 seeds) | 0.65 +- 0.02 |
+
+Held-out / training prediction loss and effective rank (seed means):
+
+| arm | 250 | 1,000 | 10,000 |
+|---|---|---|---|
+| jepa-e100 | 0.340 / 0.345, rank 34.8 | 0.217 / 0.228, rank 38.0 | 0.076 / 0.079, rank 42.0 |
+| jepa-e1000 | 0.326 / 0.347, rank 35.1 | 0.220 / 0.238, rank 38.6 | 0.068 / 0.080, rank 41.5 |
+| mae-e1000 | 0.569 / 0.575, rank 47.8 | 0.505 / 0.480, rank 51.5 | 0.412 / 0.400, rank 62.2 |
+
+Step 0: rank 55.9 for every arm (the same initial encoders).
+
+**Primary contrast** `jepa-e1000 - jepa-e100` (paired by seed and episode), best step 250:
+
+* at the best step: +0.008 (seed SE 0.011, episode SE 0.004, combined 0.011, MDD 0.032);
+* at 10,000 steps: +0.013 (seed SE 0.013, episode SE 0.004, combined 0.014, MDD 0.038).
+
+**Verdict: no effect** (one of the two outcomes expected in advance). Tenfold more distinct episodes at
+the same 10,000 steps does not change what the JEPA state keeps; an effect of 0.04 or more would have
+been seen.
+
+Secondary and bar contrasts (combined SE in brackets; *resolved* = beyond 2.8 SE):
+
+| contrast | 250 (best step) | 10,000 |
+|---|---|---|
+| jepa-e300 - jepa-e100 | +0.005 (0.017) | +0.003 (0.005) |
+| jepa-e1000 - jepa-e300 | +0.003 (0.024) | +0.010 (0.012) |
+| mae-e1000 - jepa-e1000 | +0.061 (0.009), resolved | **+0.116 (0.014), resolved** |
+| jepa-e1000 - its own step 0 | -0.034 (0.006), resolved | -0.066 (0.012), resolved |
+| mae-e1000 - its own step 0 | +0.026 (0.006), resolved | +0.049 (0.011), resolved |
+| jepa-e1000 - floor | -0.033 (0.010), resolved | **-0.065 (0.012), resolved** |
+| mae-e1000 - floor | +0.028 (0.007), resolved | **+0.051 (0.008), resolved** |
+| mae-e1000 - raw proprio | -0.029 (0.009), resolved | -0.006 (0.010) |
+| sup-e1000 - floor (1,000 steps) | | +0.217 (0.015), resolved |
+| sup-e1000 - raw proprio | | +0.161 (0.015), resolved |
+| raw proprio - floor | | +0.057 (0.006), resolved |
+
+**Reading.**
+
+* **Data volume is not the lever for the JEPA.** All three sizes drain from the floor (0.44) to about
+  0.36 by 10,000 steps, with the same held-out loss (0.07) and rank (about 42). The B-steps-0 drift is
+  not an effect of repeating 100 episodes 85 times: it is the same at 8.5 passes.
+* **The JEPA state ends below its own random initialisation** (-0.065, resolved), as on random play.
+* **Masked reconstruction is the first SSL encoder in this project to resolve above its random-init floor**
+  (+0.051, resolved), rising monotonically to 10,000 steps with a rising rank (62). It ties the raw
+  proprio readout (-0.006, not resolved): what it adds over a random encoder is about what the robot's
+  own joint readings already give a linear probe. It is 0.116 above the JEPA on the same data.
+* The supervised ceiling (0.65) is 0.16 above raw proprio, so the battery still has room that no SSL
+  encoder reaches.
+* Absolute levels are higher than on `probe_test` (floor 0.44 against 0.22): a different held-out set
+  (100 new babbling episodes, more contact) and the 128 px frame cache for training. Compare within this
+  study only.
+* Next, decided by the supervisor: **more variety, not more volume** (B-variety-0 below).
+
 ## B-ft-curve: does a pretrained encoder make supervised training more label-efficient? (pre-registered)
 
 **Written before any run of this grid exists.** B-ctrl-0 asked this at two budgets (4 and 16
@@ -1481,6 +1554,124 @@ The decoding cost is the loader's (it reads full-resolution frames to train at 6
 pre-downscaled cache would cut it several-fold, but it changes the loader every study shares, so it
 is left for later.
 
+## B-variety-0: at equal volume, does more varied experience help? (pre-registered)
+
+**Written before either data set exists.** B-scale-0 found that tenfold more babbling episodes at the
+same 10,000 steps changes nothing for the JEPA, and that masked reconstruction (MAE) is the only SSL
+objective to resolve above its random-init floor, tying the raw proprio readout. The supervisor's
+decision: **more variety, not more volume.** This study holds the volume fixed (1,000 episodes of 600
+steps, 10,000 steps x 16 sequences) and changes what the episodes contain: the seven scripted experiment
+programs with outcomes, against babbling only. Code: `scripts/variety_test.py` (`split`, `cache`,
+`train`, `probe`, `report`), which reuses `scale_test`'s split and table helpers; paired statistics in
+`sensorium.model.paired`.
+
+**Data** (Track A, generated on GCP; both seated, half Shadow hand and half pincer, 600 steps,
+`hidden_properties = true`, `effort = true`, the current physics: claw-pinch hand grasp, elliptic cones;
+hands now lift objects, about 1.3 lifts per babbling episode).
+
+* **`variety`** (`configs/variety.toml`, at least 1,100 episodes in 30 or more blocks): blocks of the
+  seven pretraining programs (push, slide, press, knock, door, topple, lift_drop) and `seated_babble`
+  with props. So the variety set also contains babbling; the contrast is "programs plus babbling" against
+  "babbling only".
+* **`babble`** (`configs/babble_v2.toml`): the layout of `scale_test.toml` (15 hand + 15 pincer
+  `seated_babble` blocks of 37, 1,110 episodes), master seed 5.
+* **Split**, one per set (`scale_test.make_split`, seed 0, written to `runs/variety/split.json`): episodes
+  shuffled within each block; 100 held-out episodes drawn in stratified rounds (every block, hand and
+  pincer alternating: 50 + 50, every program represented); the pretraining set is the first 1,000 of
+  the rest in the same stratified order; the remainder is spare. `split --from-config --dry-run`
+  previews it from the config names before the data exist.
+
+**Arms** (common recipe of B-scale-0: V+P, tiny model at 64 px, 10,000 steps x 16 sequences,
+checkpoints at 0, 250, 1,000, 2,500, 5,000 and 10,000, seeds 0 to 2, every checkpoint kept):
+
+| arm | objective | pretraining data |
+|---|---|---|
+| `jepa-variety` | pooled SIGReg JEPA (`long-jepa`) | 1,000 variety |
+| `jepa-babble` | pooled SIGReg JEPA | 1,000 babble |
+| `mae-variety` | masked reconstruction | 1,000 variety |
+| `mae-babble` | masked reconstruction | 1,000 babble |
+| `sup-variety`, `sup-babble` | supervised V+P ceiling (contact battery labels), 1,000 steps | 1,000 of that set |
+
+* **One input space.** The effort channels (`eff_*`) are dropped from the channel space
+  (`data.drop_prefix = ("eff_",)`) in every arm, bar and probe, so the model input is the same in both
+  sets and matches B-scale-0's.
+* **Shared normalisation.** Every arm fits its channel space and normalisation on the first 50
+  pretraining episodes of each set, interleaved (the 64 used for statistics are 32 + 32). So **the same
+  seed gives the identical initial encoder in all four arms, the ceilings and the floor** (tested).
+  Pairing by seed is then pairing by initialisation; the data order differs by construction.
+* **Frame cache** as B-scale-0 (opt-in): one 128 px cache per set for the SSL arms; the ceilings and
+  every probe decode at full resolution.
+
+**Bars:** random-init V+P floor (5 seeds) and raw proprio K = 4 linear readout (without `eff_`).
+
+**Test sets: both.** Every encoder and bar is probed on the 100 held-out babble episodes **and** the 100
+held-out variety episodes, with the battery's probe (leave-one-episode-out ridge on windows at stride
+8), out-of-fold predictions saved, held-out loss and effective rank per checkpoint.
+
+**Primary contrasts** (10,000 steps, on the **babble** test set, which is in-distribution for the babble
+arm and so fair to it; paired by seed and by held-out episode; seed SE from the 3 paired differences,
+episode SE from 300 bootstrap resamples of the held-out episodes shared by every encoder, `rng(0)`;
+combined SE in quadrature; **MDD = 2.8 x combined SE**; resolved when |difference| > MDD):
+
+1. **P1, the headline:** `mae-variety - mae-babble`. MAE is the objective that clears its floor.
+2. **P2:** `jepa-variety - jepa-babble`.
+
+Each is read by `variety_test.verdict`: **variety helps** (resolved, positive), **variety harms**
+(resolved, negative) or **no effect** (not resolved; the MDD states what could have been seen). The two
+are reported separately, at 5% two-sided each, with no multiplicity correction; P1 carries the claim.
+
+**Key secondary:** the same two contrasts on the **variety** test set (in-distribution for the variety
+arm, so they favour it). The joint reading per objective (`variety_test.reading`), stated in advance:
+
+| babble test (primary) | variety test | reading |
+|---|---|---|
+| helps | helps | **variety helps on both test sets**: a better state, not only a familiar distribution |
+| no effect | helps | **variety helps on its own distribution only**: in-distribution advantage |
+| helps | no effect | variety helps on babbling only |
+| harms (or no effect, with harms on variety) | not helps | **variety harms** |
+| resolved with opposite signs | | mixed |
+| no effect | no effect | **no effect** |
+
+**JEPA against the floor** (both test sets, 10,000 steps, independent families paired by episode):
+`jepa-variety - floor` and `jepa-babble - floor`, read as above / at / below the floor. B-scale-0 put the
+babble JEPA at -0.065 below; the question is whether experiments with outcomes stop that drain.
+
+**Reported with it, not part of the rule.**
+
+* `variety - babble` at every checkpoint for both objectives (the curve), and `sup-variety - sup-babble`.
+* `mae - jepa` within each data set at 10,000.
+* Every arm minus the floor and minus raw proprio at 10,000, on both test sets; raw proprio minus floor.
+* The change of every arm from the same seed's step 0 at every checkpoint.
+* Held-out loss next to training loss, and effective rank.
+* **Exploratory, no verdict: hidden-property probes** (`probes.predict_hidden`: log mass, friction, log
+  softness of the touched object; ridge R^2 on contact windows, leave one episode out) of every arm at
+  10,000 and every bar, on both test sets. B-s2b-0 found this probe at chance (about -0.09) even for a
+  supervised ceiling trained on the labels, so it is reported only to see whether the larger, lift-rich
+  sets give it any range. Nothing is claimed from it.
+* Figures (`runs/variety/figures/`): probe against steps per arm on each test set, with the floor, raw
+  proprio and both ceilings as lines; loss terms, held-out loss and probe per seed per arm
+  (`plot_runs.py`), one figure per test set.
+
+**Expectation, written down so it can be wrong.** P1 **no effect or variety helps on its own
+distribution only**: MAE reconstructs inputs, and the variety set has more object motion to reconstruct,
+which could help the variety test set without changing babbling windows. P2 **no effect**, with both
+JEPA arms below the floor; the JEPA drain has survived every data change so far.
+
+**Compute plan** (32 vCPU, 128 GB; from B-scale-0's measured times: an SSL run about 37 to 45 min at
+2 threads and 1 loader worker with 12 at once, a ceiling about 15 min with 2 workers, a probe job about
+7 min at 2 threads):
+
+| stage | processes | VM wall | vCPU-h |
+|---|---|---|---|
+| copy data, `split`, `cache --jobs 30` (2,000 episodes) | 30 | about 5 min + copy | about 2.5 |
+| 12 SSL runs at once (cached, `--workers 1`) | 12 x 2 threads | about 45 to 50 min | about 20 |
+| 6 supervised ceilings (decoding, `--workers 2`) | beside the probes | about 30 min | about 5 |
+| probes: (5 floors + raw + 72 checkpoints + 6 ceilings) x 2 test sets = 168 jobs | 16 shards x 2 threads | about 75 min | about 37 |
+| **total** | | **about 2.5 to 3 h** | **about 65** |
+
+Memory: two caches of 32 GB each in the page cache plus 12 processes at about 1.5 GB, about 85 GB. At
+about $1.55 per hour on demand (Spot about $0.5 to $0.6) that is about $4 to $5 on demand.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
@@ -1521,8 +1712,10 @@ anything repeated.
 
 ## Next
 
-* **B-scale-0** (pre-registered above, data generating on GCP): JEPA on 100 / 300 / 1,000 new episodes
-  at 10,000 steps, MAE on 1,000, with floor, raw-proprio and supervised bars on 100 held-out episodes.
+* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on 1,000 variety against
+  1,000 babble_v2 episodes at 10,000 steps, probed on both held-out sets.
+* **B-scale-0** is done (verdict: no effect of data volume on the JEPA; MAE resolves above its floor;
+  results above).
 
 * **B-ft-curve** (pre-registered above): the label-efficiency curve from scratch, `long-jepa` at 1,000
   and 10,000 steps and `long-mae` at 10,000 steps, 7 budgets x 3 seeds, on GCP.
