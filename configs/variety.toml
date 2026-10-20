@@ -1,0 +1,196 @@
+# The variety experiment's data: 1,110 seated episodes of 600 steps, half Shadow hands, half Robotiq
+# pincers, in 30 blocks of 37 (one process each). Per effector, the seven pretraining programs
+# (push, slide, press, knock, door, topple, lift_drop; docs/experiments.md) and seated babbling with
+# the pretraining props, in roughly equal shares of blocks: hands 2 blocks per program and 1 of
+# babbling; pincers 3 of lift_drop and of babbling, 2 of push, knock and topple, and 1 of slide,
+# press and door (the pincer planner waits most in those three: docs/experiments.md, known gaps).
+# Each program block has its own props, as in configs/experiments*.toml. Hidden object properties and
+# effort on, as in configs/babble_v2.toml (training drops the eff_ channels by prefix when it
+# compares the sets). 1,110 = 1,000 pretraining + 100 test episodes + 10 spare, drawn by block as for
+# configs/scale_test.toml (each block of 37 gives about 3 test episodes).
+# No held-out program or prop (split v3: stack, drawer, push to target, turn-reach; stack_blocks,
+# drawer, target_disc).
+#
+#   uv run sensorium-generate configs/variety.toml
+out_dir = "data/variety"
+master_seed = 4
+
+[humanoid.hand_push_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_push_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_slide_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.hand_slide_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.hand_press_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.hand_press_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.hand_knock_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_knock_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_door_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }
+
+[humanoid.hand_door_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }
+
+[humanoid.hand_topple_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.hand_topple_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.hand_lift_drop_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_lift_drop_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }
+
+[humanoid.hand_babble_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_push_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_push_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "push", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_slide_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "slide", props = ["friction_patches"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_press_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "press", props = ["button"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_knock_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_knock_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "knock", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_door_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "door", props = ["hinged_flap"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_topple_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_topple_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "topple", props = ["tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_lift_drop_00]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_lift_drop_01]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_lift_drop_02]
+policies = ["experiment"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", program = "lift_drop", props = [], hidden_properties = true, effort = true }
+
+[humanoid.pincer_babble_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_babble_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], hidden_properties = true, effort = true }
+
+[humanoid.pincer_babble_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], hidden_properties = true, effort = true }
