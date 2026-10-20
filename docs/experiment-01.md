@@ -176,7 +176,7 @@ On rented spot A100s that is roughly
 | M | Deliverable | Done when |
 |---|---|---|
 | M0 | Thesis, plan, literature review | ✅ |
-| M1 | Data pipeline + review sample (car, drone, piano) | ✅ PR #1, awaiting data review |
+| M1 | Data pipeline + review sample (car, drone, piano) | ✅ |
 | **D0** | Experientia v0: humanoid sources (piano, reach babbling, mocap, BiGym), three experience kinds, splits, benchmark harness, vision-only baselines | Your review of per-source pages |
 | M3 | Stems + trunk + pretraining loop | Pretraining loss falls; no collapse |
 | **Pilot** | 4 runs → few-shot suite | Go/no-go on the full sweep |

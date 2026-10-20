@@ -26,8 +26,8 @@ in [tracks.md](tracks.md), awaiting your confirmation.
 
 | Step | Question | Hypotheses | Status | Doc |
 |---|---|---|---|---|
-| M1 | Episode format, audio synthesis, car/drone/piano pipeline, browsable sample | — | ✅ built (PR #1) | [data-generation.md](data-generation.md), [review-sample.md](review-sample.md) |
-| **D0** | Experientia v0: the H1 body in our format, four sources, three experience kinds, pools at equal volume, held-out suite, benchmark harness | — | **in progress**: D0.1 ✅ (PR #4), D0.2 ✅ (PR #5), manifest task/instance ✅, dense skin ✅, 256 px vision ✅; next D0.3 | [dataset-proposal.md](dataset-proposal.md) |
+| M1 | Episode format, audio synthesis, car/drone/piano pipeline, browsable sample | — | ✅ built | [data-generation.md](data-generation.md), [review-sample.md](review-sample.md) |
+| **D0** | Experientia v0: the H1 body in our format, four sources, three experience kinds, pools at equal volume, held-out suite, benchmark harness | — | **in progress**: D0.1 ✅, D0.2 ✅, manifest task/instance ✅, dense skin ✅, 256 px vision ✅; next D0.3 | [dataset-proposal.md](dataset-proposal.md) |
 | **E1** | Senses × kind of experience → few-shot, on one body | H1, H2 (+ diversity, effector, alien-body ablations) | planned; pilot ≈ $70–150, full ≈ $370–950 | [experiment-01.md](experiment-01.md) |
 | E2 | Development: MIMo infant ↔ adult H1 | H3 | sketch | [thesis.md](thesis.md#research-roadmap) |
 | E3 | Language: readout probe; reading → sensory prediction | H4, C5 | sketch | [thesis.md](thesis.md#h4-diagnostic-and-c5-language) |
@@ -64,8 +64,9 @@ in [tracks.md](tracks.md), awaiting your confirmation.
    probes including the effector probe; vision-only baselines (VC-1, DINOv2,
    V-JEPA 2); BiGym retargeting side check.
 7. **D0.7 review** (~2 days): per-source pages and stats; your sign-off.
-8. **M3 model** (~2–3 weeks): stems, trunk, JEPA-style pretraining loop;
-   smoke test on Modal's free tier.
+8. **M3 model**: stems, trunk, JEPA-style pretraining loop. *v0 built and
+   tested on CPU*; studies and results in [model.md](model.md); the GPU smoke
+   test is prepared, not run.
 9. **Pilot** (~1 week, ≤ $150 on Vast.ai): 4 runs, frozen heads; go/no-go.
 10. **Full E1** (~2 weeks, ≤ $1,000): ~30 runs, both adaptations, ablations;
     `docs/results-01.md`.
@@ -115,8 +116,8 @@ held-out task choice (step 7), go/no-go after the pilot (step 9).
 | 2026-10-15 | Arms, hands and upper body first (reach, lean, turn, bend; seated and supported standing); walking later | Supervisor decision |
 | 2026-10-15 | Waist work skipped for now: no torso-turn experiment (E10) and no turn-reach held-out task (T4, kept reserved in split v3); lean and bend deferred to the legs phase (the H1 waist is yaw only). Few-shot tasks for now: stack, drawer-open, push-to-target | Supervisor decision |
 | 2026-10-15 | A1 headline becomes "caused change" (objects displaced, lifted, toppled, stacked, opened after robot contact; own posture change); contact share, forces, falls and view stay as constraints | Follows the experience decision; thresholds fixed in PhD A's design memo before build |
-| 2026-10-14 | Every results report carries tables (mean ± spread, n) and loss curves; PhDs produce them | Supervisor's standing rule (PR #22) |
-| 2026-10-14 | Track B: no tiny SSL encoder beats an untrained one (probe mean 0.22–0.25 vs floor 0.22); the probe battery is sound (supervised ceiling 0.64, gap +0.42); SSL init gives no fine-tune gain at 4 or 16 labelled episodes | B-ctrl-0 (PR #23). Next on CPU: proprio dropout, scale curve (25/50/100 episodes, 128 px, width 256); differences under 0.08 (6 seeds) are not claimed |
+| 2026-10-14 | Every results report carries tables (mean ± spread, n) and loss curves; PhDs produce them | Supervisor's standing rule |
+| 2026-10-14 | Track B: no tiny SSL encoder beats an untrained one (probe mean 0.22–0.25 vs floor 0.22); the probe battery is sound (supervised ceiling 0.64, gap +0.42); SSL init gives no fine-tune gain at 4 or 16 labelled episodes | B-ctrl-0 ([model.md](model.md)). Next on CPU: proprio dropout, scale curve (25/50/100 episodes, 128 px, width 256); differences under 0.08 (6 seeds) are not claimed |
 
 
 ## Open questions
