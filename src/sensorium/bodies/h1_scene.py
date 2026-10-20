@@ -79,6 +79,15 @@ TABLE_X = (
 OBJECT_HALF_WIDTH = 0.30  # objects are placed within |y| <= this (the camera sees no further)
 REACH_X = (0.40, 0.62)  # where objects are placed and hands aim: within the arms' reach (was 0.68)
 
+# Shadow's effort limits (N m) per hand actuator (by joint name; finger names without the finger),
+# from sr_common's hand xacro, and the joint lag at which an actuator reaches it (rad): see
+# ``strengthen_shadow_hands``.
+SHADOW_EFFORT = {
+    "J4": 2.0, "J3": 2.0, "J0": 2.0, "J5": 2.0,
+    "THJ5": 5.0, "THJ4": 3.0, "THJ3": 2.0, "THJ2": 2.0, "THJ1": 1.0,
+}  # fmt: skip
+HAND_FULL_FORCE_ERROR = 0.7
+
 PINCER_PREFIX = {"left": "lp_", "right": "rp_"}
 PINCER_FILE = "2f85_cube_pads.xml"  # derived from Menagerie's 2f85.xml, written beside it
 # Menagerie's pad: two boxes, together 22 x 8 x 37.5 mm, centred at y = -2.6 mm in
@@ -209,6 +218,7 @@ def build_scene(
         write_xml(robot_root, robot_file)
         write_xml(pincer_with_cube_pads(robotiq), robotiq / PINCER_FILE)
     else:
+        strengthen_shadow_hands(robot.getroot())
         write_xml(robot.getroot(), robot_file)
 
     default = default_table_top(posture)
@@ -261,6 +271,30 @@ def find_body(root: ET.Element, name: str) -> ET.Element:
         if body.get("name") == name:
             return body
     raise KeyError(f"no body {name!r} in the robot XML")
+
+
+def strengthen_shadow_hands(root: ET.Element) -> None:
+    """Give the Shadow hands' finger and thumb actuators Shadow's own effort limits.
+
+    HumanoidBench's hands come from MuJoCo Menagerie's ``shadow_hand``, whose finger actuators
+    are capped at +-1 N m (class ``right_hand``: ``forcerange="-1 1"``) with ``kp`` 1 (0.5 for the
+    J1 + J2 tendon), a cap Menagerie does not document. Shadow's own robot description
+    (``sr_common``, ``sr_description/hand/xacro``: the joints' ``<limit effort=...>``) gives 2 N m
+    for every finger joint (J1-J4, LFJ5) and 5 / 3 / 2 / 2 / 1 N m for THJ5-THJ1; Shadow's
+    specification (Shadow Dexterous Hand technical specification, September 2025, 2.4) says the
+    hand holds up to 4 kg in a power grasp. Each actuator gets that limit as its ``forcerange``
+    and ``kp = limit / HAND_FULL_FORCE_ERROR``, so that it pushes with its full limit once its
+    joint lags its target by that much (a pinch closes onto targets past the contact). The wrist
+    (WRJ1, WRJ2) is left as it is. Old -> new values: docs/touch.md, "Hand strength".
+    """
+    for actuator in root.iter("position"):
+        name = actuator.get("name", "")
+        if not name.startswith(("lh_A_", "rh_A_")) or "WRJ" in name:
+            continue
+        joint = name[5:]
+        effort = SHADOW_EFFORT.get(joint, SHADOW_EFFORT.get(joint[2:], 0.0))
+        actuator.set("forcerange", f"{-effort} {effort}")
+        actuator.set("kp", f"{effort / HAND_FULL_FORCE_ERROR:g}")
 
 
 def remove_shadow_hands(root: ET.Element) -> None:

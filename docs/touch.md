@@ -396,6 +396,64 @@ then clips forces at 0. `dynamics/*` channels get gain and dropout only.
 `binarize=<N>` turns forces into touch / no touch for the binarisation
 ablation. Training will also compress forces with `log1p` (heavy tails).
 
+## Hand strength: Shadow's effort limits (supervisor decision, 2026-10-20)
+
+The scene now gives the Shadow hands' finger and thumb actuators Shadow's own effort limits
+(`h1_scene.strengthen_shadow_hands`); the wrist is unchanged. Sources: Shadow's robot description
+`sr_common` (`sr_description/hand/xacro`, the joints' `<limit effort=...>`, checked at commit
+172c3d9 of January 2025) and Shadow's specification (*Shadow Dexterous Hand - Technical
+Specification*, September 2025, 2.4: "The Hand, while in a power grasp, can hold up to 4 kg").
+Shadow publishes no fingertip force. Menagerie's +-1 N m cap, which HumanoidBench's hands inherit,
+is not documented.
+
+| actuator | old `forcerange` (N m), `kp` (N m/rad) | new `forcerange`, `kp` | sr_common joint effort |
+|---|---|---|---|
+| fingers J3 (proximal), J4 (knuckle), LFJ5 | +-1, 1 | +-2, 2.86 | 2 |
+| fingers J0 (tendon on J1 + J2) | +-1, 0.5 | +-2, 2.86 | 2 (J1 and J2 each) |
+| THJ5 (base) | +-3, 0.4 | +-5, 7.14 | 5 |
+| THJ4 (proximal) | +-2, 1 | +-3, 4.29 | 3 |
+| THJ3 (hub) | +-1, 0.5 | +-2, 2.86 | 2 |
+| THJ2 (middle) | +-1, 1.5 | +-2, 2.86 | 2 |
+| THJ1 (distal) | +-1, 1 | +-1, 1.43 | 1 |
+| WRJ2, WRJ1 (wrist) | +-10, 10 and +-5, 8 | unchanged | 10 and 30 |
+
+`kp` = limit / 0.7 rad (`HAND_FULL_FORCE_ERROR`): an actuator pushes with its full limit once its
+joint lags its target by 0.7 rad, which the claw pinch's closure targets reach (the proximal joints
+run at 50-90% of the limit while holding). With 0.4 or 0.2 rad (stiffer) the scripted pinch lost
+most objects: the fingers struck and pushed them out before the thumb held them.
+
+Before (Menagerie's limits) -> after, same code otherwise:
+
+| measure | before | after |
+|---|---|---|
+| bench: lifts per planned grasp, all objects (165 grasps each) | 50% [Wilson: 42, 57] | 46% [39, 54] |
+| ... wood box / plastic sphere / metal cylinder | 59 / 63 / 54% | 52 / 63 / 60% |
+| ... rubber sphere / plastic box | 73 / 48% | 56 / 38% |
+| ... metal box (1.17 kg) | 0 of 27, 0% [0, 12] | 3 of 29, 10% [4, 26] |
+| bench: largest hand-object contact, median N: wood box / plastic sphere / metal box | 7 / 5 / 6 | 20 / 15 / 20 |
+| bench: largest contact, metal cylinder, median / max N | 58 / 154 | 81 / 182 |
+| A1, 30 episodes: lifts per episode [bootstrap 95%] | 1.33 [0.97, 1.70] | 0.93 [0.63, 1.23] |
+| A1, 30 episodes: effector-object peak per episode, median / p90 / max N | 68 / 144 / 268 | 81 / 157 / 412 |
+| A1, 30 episodes: object contact share / bouts per minute | 0.35 / 21.1 | 0.36 / 24.1 |
+| A1, 30 episodes: effector-table peak median, limb slam steps per episode | 404 N, 0.13 | 328 N, 0.07 |
+| A1, 30 episodes: tips outside the image, left / right | 4.2 / 7.8% | 4.1 / 9.5% |
+| `make a1-gate`, the 10 A1 seeds | forces FAIL (median 72), visibility pass (5.2 / 6.8%), lifts 0.9 | forces FAIL (median 121, p90 171, max 195), visibility FAIL (3.0 / 10.7%), lifts 1.1 |
+
+(The 30-episode rows use seeds 5000-5029, the A1 gate the generator's own seeds; the bench is
+`scripts/hand_grasp_bench.py`, 20 placements per object and hand.) The other primitives keep their
+contact statistics (contact share, bouts and waiting within their intervals); the hands now press
+harder on what they touch. Scripted pinches (`hand_grasp_probe.py`, elliptic cone): before 4 of 6
+objects lift, after 3 of 6 (the cylinder now rises 5.5 cm for 2 steps); the metal box rises 4.3 cm
+(1.1 before), not yet a lift.
+
+Verdict: the stronger hand lifts the metal box sometimes and squeezes harder, but it lifts no more
+in babbling (fewer lifts per episode, within the intervals), and it pushes the force line further
+off (median and max up). The 10-episode visibility failure is within the noise of that check (30
+episodes: 9.5% [6.0, 13.6] for the right tip). Open choices: keep the limits but reach them only at
+a larger lag (with 1.0 rad and the thumb's old gains the scripted pinch lifted 4 of 6, the
+cylinder included), keep the thumb's old gains (a stiff thumb works as a wall that pinched objects squirt off), or close more
+slowly.
+
 ## Costs
 
 | | Hands | Pincers |
