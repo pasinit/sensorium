@@ -1,7 +1,9 @@
 # The sensory layer v0 (M3)
 
-Code: `src/sensorium/model/`. Config: `configs/model/`. Design memo with the
-literature check: `.tmp/phd-b/track_b_novelty_and_model.md` (not in git). Status: v0
+Code: `src/sensorium/model/`. Config: `configs/model/`. The design memo with the
+literature check is not in the repo. Results below cite runs by the number of the
+pull request that produced them in the pre-publication history ("PR #18"); those
+numbers are labels, not links. Status: v0
 built and tested on CPU; no GPU run yet (the supervisor decides compute).
 
 ```sh
