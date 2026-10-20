@@ -435,11 +435,22 @@ class ExperimentPolicy(BabblePolicy):
         return list(range(first, first + int(self.model.body_geomnum[body])))
 
     def plan_lift_drop(self, side: str, data: mujoco.MjData) -> list[Waypoint] | None:
-        """Grasp an object, lift it 5, 10 or 15 cm (fewest tried first), hold, let it fall."""
+        """Grasp an object, lift it 5, 10 or 15 cm (fewest tried first), hold, let it fall.
+
+        Hands grasp with the babbling's claw pinch (``plan_oriented``), pincers with
+        ``grasp_moves``.
+        """
+        height = float(LIFT_HEIGHTS[self.choose(self.height_counts)])
+        if not self.pincer:
+            self.clearance, self.axis_weight = self.GRASP_CLEARANCE, 0.3  # as for a grasp
+            queue = self.plan_oriented(side, data, lift=height)
+            if queue is not None:
+                self.height_counts[LIFT_HEIGHTS.index(height)] += 1
+                mark_phases(queue)
+            return queue
         index = self.pick_object(side, data)
         if index is None:
             return None
-        height = float(LIFT_HEIGHTS[self.choose(self.height_counts)])
         self.height_counts[LIFT_HEIGHTS.index(height)] += 1
         centre, _, _ = self.object_geometry(data, index)
         return self.grasp_moves(
@@ -536,6 +547,16 @@ class ExperimentPolicy(BabblePolicy):
         target = knob + np.array([direction * PULL_M, 0.0, 0.0])
         grazed = [int(self.model.geom(f"table_drawer_{letter}_knob").id)]
         return self.grasp_moves(side, data, knob, [(target, self.SLOW)], grazed=grazed, hold=3)
+
+
+def mark_phases(queue: list[Waypoint]) -> None:
+    """Phases of a hand grasp's queue: travel, descent (pre-shaped), contact (from the closing
+    on, through the drop), retreat (the last waypoint)."""
+    closing = next(k for k, w in enumerate(queue) if w.grip > 0)
+    for k, waypoint in enumerate(queue):
+        name = "travel" if not waypoint.preshape else "descent" if k < closing else "contact"
+        waypoint.phase = PHASES.index(name)
+    queue[-1].phase = PHASES.index("retreat")
 
 
 def check_program(program: str | None, effector: str) -> str | None:
