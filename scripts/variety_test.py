@@ -287,16 +287,18 @@ def floor(seed: int) -> SensoryLayer:
     return SensoryLayer(SensoryModel(model, space), space, loader)
 
 
-def raw_proprio_data(test: str) -> ProbeData:
-    """The window's own proprio (no ``eff_``), the K = 4 observations stacked, on a test set."""
+def raw_features(episode: Episode, ends: np.ndarray) -> dict[str, np.ndarray]:
+    """``{"p4": ...}``: the windows' own proprio (no ``eff_``), the K = 4 observations stacked."""
     space = shared_space()
     k = load_config(BASE).model.substeps
+    arrays = build(load_episode(episode, space, PROPRIO), space, PROPRIO, ends, k)
+    return {"p4": np.concatenate([arrays[g].reshape(len(ends), -1) for g in PROPRIO], 1)}
 
-    def features(episode: Episode, ends: np.ndarray) -> dict[str, np.ndarray]:
-        arrays = build(load_episode(episode, space, PROPRIO), space, PROPRIO, ends, k)
-        return {"p4": np.concatenate([arrays[g].reshape(len(ends), -1) for g in PROPRIO], 1)}
 
-    return build_probe_data(files(test, "heldout"), k, STRIDE, features)
+def raw_proprio_data(test: str) -> ProbeData:
+    """The raw proprio features (``raw_features``) and labels of a test set."""
+    k = load_config(BASE).model.substeps
+    return build_probe_data(files(test, "heldout"), k, STRIDE, raw_features)
 
 
 def pred_path(test: str, name: str) -> Path:

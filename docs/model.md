@@ -1794,6 +1794,59 @@ rates are a proxy.
 * Expectation in advance: P1 no effect or "own distribution only"; P2 no effect. P2 matched. P1 was
   wrong in sign.
 
+### B-variety-0 follow-up: outcome probes (exploratory, not pre-registered)
+
+The contact battery scores the robot's own contacts, force and fingertips. The experiment programs
+are about consequences, so `sensorium.model.outcomes` adds four labels that score the objects instead.
+They are computed from privileged state in `probes.outcome_steps`, per window ending at step t:
+
+* **displaced** (AUROC): an object that an effector touches within 1 s of t moves more than 3 cm in
+  the next 1 s. Without the touch condition, rolling spheres and cylinders made 61% of babbling steps
+  positive.
+* **lifted** (AUROC): an object is 3 cm or more above rest with an effector on it.
+* **toppled** (AUROC): a non-spherical object passes 45 degrees of tilt in the next 1 s.
+* **log speed** (R^2): `log1p` of the fastest object's speed in cm/s, averaged over the window.
+
+The probe is the battery's (leave-one-episode-out ridge, stride 8) on the same encoders: the 10,000-step
+checkpoints, the 1,000-step ceilings, the floor (5 seeds) and raw proprio. It runs on both
+100-episode held-out sets (`scripts/outcome_test.py encode` / `report`). The re-encoded states
+reproduce the stored battery scores exactly.
+
+Positive rates of the windows (displaced / lifted / toppled): babble 0.35 / 0.07 / 0.06; variety
+0.28 / 0.03 / 0.05.
+
+Outcome mean (the battery's rule: AUROC rescaled to 2 x (AUROC - 0.5), averaged with R^2; mean +- sd
+over seeds):
+
+| encoder | babble test | variety test |
+|---|---|---|
+| floor | 0.347 +- 0.020 | 0.349 +- 0.019 |
+| raw proprio | 0.405 | 0.388 |
+| jepa-babble / jepa-variety | 0.326 +- 0.014 / 0.271 +- 0.011 | 0.347 +- 0.018 / 0.280 +- 0.019 |
+| mae-babble / mae-variety | 0.388 +- 0.010 / 0.369 +- 0.007 | 0.384 +- 0.008 / 0.390 +- 0.014 |
+| sup-babble / sup-variety | 0.406 +- 0.009 / 0.364 +- 0.008 | 0.397 +- 0.014 / 0.388 +- 0.009 |
+
+Variety minus babble on the outcome mean (paired by seed and episode; combined SE, MDD = 2.8 SE):
+
+| contrast | babble test | variety test |
+|---|---|---|
+| MAE | -0.019 (0.008, MDD 0.023) | +0.006 (0.013, MDD 0.037) |
+| JEPA | **-0.055 (0.010), resolved** | **-0.067 (0.020), resolved** |
+| supervised | **-0.043 (0.011), resolved** | -0.008 (0.020, MDD 0.055) |
+
+**Reading.**
+
+* **Variety does not help on outcome targets.** MAE is unresolved on both test sets (-0.019 and
+  +0.006). On its own test set mae-variety is better on displaced (+0.023 AUROC) and speed (+0.036 R^2)
+  but worse on lifted and toppled; none of these is a resolved claim.
+* **The JEPA trained on variety is resolved worse on outcomes** on both sets (-0.055 and -0.067),
+  mostly lifted (-0.07 AUROC) and toppled. It is 0.076 below the floor on babbling (resolved).
+* **MAE is the only SSL objective above the floor on outcomes**, and only for babble data on the babble
+  test (+0.042, resolved). Raw proprio is as good as or better than every SSL encoder.
+* **The outcome probe has less range than the battery:** the supervised ceilings, trained on contact
+  labels, reach only 0.36 to 0.41, about the raw-proprio level. Outcome differences of about 0.02 are
+  below the MDDs (0.023 to 0.057).
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
