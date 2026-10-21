@@ -64,6 +64,7 @@ from sensorium.bodies.h1_babble import (
     PRIMITIVES,
     BabblePolicy,
 )
+from sensorium.bodies.h1_director import DirectorSettings, SceneDirector  # noqa: E402
 from sensorium.bodies.h1_experiments import (  # noqa: E402
     ExperimentPolicy,
     check_program,
@@ -166,6 +167,7 @@ class Log:
     tips: list[np.ndarray] = field(default_factory=list)
     prop_state: list[np.ndarray] = field(default_factory=list)
     phase: list[list[int]] = field(default_factory=list)
+    intervention: list[int] = field(default_factory=list)
     fell: list[bool] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
     skin_touched: list[bool] = field(default_factory=list)
@@ -210,24 +212,18 @@ class HumanoidRecorder:
         self.task = bool(settings.get("task", False))  # demonstrator mode of an experiment program
         self.hidden_properties = bool(settings.get("hidden_properties", False))
         self.effort = bool(settings.get("effort", False))
+        # Event-dense scenes (h1_director): a scene director, and a cap on the babbling planner's
+        # goals per plan (fewer retries: less wall-clock spent planning, more spent acting).
+        director = settings.get("director")
+        self.director_settings = (
+            DirectorSettings.from_setting(director) if director and self.has_table else None
+        )
+        tries = settings.get("plan_tries")
+        self.plan_tries = int(tries) if tries is not None else None  # type: ignore[call-overload]
         chosen = settings.get("primitives")
         self.primitives = tuple(str(p) for p in chosen) if isinstance(chosen, list) else None
         if self.has_table:
-            self.settings |= {
-                "table_top": self.table_top,
-                "reach_x": list(self.reach_x),
-                "safe_reach": self.safe_reach,
-                "arm_solref": self.arm_solref,
-                "primitives": list(self.primitives or PRIMITIVES[self.effector]),
-            }
-            if self.props:
-                self.settings["props"] = list(self.props)
-            if self.hidden_properties:
-                self.settings["hidden_properties"] = True
-            if self.program:
-                self.settings["program"] = self.program
-            if self.task:
-                self.settings["task"] = True
+            self.settings |= self.table_settings(director)
         if self.effort:
             self.settings["effort"] = True
 
@@ -320,6 +316,21 @@ class HumanoidRecorder:
         self.effort_rng = np.random.default_rng(0)
         self.target = np.zeros(3)
         self.tips = find_tips(self.model, self.effector)
+        self.director = (
+            SceneDirector(
+                self.model,
+                self.director_settings,
+                self.objects,
+                [object_half_height(self.model, g) for g in self.object_geoms],
+                self.table_top,
+                self.reach_x,
+                [(self.tips[s].body, np.asarray(self.tips[s].offset)) for s in SIDES],
+                DT,
+            )
+            if self.director_settings is not None
+            else None
+        )
+        self.director_rng = np.random.default_rng(0)  # replaced per episode by ``record``
         self.not_foot = np.array(["ankle" not in n for n in self.force_names])
         self.leg_actuators = [
             self.space.index[f"{side}_{joint}"] for side in SIDES for joint in LEG_ACTUATORS
@@ -331,6 +342,25 @@ class HumanoidRecorder:
         mujoco.mj_forward(self.model, self.data)
         self.render(self.camera)
         self.render(RIGHT_CAMERA)
+
+    def table_settings(self, director: object) -> dict[str, object]:
+        """The settings recorded for a table posture (only those that apply)."""
+        settings: dict[str, object] = {
+            "table_top": self.table_top,
+            "reach_x": list(self.reach_x),
+            "safe_reach": self.safe_reach,
+            "arm_solref": self.arm_solref,
+            "primitives": list(self.primitives or PRIMITIVES[self.effector]),
+        }
+        optional = {
+            "props": list(self.props) if self.props else None,
+            "hidden_properties": True if self.hidden_properties else None,
+            "program": self.program,
+            "task": True if self.task else None,
+            "director": director if self.director_settings is not None else None,
+            "plan_tries": self.plan_tries,
+        }
+        return settings | {k: v for k, v in optional.items() if v is not None}
 
     def skin_layout(self) -> dict[str, object]:
         """Static positions of every touch channel (see ``h1_layout``)."""
@@ -358,18 +388,13 @@ class HumanoidRecorder:
         Raises:
             ValueError: unknown policy, or ``seated_babble`` outside the seated posture.
         """
-        if policy not in self.policies:
-            raise ValueError(f"humanoid policy must be one of {self.policies}, got {policy!r}")
-        if policy == "seated_babble" and not self.has_table:
-            raise ValueError("seated_babble needs a table posture: 'seated' or 'stand_supported'")
-        if policy == "experiment" and not (self.has_table and self.program):
-            raise ValueError("experiment needs a table posture and a program setting")
-        if policy == "reach_free" and self.posture != "standing":
-            raise ValueError("reach_free needs posture = 'standing'")
+        self.check_policy(policy)
         # Later streams are new; the first ones are unchanged by adding them.
+        streams = np.random.SeedSequence(seed).spawn(7)
         layout_rng, policy_rng, sound_rng, look_rng, self.props_rng, self.effort_rng = (
-            np.random.default_rng(child) for child in np.random.SeedSequence(seed).spawn(6)
+            np.random.default_rng(child) for child in streams[:6]
         )
+        self.director_rng = np.random.default_rng(streams[6])
         self.appearance = draw_appearance(look_rng)
         apply_appearance(self.model, self.appearance)
         actor = self.make_policy(policy, policy_rng)
@@ -383,6 +408,8 @@ class HumanoidRecorder:
         end_reason = "steps"
         ticks = getattr(actor, "substeps_per_tick", 0)  # a policy that runs faster than 20 Hz
         for step in range(steps):
+            if self.director is not None:
+                log.intervention.append(self.director.step(self.data, step))
             mujoco.mj_forward(self.model, self.data)
             contacts = self.monitor.read(self.data)
             gravity = self.data.xmat[self.pelvis].reshape(3, 3).T @ np.array([0.0, 0.0, -1.0])
@@ -418,6 +445,17 @@ class HumanoidRecorder:
             plan_stats() if plan_stats else None,
         )
 
+    def check_policy(self, policy: str) -> None:
+        """Raise ``ValueError`` if this recorder cannot run ``policy`` (see ``record``)."""
+        if policy not in self.policies:
+            raise ValueError(f"humanoid policy must be one of {self.policies}, got {policy!r}")
+        if policy == "seated_babble" and not self.has_table:
+            raise ValueError("seated_babble needs a table posture: 'seated' or 'stand_supported'")
+        if policy == "experiment" and not (self.has_table and self.program):
+            raise ValueError("experiment needs a table posture and a program setting")
+        if policy == "reach_free" and self.posture != "standing":
+            raise ValueError("reach_free needs posture = 'standing'")
+
     def with_gravity_compensation(self, ctrl: np.ndarray) -> np.ndarray:
         """Add each arm joint's gravity sag to its position target.
 
@@ -452,12 +490,15 @@ class HumanoidRecorder:
                 task_mode=self.task,
             )
         if self.safe_reach:
-            return BabblePolicy(
+            babble = BabblePolicy(
                 *args,
                 reach_x=self.reach_x,
                 classes=self.classes,
                 primitives=self.primitives,
             )
+            if self.plan_tries is not None:
+                babble.TRIES = self.plan_tries
+            return babble
         return SeatedBabblePolicy(*args, reach_x=self.reach_x)
 
     def reset(self, actor: Policy, rng: np.random.Generator) -> None:
@@ -473,6 +514,8 @@ class HumanoidRecorder:
             data.mocap_pos[0] = (0.0, 0.0, pelvis_height(self.posture))
             data.mocap_quat[0] = (1.0, 0.0, 0.0, 0.0)
             self.place_objects(rng)
+            if self.director is not None:
+                self.director.reset(data, self.director_rng)
         data.qpos[3:7] = (1.0, 0.0, 0.0, 0.0)
         self.apply_pose(self.space.home(self.posture))
         mujoco.mj_forward(model, data)
@@ -703,6 +746,8 @@ class HumanoidRecorder:
             privileged["prop_state"] = np.stack(log.prop_state)
         if log.phase:
             privileged["phase"] = np.array(log.phase, dtype=np.int8)
+        if log.intervention:
+            privileged["intervention"] = np.array(log.intervention, dtype=np.int8)
         if self.target_geom is not None:
             privileged["target"] = np.tile(self.target.astype(np.float32), (steps, 1))
         if self.hidden_properties and self.objects:

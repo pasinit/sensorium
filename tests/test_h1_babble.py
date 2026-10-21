@@ -328,3 +328,37 @@ def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
         policy.advance(side, recorder.data, 0.0)
         assert policy.replans == 1
         assert policy.queue[side][0] is not queue[first + 1]
+
+
+@needs_assets
+def test_scene_director_replaces_lost_objects_and_drops_when_idle() -> None:
+    settings: dict[str, object] = {
+        "effector": "pincer",
+        "posture": "seated",
+        "director": {"idle_s": 0.5, "stacks": 1.0},
+    }
+    with HumanoidRecorder(settings) as recorder:
+        assert recorder.settings["director"] == {"idle_s": 0.5, "stacks": 1.0}
+        episode = recorder.record(3, "hold", 60)
+    codes = episode.privileged["intervention"]
+    assert codes.shape == (60,) and codes.max() >= 2  # the arms hold still: idle drops follow
+    pose = episode.privileged["object_pose"]
+    stacked = [  # stacks = 1: one object starts on top of another
+        (i, j)
+        for i in range(pose.shape[1])
+        for j in range(pose.shape[1])
+        if i != j and np.linalg.norm(pose[0, i, :2] - pose[0, j, :2]) < 0.02
+    ]
+    assert stacked
+    with HumanoidRecorder(settings) as recorder:
+        recorder.reset(
+            recorder.make_policy("hold", np.random.default_rng(0)), np.random.default_rng(0)
+        )
+        director = recorder.director
+        assert director is not None
+        body = recorder.objects[0]
+        adr = recorder.model.jnt_qposadr[recorder.model.body_jntadr[body]]
+        recorder.data.qpos[adr : adr + 3] = (0.5, 0.0, 0.3)  # fallen off the table, on the floor
+        mujoco.mj_forward(recorder.model, recorder.data)
+        assert director.step(recorder.data, 0) == 1  # re-placed
+        assert recorder.data.qpos[adr + 2] > recorder.table_top
