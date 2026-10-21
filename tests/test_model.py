@@ -1496,6 +1496,19 @@ def test_paired_contrast_seed_and_episode_errors() -> None:
         contrast([same], [same, same], paired=True)
 
 
+def test_prediction_subset_scores_only_its_labels() -> None:
+    pred = synthetic_predictions(np.repeat(np.arange(10), 12), 0.5, 0)
+    full = pred.scores()
+    aurocs = pred.subset(probes.BINARY)
+    sub = aurocs.scores()
+    assert set(sub) == {f"{n}_auroc" for n in probes.BINARY} | {"mean"}
+    assert all(sub[k] == full[k] for k in sub if k != "mean")
+    assert sub["mean"] == pytest.approx(np.mean([2 * (sub[k] - 0.5) for k in sub if k != "mean"]))
+    assert pred.subset(("tip",)).pred.shape[1] == 6
+    with pytest.raises(ValueError, match="not in"):
+        pred.subset(("speed",))
+
+
 def test_difference_in_differences_matches_two_paired_contrasts() -> None:
     from sensorium.model.paired import contrast, difference_in_differences  # noqa: PLC0415
 

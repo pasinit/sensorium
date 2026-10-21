@@ -17,9 +17,11 @@ Each signal is scaled robustly over the training set (median and MAD, ``fit_scal
 **event step** when any scaled signal exceeds ``Z`` (3). A sequence start gets the weight
 ``1 + (cap - 1) * min(1, f / SATURATE)``, with ``f`` the share of event steps in its span, so a
 start with no event step keeps weight 1, and starts with a quarter or more event steps get ``cap``
-(4).
-Rest starts are then scaled up, if needed, to hold at least ``REST_SHARE`` (15%) of the draws, and
-no start is drawn more than ``cap`` times the uniform rate (``finalise``). Test sets are never
+(4). Rest starts are then scaled up, if needed, to hold at least ``REST_SHARE`` (15%) of the
+draws, and no start is drawn more than ``cap`` times the uniform rate (``finalise``). This is done
+within the hand and the pincer episodes separately (``finalise_by_group``), so each effector keeps
+its uniform share of draws: pincer effort runs higher than hand effort, and one pool would
+oversample pincers. Test sets are never
 weighted: the weights only reach ``SequenceDataset(start_weights=...)`` of training runs.
 
     uv run python -m sensorium.model.events <out.json> <episode.npz>... [--cache DIR] [--span 32]
@@ -89,22 +91,34 @@ def step_signals(
     return {k: v.astype(np.float64) for k, v in out.items()}
 
 
-def episode_signals(path: Path, cache: Path | None = None) -> tuple[dict[str, np.ndarray], float]:
-    """Signals and ``dt`` of an episode file, from the frame cache if given (no privileged
-    state is read either way)."""
+def effector_kind(names: Sequence[str]) -> str:
+    """``hand``, ``pincer`` or ``none``, from the proprio channel names (the body, not a label)."""
+    if any(n.startswith(("dq_lh_", "dq_rh_")) for n in names):
+        return "hand"
+    if any(n.startswith(("dq_lp_", "dq_rp_")) for n in names):
+        return "pincer"
+    return "none"
+
+
+def episode_signals(
+    path: Path, cache: Path | None = None
+) -> tuple[dict[str, np.ndarray], float, str]:
+    """Signals, ``dt`` and effector kind of an episode file, from the frame cache if given (no
+    privileged state is read either way)."""
     if cache is not None:
         root = entry(cache, path)
         header = json.loads((root / META).read_text())["header"]
         proprio = np.load(root / "proprio.npy", mmap_mode="r")
         rgb = np.load(root / "rgb.npy", mmap_mode="r")
-        return step_signals(
-            np.asarray(proprio), header["proprio_names"], rgb, header["dt"]
-        ), header["dt"]
+        names = header["proprio_names"]
+        signals = step_signals(np.asarray(proprio), names, rgb, header["dt"])
+        return signals, header["dt"], effector_kind(names)
     episode = Episode.load(path, privileged=False)
     inputs = model_inputs(episode, ("rgb", "proprio"))
     return (
         step_signals(inputs["proprio"], episode.proprio_names, inputs["rgb"], episode.dt),
         episode.dt,
+        effector_kind(episode.proprio_names),
     )
 
 
@@ -159,24 +173,43 @@ def finalise(
     return {n: w[a:b] for n, a, b in zip(names, edges[:-1], edges[1:], strict=True)}
 
 
+def finalise_by_group(
+    weights: Mapping[str, np.ndarray],
+    groups: Mapping[str, str],
+    cap: float = CAP,
+    rest_share: float = REST_SHARE,
+) -> dict[str, np.ndarray]:
+    """``finalise`` within each group of episodes (e.g. hand and pincer), each group then scaled
+    to a mean weight of 1, so a group keeps the share of draws it has under uniform sampling and
+    weighting only moves draws inside it."""
+    out: dict[str, np.ndarray] = {}
+    for group in sorted(set(groups.values())):
+        part = finalise({n: w for n, w in weights.items() if groups[n] == group}, cap, rest_share)
+        mean = np.concatenate(list(part.values())).mean()
+        out |= {n: w / mean for n, w in part.items()}
+    return {n: out[n] for n in weights}
+
+
 def collect_signals(
     paths: Sequence[Path], cache: Path | None = None
-) -> tuple[list[dict[str, np.ndarray]], list[float]]:
-    """Signals and ``dt`` of every episode of ``paths`` (``episode_signals``)."""
-    signals, dts = [], []
+) -> tuple[list[dict[str, np.ndarray]], list[float], list[str]]:
+    """Signals, ``dt`` and effector kind of every episode of ``paths`` (``episode_signals``)."""
+    signals, dts, kinds = [], [], []
     for i, path in enumerate(paths):
-        s, dt = episode_signals(path, cache)
+        s, dt, kind = episode_signals(path, cache)
         signals.append(s)
         dts.append(dt)
+        kinds.append(kind)
         if (i + 1) % 100 == 0:
             log.info("signals of %d / %d episodes", i + 1, len(paths))
-    return signals, dts
+    return signals, dts, kinds
 
 
 def index_from(
     paths: Sequence[Path],
     signals: Sequence[Mapping[str, np.ndarray]],
     dts: Sequence[float],
+    kinds: Sequence[str],
     span_steps: int,
     scales: Mapping[str, tuple[float, float]],
     cap: float = CAP,
@@ -184,7 +217,8 @@ def index_from(
     """Start weights of every episode of ``paths`` and how they were made (JSON-ready).
 
     Args:
-        paths, signals, dts: The training episodes and their ``collect_signals``.
+        paths, signals, dts, kinds: The training episodes and their ``collect_signals`` (the
+            kinds group the episodes for ``finalise_by_group``).
         span_steps: Model steps x substeps of one sequence (its span is this x the episode's
             observation spacing in env steps).
         scales: ``fit_scales`` of these or a larger set of episodes (two training sets weighted
@@ -196,7 +230,7 @@ def index_from(
         p.name: raw_weights(f, span_steps * spacing(dt))
         for p, f, dt in zip(paths, flags, dts, strict=True)
     }
-    weights = finalise(raw, cap)
+    weights = finalise_by_group(raw, {p.name: k for p, k in zip(paths, kinds, strict=True)}, cap)
     return {
         "scales": dict(scales),
         "z": Z,
@@ -210,11 +244,15 @@ def index_from(
 
 
 def build_event_index(
-    paths: Sequence[Path], span_steps: int, cache: Path | None = None, cap: float = CAP
+    paths: Sequence[Path],
+    span_steps: int,
+    cache: Path | None = None,
+    use: Sequence[str] = SIGNALS,
+    cap: float = CAP,
 ) -> dict[str, object]:
     """``index_from`` with the scales fitted on ``paths`` themselves."""
-    signals, dts = collect_signals(paths, cache)
-    return index_from(paths, signals, dts, span_steps, fit_scales(signals), cap)
+    signals, dts, kinds = collect_signals(paths, cache)
+    return index_from(paths, signals, dts, kinds, span_steps, fit_scales(signals, use), cap)
 
 
 def window_share(
@@ -265,9 +303,10 @@ def main() -> None:
     parser.add_argument("paths", type=Path, nargs="+")
     parser.add_argument("--cache", type=Path, default=None, help="frame cache to read from")
     parser.add_argument("--span", type=int, default=32, help="model steps x substeps")
+    parser.add_argument("--signals", nargs="+", choices=ALL_SIGNALS, default=SIGNALS)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    index = build_event_index(args.paths, args.span, args.cache)
+    index = build_event_index(args.paths, args.span, args.cache, args.signals)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(index))
     log.info("event steps %.3f of all steps", index["event_step_share"])

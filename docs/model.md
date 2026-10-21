@@ -1848,46 +1848,54 @@ Variety minus babble on the outcome mean (paired by seed and episode; combined S
   below the MDDs (0.023 to 0.057).
 ## B-variety-ew: does event-weighted sampling remove the MAE variety drop? (pre-registered)
 
-**Written before any weighted run exists.** Supervisor direction: weight event windows above resting
-ones in training, keeping rest as a minority. This study reruns B-variety-0 unchanged except for the
-training sampler. It uses the same split (n = 791 per set), the same caches, arms, seeds, steps,
-checkpoints and probes. Test sets are not weighted.
+**Written before any weighted run exists; amended before launch** (signal set, effector balance,
+judged scores). Supervisor direction: weight event windows above resting ones in training, toward
+grasping and interaction, keeping rest as a minority. This study reruns B-variety-0 unchanged except
+for the training sampler. It uses the same split (n = 791 per set), the same caches, arms, seeds,
+steps, checkpoints and probes. Test sets are not weighted.
 
 **Sampler** (`sensorium.model.events`; `SequenceDataset(start_weights=...)` for SSL,
-`SupervisedConfig.event_index` for the ceilings). It uses label-free signals only, from the model
-inputs; no contact or force label is used, because the probes test on those. Per env step:
+`SupervisedConfig.event_index` for the ceilings). The weights come from label-free signals only: no
+contact or force label is used, because the probes test on those.
 
-* body and effector joint speed (mean `|dq|`; the effector joints stand in for fingertip velocity,
-  since tip position is privileged and a probe target);
-* effort change (mean `|d eff / dt|`; the `eff_` channels are not a model input here, but they are not
-  labels);
-* frame difference (mean absolute change of consecutive frames). This also sees objects that move
-  with nothing touching them.
+**Signal set (decided by the lead before launch): effector speed + effector effort.**
 
-How the signals become weights:
+* **Effector speed:** mean `|dq|` of the hand or pincer joints, the label-free stand-in for fingertip
+  velocity (tip position is privileged and a probe target).
+* **Effector effort:** mean `|eff|` of the hand or pincer actuators, the load of a grip or a push.
+* **Why this set:** the supervisor wants weighting toward grasping and interaction, and this is the
+  only candidate set that moves the drawn windows toward contact (table below). Effort is a motor
+  signal a real robot has. The encoder never sees it (`eff_` stays dropped from the input); it only
+  decides which windows are drawn more often.
+* **Not chosen:** the brief's first set (body and effector speed, effort change, frame difference),
+  which enriched arm motion, not interaction (diagnostics below).
 
-* Each signal is scaled by its median and MAD over **both** training sets together, so an "event"
-  means the same thing in both arms. A step is an event step when any scaled signal exceeds 3.
+**How the signals become weights.**
+
+* Each signal is scaled by its median and MAD over both training sets together, so an "event" means
+  the same thing in both arms. A step is an event step when either scaled signal exceeds 3.
 * A sequence start weighs `1 + 3 x min(1, f / 0.25)`, where f is the share of event steps in its
   32-step span.
-* Rest starts (no event step) are scaled up to keep at least 15% of the draws.
-* No start is drawn more than 4 times the uniform rate.
+* The rest floor and the cap are applied within hand episodes and within pincer episodes separately
+  (`events.finalise_by_group`), and each effector keeps its uniform share of draws. Pincer effort runs
+  higher than hand effort: with one pool, 61% to 62% of the draws went to pincer episodes, which
+  would have confounded weighting with the effector mix.
+* Rest starts (no event step) keep at least 15% of the draws, and no start is drawn more than 4 times
+  the uniform rate.
 
-**What it does to the windows**. Measured on the 100 + 100 held-out episodes, which are on the Mac
-with privileged state; this is a diagnostic, not used to choose anything. Each cell is the share of
-drawn windows (8 per sequence) that contain the event, uniform -> weighted:
+**What it does to the windows**, for the chosen set. Measured on the 100 + 100 held-out episodes,
+which are on the Mac with privileged state; this is a diagnostic. Each cell is the share of drawn
+windows (8 per sequence) that contain the event, uniform -> weighted:
 
-| signals | set | label-free event | rest draws | max start / uniform | caused-change event (privileged) | hand-object contact (privileged) |
+| set | label-free event | rest draws | pincer draws | max start / uniform | caused-change event (privileged) | hand-object contact (privileged) |
 |---|---|---|---|---|---|---|
-| **default (the four above)** | babble | 0.28 -> 0.37 | 0.26 -> 0.15 | 1.56 | 0.47 -> 0.48 | 0.27 -> 0.26 |
-| | variety | 0.20 -> 0.31 | 0.38 -> 0.19 | 2.01 | 0.39 -> 0.44 | 0.22 -> 0.23 |
-| default + effector effort | babble | 0.37 -> 0.44 | 0.18 -> 0.15 | 1.32 | 0.47 -> 0.48 | 0.27 -> 0.29 |
-| | variety | 0.27 -> 0.40 | 0.30 -> 0.15 | 1.71 | 0.39 -> 0.42 | 0.22 -> 0.26 |
-| effector speed + effector effort | babble | 0.19 -> 0.33 | 0.48 -> 0.27 | 2.23 | 0.47 -> 0.50 | 0.27 -> 0.37 |
-| | variety | 0.14 -> 0.28 | 0.65 -> 0.41 | 2.51 | 0.39 -> 0.40 | 0.22 -> 0.29 |
+| babble | 0.19 -> 0.30 | 0.48 -> 0.29 | 0.50 -> 0.50 | 2.84 | 0.47 -> 0.52 | **0.27 -> 0.34** |
+| variety | 0.14 -> 0.25 | 0.65 -> 0.46 | 0.50 -> 0.50 | 3.33 | 0.39 -> 0.42 | **0.22 -> 0.27** |
 
-**Caveat, stated before the run.** With the default signals, weighting enriches arm motion, not
-interaction. Per-step correlations on the same episodes:
+`events` prints the same table, label-free columns only, for the real pretraining caches when the run
+starts; it is reported with the result.
+
+**Diagnostics behind the choice** (per-step correlations, babble / variety held-out episodes):
 
 | signal | with caused-change events | with hand-object contact |
 |---|---|---|
@@ -1896,19 +1904,24 @@ interaction. Per-step correlations on the same episodes:
 | effector speed | +0.18 / +0.22 | about 0 |
 | effector effort level | about 0 | **+0.53 / +0.37** |
 
-So contact happens when the arm slows down. Caused-change events already cover about 40% to 47% of
-uniformly drawn windows, because their spans run 1 s past each contact bout, so there is little rest
-for weighting to remove. With the default signals the privileged event share moves by +0.00 (babble)
-and +0.05 (variety). **A null here may therefore mean the sampler does not change the data, not that
-weighting cannot help.** The run's label-free and privileged shares are reported with the result.
+Contact happens when the arm slows down, so speed and frame difference point away from it. The
+brief's first set moved hand-object contact by -0.01 and +0.01. Caused-change events already cover
+40% to 47% of uniformly drawn windows (their spans run 1 s past each contact bout), so there is little
+rest to remove. **Even with the chosen set the shift is moderate (about +0.06 contact), so a null may
+mean the data changed too little, not that weighting cannot help.**
 
-**Signal set: the default (the brief's four signals).** The lead may switch to "effector speed +
-effector effort" (the largest shift toward contact) before launch. Effector effort is close to a
-force signal, and the probes test log force. If so, this line changes before
-any run exists, and nothing else does.
+**Judged scores (amended before launch).** Weighting toward high-effort windows may raise force-type
+targets simply because more high-load windows are drawn. So the verdicts are judged on two scores:
+
+* **contact AUROCs:** the mean of the three contact AUROCs rescaled to 2 x (AUROC - 0.5), i.e. the
+  battery without log force and tip (`Predictions.subset`);
+* **the outcome battery:** displaced, lifted, toppled, object speed (`sensorium.model.outcomes`).
+
+The full battery mean, log force and every per-term change are reported. **Log force does not count
+toward "drop removed".**
 
 **Primary outcomes** (10,000 steps, babble test; paired by seed and episode; resolved = beyond
-2.8 x combined SE, as before):
+2.8 x combined SE). Each is judged separately on both scores.
 
 1. **P1, the MAE variety drop.** Two contrasts:
    * the weighted `mae-variety - mae-babble`;
@@ -1919,33 +1932,28 @@ any run exists, and nothing else does.
    * **drop persists**: the weighted contrast is resolved negative;
    * **drop removed**: it is not resolved negative, and the change is resolved positive;
    * **inconclusive**: otherwise.
-2. **P2, JEPA against the floor.** `jepa-babble-ew - floor` and `jepa-variety-ew - floor`, each read as
-   above, at or below the floor. "Weighting lifts JEPA above the floor" needs both to be resolved
-   above.
+
+   "Weighting removes the drop" is claimed only if it reads **drop removed** on the contact AUROCs and
+   not **drop persists** on the outcome battery.
+2. **P2, JEPA against the floor.** `jepa-babble-ew - floor` and `jepa-variety-ew - floor` on each score,
+   read as above, at or below the floor. "Weighting lifts JEPA above the floor" needs both arms
+   resolved above on the contact AUROCs, and neither below on the outcome battery.
 
 **Secondary:**
 
-* the same contrasts on the variety test set;
-* every arm, weighted minus uniform, paired by seed, on both test sets (ceilings included);
-* the drawn-window event shares of the actual pretraining sets (`events` prints them from the caches;
-  label-free only, because the caches hold no privileged state).
+* the same on the variety test set;
+* every arm, weighted minus uniform, paired by seed, on both test sets: full battery, per term,
+  ceilings included;
+* the drawn-window shares of the real pretraining sets.
 
-**Expectation, so it can be wrong:** P1 inconclusive, P2 below the floor. The sampler shifts which arm
-movements are drawn far more than which interactions are.
+**Expectation, so it can be wrong:** P1 inconclusive, P2 below the floor. A moderate shift toward
+contact windows is unlikely to undo a drop that B-variety-0 spread over every target.
 
-**Run plan** (same VM and caches as B-variety-0; the uniform outputs stay in `runs/variety`):
-
-    mkdir -p runs/variety_ew && cp runs/variety/split.json runs/variety_ew/
-    uv run python scripts/variety_test.py events --root runs/variety_ew          # a few minutes
-    for arm in jepa-babble jepa-variety mae-babble mae-variety; seeds 0 1 2:
-        uv run python scripts/variety_test.py train --events --root runs/variety_ew --arm $arm --seed $s --workers 1
-    sup-babble, sup-variety: train --events --root runs/variety_ew --arm ... --workers 2
-    uv run python scripts/variety_test.py probe --root runs/variety_ew --shard i/16
-    uv run python scripts/variety_test.py report --root runs/variety_ew
-    uv run python scripts/variety_test.py compare --root runs/variety_ew --uniform runs/variety
-
-Compute is the same as B-variety-0: about 64 vCPU-h, about 2.5 to 3 h on 32 vCPU, about $4 on demand.
-The weights only change which starts are drawn, not the cost of a step.
+**Run plan.** Same VM and caches as B-variety-0. The uniform outputs (checkpoints and predictions)
+are restored to `runs/variety`. `compare` and the outcome probes need both trees. Commands: the PR
+description and the message to the lead. Compute: about 64 vCPU-h as B-variety-0, plus about 2 vCPU-h
+for the outcome probes of both trees, about $4 to $5 on demand. The weights only change which starts
+are drawn, not the cost of a step.
 
 ## GPU smoke test (prepared, not run)
 

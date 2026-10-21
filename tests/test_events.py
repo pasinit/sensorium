@@ -90,3 +90,20 @@ def test_event_index_is_the_same_from_episodes_and_from_the_frame_cache(tmp_path
     assert (
         set(loaded) == {p.name for p in paths} and len(loaded[paths[0].name]) == 120 - 16 + 1
     )  # span 16 = 4 x 4
+
+
+def test_groups_keep_their_uniform_share_of_draws() -> None:
+    span = 8
+    busy = events.raw_weights(np.ones(100, dtype=bool), span)
+    quiet = events.raw_weights(np.zeros(100, dtype=bool), span)
+    mixed = events.raw_weights(np.arange(100) % 20 < 5, span)
+    w = events.finalise_by_group(
+        {"p1": busy, "p2": quiet, "h1": mixed, "h2": quiet},
+        {"p1": "pincer", "p2": "pincer", "h1": "hand", "h2": "hand"},
+    )
+    pincer = w["p1"].sum() + w["p2"].sum()
+    hand = w["h1"].sum() + w["h2"].sum()
+    assert pincer == pytest.approx(hand)  # equal start counts: equal draws
+    assert w["h1"].mean() > w["h2"].mean()  # inside a group, events are drawn more
+    total = np.concatenate(list(w.values()))
+    assert total.max() <= events.CAP * total.mean() * (1 + 1e-6)

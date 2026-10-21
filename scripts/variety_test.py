@@ -58,7 +58,6 @@ from sensorium.model.data import LoaderConfig, build, load_episode, spacing
 from sensorium.model.diagnostics import heldout_loss, state_geometry
 from sensorium.model.events import (
     ALL_SIGNALS,
-    SIGNALS,
     collect_signals,
     event_flags,
     fit_scales,
@@ -68,6 +67,7 @@ from sensorium.model.events import (
 )
 from sensorium.model.frame_cache import build_cache
 from sensorium.model.layout import ChannelSpace
+from sensorium.model.outcomes import OUTCOME_BINARY, OUTCOMES
 from sensorium.model.paired import Contrast, contrast, describe, difference_in_differences
 from sensorium.model.pretrain import (
     RunConfig,
@@ -78,6 +78,7 @@ from sensorium.model.pretrain import (
     train,
 )
 from sensorium.model.probes import (
+    BINARY,
     Predictions,
     ProbeData,
     collect,
@@ -251,12 +252,16 @@ def write_cache(jobs: int, names: tuple[str, ...]) -> None:
         build_cache(files(s, "pretrain"), cache_dir(s), CACHE_SIZE, jobs)
 
 
+EW_SIGNALS = ("effector_speed", "effector_effort")
+"""B-variety-ew's pre-registered signal set (``docs/model.md``)."""
+
+
 def events_path(name: str, key: str = "pretrain") -> Path:
     """The start-weight file of a set's ``pretrain`` (training) or ``heldout`` (table only)."""
     return ROOT / "events" / f"{key}-{DIRS[name]}.json"
 
 
-def write_events(key: str, cache: bool, truth: bool, use: Sequence[str] = SIGNALS) -> None:
+def write_events(key: str, cache: bool, truth: bool, use: Sequence[str] = EW_SIGNALS) -> None:
     """Start weights of each set's ``key`` episodes, with the scales fitted on both sets, and the
     table of drawn-window event shares (``truth``: also privileged events, full episodes only)."""
     paths = {s: files(s, key) for s in SETS}
@@ -265,12 +270,15 @@ def write_events(key: str, cache: bool, truth: bool, use: Sequence[str] = SIGNAL
     model = load_config(BASE).model
     say(f"\nDrawn windows with an event ({key} episodes, signals {', '.join(use)}; unweighted ->")
     say("weighted)\n")
-    head = "| set | event steps | label-free event | rest draws | max start / uniform |"
+    head = (
+        "| set | event steps | label-free event | rest draws | pincer draws | max start / uniform |"
+    )
     say(head + (" caused-change event | hand-object contact |" if truth else ""))
-    say("|---|---|---|---|---|" + ("---|---|" if truth else ""))
+    say("|---|---|---|---|---|---|" + ("---|---|" if truth else ""))
     for s in SETS:
-        signals, dts = collected[s]
-        index = index_from(paths[s], signals, dts, model.steps * model.substeps, scales)
+        signals, dts, kinds = collected[s]
+        span_steps = model.steps * model.substeps
+        index = index_from(paths[s], signals, dts, kinds, span_steps, scales)
         out = events_path(s, key)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(index))
@@ -288,6 +296,10 @@ def write_events(key: str, cache: bool, truth: bool, use: Sequence[str] = SIGNAL
         w_all = np.concatenate([weights[k] for k in flags])
         r_all = np.concatenate([rest[k] for k in flags])
         cells.append(f"{r_all.mean():.3f} -> {w_all[r_all].sum() / w_all.sum():.3f}")
+        pincer = [p.name for p, k in zip(paths[s], kinds, strict=True) if k == "pincer"]
+        n_pincer = sum(len(weights[n]) for n in pincer)
+        w_pincer = sum(weights[n].sum() for n in pincer)
+        cells.append(f"{n_pincer / len(w_all):.3f} -> {w_pincer / w_all.sum():.3f}")
         cells.append(f"{w_all.max() / w_all.mean():.2f}")
         if truth:
             for fn in (event_steps, lambda e: hand_object_touch(e).any(axis=1)):
@@ -745,8 +757,8 @@ def report() -> None:
 
 def did_verdict(weighted: Contrast | None, change: Contrast | None) -> str:
     """The pre-registered reading of the MAE variety drop under event weighting
-    (``docs/model.md``, B-variety-ew): ``weighted`` is ``variety - babble`` with the weighted
-    sampler, ``change`` is that minus the same contrast with the uniform sampler."""
+    (``docs/model.md``, B-variety-ew), on one judged score: ``weighted`` is ``variety - babble``
+    with the weighted sampler, ``change`` is that minus the same contrast with the uniform one."""
     if weighted is None or change is None:
         return "incomplete"
     if weighted.resolved and weighted.point < 0:
@@ -756,11 +768,60 @@ def did_verdict(weighted: Contrast | None, change: Contrast | None) -> str:
     return "inconclusive"
 
 
+def contact_aurocs(preds: list[Predictions]) -> list[Predictions]:
+    """The battery restricted to the three contact AUROCs (no log force, no tip)."""
+    return [p.subset(BINARY) for p in preds]
+
+
+def outcome_family(
+    test: str, arm: str, step: int | None, root: Path | None = None
+) -> list[Predictions]:
+    """Outcome-probe predictions (``scripts/outcome_test.py`` under ``root``) of an arm's seeds at
+    a step, or of the floors (``arm == "floor"``)."""
+    names = (
+        [f"floor-vp-s{s}" for s in FLOOR_SEEDS]
+        if arm == "floor"
+        else [f"{arm}-s{s}-n{step}" for s in SEEDS]
+    )
+    out = []
+    for name in names:
+        path = (root or ROOT) / "outcomes" / "preds" / test / f"{name}.npz"
+        if path.exists():
+            raw = np.load(path)
+            blocks = [slice(int(a), int(b)) for a, b in raw["edges"]]
+            out.append(
+                Predictions(
+                    raw["pred"], raw["target"], blocks, raw["groups"], OUTCOMES, OUTCOME_BINARY
+                )
+            )
+    return out
+
+
+JUDGED = ("contact AUROCs", "outcome battery")
+"""The scores B-variety-ew's verdicts are judged on (log force is reported, not judged)."""
+
+
+def judged(
+    test: str, arm: str, step: int | None, root: Path | None = None
+) -> dict[str, list[Predictions]]:
+    """An arm's (or the floors', ``arm == "floor"``) predictions on each judged score."""
+    if arm == "floor":
+        names = [f"floor-vp-s{s}" for s in FLOOR_SEEDS]
+        battery = [p for p in (load_predictions(test, n, root) for n in names) if p is not None]
+    else:
+        battery = family(test, arm, step or STEPS, root)
+    return {
+        "contact AUROCs": contact_aurocs(battery),
+        "outcome battery": outcome_family(test, arm, step, root),
+    }
+
+
 def compare(uniform: Path) -> None:
     """Event-weighted (this root) against uniform (``uniform``) B-variety-0: the pre-registered
     outcomes of B-variety-ew and the per-arm changes, at 10,000 steps (ceilings at 1,000)."""
     for test in SETS:
         say(f"\n## {test} test set: weighted ({ROOT}) against uniform ({uniform})\n")
+        say("Full battery mean, log force included (reported, not judged):\n")
         say("| arm | weighted | uniform | weighted - uniform (paired by seed) |")
         say("|---|---|---|---|")
         for arm in (*ARMS, *SUPERVISED):
@@ -768,23 +829,42 @@ def compare(uniform: Path) -> None:
             w, u = family(test, arm, step), family(test, arm, step, uniform)
             c = contrast(w, u, paired=True) if len(w) == len(u) > 1 else None
             say(f"| {arm} | {scale.cell(w)} | {scale.cell(u)} | {describe(c) if c else '-'} |")
-        say("\n| objective | variety - babble, weighted | change from uniform | reading |")
-        say("|---|---|---|---|")
-        for obj in ("mae", "jepa"):
-            a, b = f"{obj}-variety", f"{obj}-babble"
-            fams = [family(test, a, STEPS), family(test, b, STEPS)]
-            fams += [family(test, a, STEPS, uniform), family(test, b, STEPS, uniform)]
-            weighted = paired_at(test, a, b, STEPS)
-            ok = len({len(f) for f in fams}) == 1 and len(fams[0]) > 1
-            change = difference_in_differences(*fams) if ok else None
-            say(
-                f"| {obj} | {describe(weighted) if weighted else '-'} | "
-                f"{describe(change) if change else '-'} | {did_verdict(weighted, change)} |"
-            )
-        say("\n| arm (weighted) | minus floor | reading |\n|---|---|---|")
-        for arm in ARMS:
-            c = against(test, arm, STEPS, floors(test))
-            say(f"| {arm} | {describe(c) if c else '-'} | {level(c)} the floor |")
+            if w and u:
+                terms = [k for k in w[0].scores() if k != "mean"]
+                deltas = [
+                    np.mean([p.scores()[k] for p in w]) - np.mean([p.scores()[k] for p in u])
+                    for k in terms
+                ]
+                say(
+                    "|  | per term, weighted - uniform: "
+                    + ", ".join(f"{k} {d:+.3f}" for k, d in zip(terms, deltas, strict=True))
+                    + " | | |"
+                )
+        for score in JUDGED:
+            say(f"\nP1 on the {score}: variety - babble at {STEPS:,}\n")
+            say("| objective | weighted | change from uniform | reading |\n|---|---|---|---|")
+            for obj in ("mae", "jepa"):
+                a, b = f"{obj}-variety", f"{obj}-babble"
+                fams = [
+                    judged(test, a, STEPS)[score],
+                    judged(test, b, STEPS)[score],
+                    judged(test, a, STEPS, uniform)[score],
+                    judged(test, b, STEPS, uniform)[score],
+                ]
+                ok = len({len(f) for f in fams}) == 1 and len(fams[0]) > 1
+                weighted = contrast(fams[0], fams[1], paired=True) if ok else None
+                change = difference_in_differences(*fams) if ok else None
+                say(
+                    f"| {obj} | {describe(weighted) if weighted else '-'} | "
+                    f"{describe(change) if change else '-'} | {did_verdict(weighted, change)} |"
+                )
+            say(f"\nP2 on the {score}: weighted arm minus floor\n")
+            say("| arm | minus floor | reading |\n|---|---|---|")
+            floor = judged(test, "floor", None)[score]
+            for arm in ARMS:
+                fam = judged(test, arm, STEPS)[score]
+                c = contrast(fam, floor, paired=False) if fam and floor else None
+                say(f"| {arm} | {describe(c) if c else '-'} | {level(c)} the floor |")
 
 
 def main() -> None:
@@ -820,7 +900,11 @@ def main() -> None:
     )
     parser.add_argument("--truth", action="store_true", help="events: privileged columns too")
     parser.add_argument(
-        "--signals", nargs="+", choices=ALL_SIGNALS, default=SIGNALS, help="events: signals"
+        "--signals",
+        nargs="+",
+        choices=ALL_SIGNALS,
+        default=EW_SIGNALS,
+        help="events: signals (default: B-variety-ew's pre-registered set)",
     )
     args = parser.parse_args()
     DATA, ROOT, CACHE = args.data, args.root, args.cache
