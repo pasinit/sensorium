@@ -1684,6 +1684,116 @@ Memory: two caches of n x 32 MB each in the page cache (20 to 32 GB) plus 12 pro
 1.5 GB, about 60 to 85 GB. Training cost does not depend on n (fixed steps). At
 about $1.55 per hour on demand (Spot about $0.5 to $0.6) that is about $4 to $5 on demand.
 
+### B-variety-0: results (GCP, 32 vCPU, 3 seeds; `scripts/variety_test.py report`)
+
+**Deviation from the expected sizes (the rule held).** Generation was time-boxed. `babble_v2` finished
+(1,110 episodes); `variety` stopped at 891. 19 of its 30 blocks are full (37). The other 11 stopped
+between 9 and 29 episodes, and push, topple, slide, press and door lost the most. So the pre-registered
+matched count is **n = 891 - 100 = 791** pretraining episodes per set. The split step fixed it before any
+training. Variety episodes per program (held-out + pretraining; planned in brackets): lift_drop 152
+(185), babbling 148 (148), knock 148 (148), push 97 (148), slide 90 (111), press 88 (111), door 85
+(111), topple 83 (148). Babbling is therefore 17% of the variety set instead of 13%. The held-out draw
+takes 3 or 4 episodes from every block, so short blocks are over-represented in the variety test set.
+Figures are in `runs/variety/figures/` (not committed).
+
+Held-out probe mean at 10,000 steps (mean +- sd over 3 seeds; floor 5 seeds; the supervised ceilings at
+1,000 steps):
+
+| encoder | babble test | variety test |
+|---|---|---|
+| jepa-babble | 0.33 +- 0.02 | 0.40 +- 0.00 |
+| jepa-variety | 0.34 +- 0.01 | 0.39 +- 0.01 |
+| mae-babble | 0.45 +- 0.01 | 0.49 +- 0.00 |
+| mae-variety | 0.42 +- 0.01 | 0.47 +- 0.00 |
+| floor V+P (random init) | 0.40 +- 0.01 | 0.47 +- 0.01 |
+| raw proprio K = 4 (no `eff_`) | 0.47 | 0.51 |
+| sup-babble | 0.63 +- 0.00 | 0.63 +- 0.01 |
+| sup-variety | 0.56 +- 0.01 | 0.62 +- 0.01 |
+
+Probe mean against steps, babble test (variety test in brackets):
+
+| arm | 0 | 250 | 1,000 | 2,500 | 5,000 | 10,000 |
+|---|---|---|---|---|---|---|
+| jepa-babble | 0.40 (0.47) | 0.37 (0.44) | 0.35 (0.43) | 0.34 (0.41) | 0.33 (0.40) | 0.33 (0.40) |
+| jepa-variety | 0.40 (0.47) | 0.32 (0.39) | 0.32 (0.40) | 0.32 (0.40) | 0.33 (0.40) | 0.34 (0.39) |
+| mae-babble | 0.40 (0.47) | 0.40 (0.46) | 0.41 (0.47) | 0.44 (0.49) | 0.44 (0.49) | 0.45 (0.49) |
+| mae-variety | 0.40 (0.47) | 0.40 (0.47) | 0.39 (0.45) | 0.40 (0.46) | 0.40 (0.46) | 0.42 (0.47) |
+
+Held-out / training loss and rank at 10,000 (babble test): jepa-babble 0.078 / 0.090, rank 41.3;
+jepa-variety 0.069 / 0.068, rank 41.4; mae-babble 0.405 / 0.424, rank 61.0; mae-variety 0.447 / 0.428,
+rank 59.0. Step 0: rank 55.7, every arm.
+
+**Pre-registered outcomes** (10,000 steps; paired by seed and episode; combined SE and MDD):
+
+| objective | variety - babble, babble test (primary) | variety test (secondary) | reading |
+|---|---|---|---|
+| MAE (P1) | **-0.030** (SE 0.008, MDD 0.021): **variety harms** | -0.028 (SE 0.005, MDD 0.013): variety harms | **variety harms** |
+| JEPA (P2) | +0.003 (SE 0.007, MDD 0.020): **no effect** | -0.004 (SE 0.006, MDD 0.016): no effect | **no effect** |
+
+| JEPA minus floor | babble test | variety test |
+|---|---|---|
+| jepa-babble | -0.064 (MDD 0.037), below | -0.074 (MDD 0.025), below |
+| jepa-variety | -0.061 (MDD 0.029), below | -0.078 (MDD 0.027), below |
+
+**Reported with it** (combined SE; *resolved* = beyond 2.8 SE):
+
+| contrast | babble test | variety test |
+|---|---|---|
+| mae-variety - mae-babble at 1,000 / 2,500 / 5,000 | -0.027 / -0.035 / -0.041, all resolved | -0.022 / -0.029 / -0.030, all resolved |
+| jepa-variety - jepa-babble at 250 | -0.051 (0.013), resolved | -0.050 (0.010), resolved |
+| sup-variety - sup-babble | **-0.073 (0.010), resolved** | **-0.019 (0.006), resolved** |
+| mae - jepa, babble data | +0.114 (0.015), resolved | +0.096 (0.008), resolved |
+| mae - jepa, variety data | +0.081 (0.008), resolved | +0.072 (0.010), resolved |
+| mae-babble - floor | +0.050 (0.008), resolved | +0.022 (0.007), resolved |
+| mae-variety - floor | +0.020 (0.008) | -0.006 (0.009) |
+| mae-babble - raw proprio | -0.024 (0.011) | -0.013 (0.013) |
+| mae-variety - raw proprio | -0.054 (0.011), resolved | -0.041 (0.015), resolved |
+| raw proprio - floor | +0.074 (0.009), resolved | +0.035 (0.011), resolved |
+
+**Hidden-property probes (exploratory): at chance everywhere.** Log mass, friction and log softness R^2
+lie between -0.05 and +0.01 for every arm, bar and both supervised ceilings, on both test sets. That
+confirms B-s2b-0: the probe has no range at this scale, even with lifts in the data.
+
+**Diagnostic: which probe targets move** (`runs/variety/probes`, means over seeds). In the probe mean,
+a term's contribution is 2 x delta AUROC / 5 for a contact term and delta R^2 / 5 for force and tip:
+
+| delta (variety - babble arm) | contact L | contact R | contact object | log force R^2 | tip R^2 | mean |
+|---|---|---|---|---|---|---|
+| MAE, babble test | -0.017 | -0.006 | -0.020 | -0.043 | -0.022 | -0.030 |
+| MAE, variety test | -0.010 | -0.011 | -0.015 | -0.043 | -0.023 | -0.028 |
+| sup, babble test | -0.032 | -0.029 | -0.061 | -0.018 | **-0.107** | -0.073 |
+| sup, variety test | -0.005 | -0.008 | -0.012 | -0.001 | -0.044 | -0.019 |
+| JEPA, babble test | +0.010 | +0.019 | -0.049 | +0.062 | -0.005 | +0.003 |
+
+Label rates of the held-out windows (7,500 per test set): babble contact L / R / object 0.46 / 0.51 /
+0.27; variety 0.55 / 0.55 / 0.23. Rates in the pretraining episodes were not measured: the episodes are
+in the bucket, not on the Mac. The held-out sets are stratified samples of the same blocks, so their
+rates are a proxy.
+
+**Reading.**
+
+* **At equal volume, the experiment programs make MAE worse, not better.** The loss is resolved on both
+  test sets, including the variety set itself. There `mae-variety` sits at its floor (-0.006) while
+  `mae-babble` is above it (+0.022). The drop is spread over every target. The largest single term is
+  log-force R^2 (-0.043 on both test sets), then object contact and tip. MAE on variety also ends with a
+  higher held-out reconstruction loss on babbling (0.447 against 0.405).
+* **The supervised ceiling drops too, so the drop is not only the objective.** `sup-variety` is 0.073
+  below `sup-babble` on babbling and 0.019 below on its own test set. Most of it is the **tip position**
+  (R^2 -0.107 on babbling) and object contact. A plausible reading: babbling covers the reachable space
+  evenly, while program episodes repeat a few approach paths, so less of the tip space is covered.
+  This is not yet measured.
+* **The varied data is not poorer in contact overall**: more hand contact (0.55 against 0.46 to 0.51),
+  slightly less object contact (0.23 against 0.27).
+* **JEPA is unchanged by variety** (no effect at 10,000) and below its floor in all four cells, as in
+  B-scale-0. The variety arm drains faster early (-0.051 at 250, resolved) and ends at the same place.
+* **Caveats.** The variety set is partial and skewed (push and topple at 66% and 56% of plan, and 17%
+  babbling), so "variety" here is this particular mix. It is one pretraining size (791), 3 seeds, the
+  tiny model at 64 px, with the frame cache for training. The probe battery (contact, force, tip) may not
+  measure what experiments add: their outcomes (displacement, lift, toppling) are not among its targets.
+  The hidden-property probe that was meant to see them has no range.
+* Expectation in advance: P1 no effect or "own distribution only"; P2 no effect. P2 matched. P1 was
+  wrong in sign.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
@@ -1724,8 +1834,9 @@ anything repeated.
 
 ## Next
 
-* **B-variety-0** (pre-registered above, data from Track A): JEPA and MAE on n (matched) variety
-  against n babble_v2 episodes at 10,000 steps, probed on both held-out sets.
+* **B-variety-0** is done (n = 791 matched): MAE variety harms (-0.030 on babbling, -0.028 on the
+  variety set, both resolved), JEPA no effect and below its floor everywhere; the supervised ceiling
+  also drops on variety data (-0.073), mostly tip position. Results above.
 * **B-scale-0** is done (verdict: no effect of data volume on the JEPA; MAE resolves above its floor;
   results above).
 
