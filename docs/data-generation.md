@@ -49,6 +49,12 @@ One body, one episode, one compressed `.npz`. Arrays indexed by time share `T`.
   dirty flag, Python, platform and package versions. Per episode it stores the
   seed, length, end reason and a **content hash** of all arrays (independent of
   zip metadata).
+  As episodes finish, their entries also go to `manifest.parts/<body>[-<variant>].jsonl`,
+  so a run stopped before the end (a time-boxed machine) keeps its manifest.
+- **Stuck episodes:** each episode has a wall-clock limit (`episode_timeout_s`, default 3,600 s);
+  one past it is skipped with a stack dump in the log and its block goes on with the next index.
+  Native crashes also dump their stack (`faulthandler`). The variety run lost the block
+  `hand_topple_01` after 9 episodes to an episode that never ended and left no trace in the log.
 - **Verified:** regenerating `configs/smoke.toml` gives identical content
   hashes for all three bodies, and `configs/sample_h1.toml` (8 humanoid
   episodes, fresh processes) for all 8, on the same machine. Rendering can differ across

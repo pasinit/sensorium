@@ -17,17 +17,26 @@ Each body runs in its own process (simulators don't share a process well:
 e.g. MuJoCo's renderer fails to load after MetaDrive), so bodies also
 generate in parallel.
 
+Each episode has a wall-clock limit (``episode_timeout_s``, top level or per body or variant;
+default ``EPISODE_TIMEOUT_S``): an episode still running then is abandoned with a stack dump in the
+log, the recorder is rebuilt and the next episode starts (a variety run lost a whole block to one
+episode that never finished). A crash in native code also dumps the stack (``faulthandler``).
+As episodes finish, their manifest entries are appended to
+``<out_dir>/manifest.parts/<body>[-<variant>].jsonl``, so a run stopped early keeps them.
+
 ``<out_dir>/manifest.json`` records the config, the code version (git commit,
 dirty flag), package versions, platform, and per episode its seed, policy,
 length and a content hash of its arrays. The content hash ignores zip
 metadata, so two runs that produce identical data have identical hashes.
 """
 
+import faulthandler
 import hashlib
 import json
 import logging
 import multiprocessing
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -43,6 +52,17 @@ from sensorium.episode import Episode
 log = logging.getLogger("sensorium.generate")
 
 BODIES = ("car", "drone", "piano", "humanoid")
+EPISODE_TIMEOUT_S = 3600  # an episode takes 1-12 minutes; one past an hour is stuck
+
+
+class EpisodeTimeout(Exception):
+    """An episode ran past its wall-clock limit."""
+
+
+def _on_alarm(signum: int, frame: object) -> None:
+    raise EpisodeTimeout
+
+
 TRACKED_PACKAGES = (
     "numpy", "metadrive-simulator", "gym-pybullet-drones", "pybullet",
     "robopianist", "mujoco", "dm-control", "zarr",
@@ -101,46 +121,71 @@ def record_body(
 ) -> list[dict[str, object]]:
     """Record and save every episode for one body (or one variant of it).
 
-    Returns their manifest entries. Runs inside a worker process, one per body
-    (or variant).
+    Returns their manifest entries (and appends each to ``manifest.parts``). Runs inside a worker
+    process, one per body (or variant). An episode past ``episode_timeout_s`` seconds is skipped
+    (logged with a stack dump) and the recorder rebuilt; its index is missing from the output.
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")  # worker processes too
+    faulthandler.enable(all_threads=True)  # a crash in native code leaves its stack in the log
     settings = dict(spec.get("settings", {}))  # type: ignore[call-overload]
+    timeout = int(spec.get("episode_timeout_s", EPISODE_TIMEOUT_S))  # type: ignore[call-overload]
+    stem = "-".join([body, *([variant] if variant else []), "%s"])
+    parts = (
+        out_dir / "manifest.parts" / f"{'-'.join([body, *([variant] if variant else [])])}.jsonl"
+    )
+    parts.parent.mkdir(parents=True, exist_ok=True)
     entries: list[dict[str, object]] = []
     recorder = make_recorder(body, settings)
+    previous = signal.signal(signal.SIGALRM, _on_alarm)
     try:
         for policy in spec["policies"]:  # type: ignore[attr-defined]
             for index in range(int(spec["episodes_per_policy"])):  # type: ignore[call-overload]
                 seed = episode_seed(master_seed, body, policy, index, variant)
+                name = f"{body}/{stem % policy}-{index:03d}.npz"
                 started = time.time()
-                episode = recorder.record(seed=seed, policy=policy, steps=int(spec["steps"]))  # type: ignore[call-overload]
-                stem = "-".join([body, *([variant] if variant else []), policy])
-                name = f"{body}/{stem}-{index:03d}.npz"
+                # a hang in native code never returns to Python: dump its stack a bit later
+                faulthandler.dump_traceback_later(timeout + 60, exit=False)
+                signal.alarm(timeout)
+                try:
+                    episode = recorder.record(seed=seed, policy=policy, steps=int(spec["steps"]))  # type: ignore[call-overload]
+                except EpisodeTimeout:
+                    log.warning(
+                        "[%s] %s (seed %d): no end after %d s, skipped", body, name, seed, timeout
+                    )
+                    faulthandler.dump_traceback(all_threads=True)
+                    recorder.close()
+                    recorder = make_recorder(body, settings)
+                    continue
+                finally:
+                    signal.alarm(0)
+                    faulthandler.cancel_dump_traceback_later()
                 episode.save(out_dir / name)
-                entries.append(
-                    {
-                        "file": name,
-                        "body": body,
-                        "policy": policy,
-                        **({"variant": variant} if variant else {}),
-                        "index": index,
-                        # Registry keys (docs/pools.md): what the episode is about and which
-                        # specific content it has; the effector when the body has variants.
-                        "task": episode.meta.get("task"),
-                        "instance": episode.meta.get("instance", "default"),
-                        **{k: episode.meta[k] for k in ("effector",) if k in episode.meta},
-                        "seed": seed,
-                        "steps": episode.length,
-                        "end_reason": episode.meta.get("end_reason"),
-                        "content_hash": content_hash(episode),
-                    }
-                )
+                entry = {
+                    "file": name,
+                    "body": body,
+                    "policy": policy,
+                    **({"variant": variant} if variant else {}),
+                    "index": index,
+                    # Registry keys (docs/pools.md): what the episode is about and which
+                    # specific content it has; the effector when the body has variants.
+                    "task": episode.meta.get("task"),
+                    "instance": episode.meta.get("instance", "default"),
+                    **{k: episode.meta[k] for k in ("effector",) if k in episode.meta},
+                    "seed": seed,
+                    "steps": episode.length,
+                    "end_reason": episode.meta.get("end_reason"),
+                    "content_hash": content_hash(episode),
+                }
+                entries.append(entry)
+                with parts.open("a") as handle:
+                    handle.write(json.dumps(entry, default=str) + "\n")
                 seconds = time.time() - started
                 end = episode.meta.get("end_reason")
                 log.info(
                     "[%s] %s: %d steps (%s) in %.1fs", body, name, episode.length, end, seconds
                 )
     finally:
+        signal.signal(signal.SIGALRM, previous)
         recorder.close()
     return entries
 
@@ -158,11 +203,13 @@ def generate(config_path: Path) -> Path:
     bodies = [body for body in BODIES if body in config]
     jobs: list[tuple[str, dict[str, object], int, Path, str]] = []
     for body in bodies:
+        limit = {"episode_timeout_s": config.get("episode_timeout_s", EPISODE_TIMEOUT_S)}
         if "policies" in config[body]:
-            jobs.append((body, config[body], master_seed, out_dir, ""))
+            jobs.append((body, {**limit, **config[body]}, master_seed, out_dir, ""))
         else:  # a table of named variants
             jobs += [
-                (body, spec, master_seed, out_dir, name) for name, spec in config[body].items()
+                (body, {**limit, **spec}, master_seed, out_dir, name)
+                for name, spec in config[body].items()
             ]
     workers = min(len(jobs), int(config.get("workers", len(jobs))))  # top-level cap on processes
     with multiprocessing.get_context("spawn").Pool(workers) as pool:
