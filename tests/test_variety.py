@@ -203,3 +203,38 @@ def test_variety_end_to_end_tiny(
     assert "Pre-registered outcomes" in out and "jepa" in out and "EXPLORATORY" in out
     assert (tmp_path / "runs/figures/variety_probe_babble.png").exists()
     assert (tmp_path / "runs/figures/variety_curves_variety.png").exists()
+    # the event-weighted rerun: same split, its own root, compared with the uniform runs
+    uniform = tmp_path / "runs"
+    monkeypatch.setattr(script, "ROOT", tmp_path / "runs_ew")
+    (tmp_path / "runs_ew").mkdir()
+    (tmp_path / "runs_ew/split.json").write_text((uniform / "split.json").read_text())
+    script.write_events("pretrain", cache=True, truth=False)
+    assert script.events_path("variety").exists()
+    for arm in ("jepa-babble", "jepa-variety", "sup-babble"):
+        for seed in (0, 1):
+            script.train_arm(arm, seed, 0, 0, events=True)
+    config = (tmp_path / "runs_ew/runs/jepa-variety-s0/config.toml").read_text()
+    assert "pretrain-variety.json" in config
+    script.probe_all(0, 1)
+    capsys.readouterr()
+    script.compare(uniform)
+    out = capsys.readouterr().out
+    readings = ("drop persists", "drop removed", "inconclusive")
+    assert "weighted - uniform" in out and any(r in out for r in readings)
+
+
+@pytest.mark.parametrize(
+    ("weighted", "change", "reading"),
+    [
+        (-0.10, 0.0, "drop persists"),
+        (-0.01, 0.10, "drop removed"),
+        (0.10, 0.10, "drop removed"),
+        (-0.01, 0.01, "inconclusive"),
+    ],
+)
+def test_weighted_rerun_verdict_covers_each_outcome(
+    script: Any, weighted: float, change: float, reading: str
+) -> None:
+    w, c = Contrast(weighted, 0.01, 0.0, 3, 3), Contrast(change, 0.01, 0.0, 3, 3)
+    assert script.did_verdict(w, c) == reading
+    assert script.did_verdict(None, c) == "incomplete"

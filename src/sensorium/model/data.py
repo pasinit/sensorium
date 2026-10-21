@@ -296,7 +296,9 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
     """An endless stream of random training sequences from a list of episode files.
 
     Episodes are drawn with probability proportional to their number of valid start
-    positions, so every window of every episode is equally likely. Decoded episodes are
+    positions, so every window of every episode is equally likely; with ``start_weights``,
+    proportional to the sum of their start weights, and the start within the episode in
+    proportion to its weight (``sensorium.model.events``). Decoded episodes are
     kept in a small per-worker LRU cache. Each worker (and the main process) has its own
     random stream, derived from ``seed``, so a run is reproducible for a fixed
     ``num_workers``.
@@ -308,9 +310,11 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
         cfg: Sequence cutting and augmentation.
         seed: Base seed of the random streams.
         train: Random crop and touch noise if true, centre crop if false.
+        start_weights: Optional ``{episode file name: [weight per valid start]}``.
 
     Raises:
-        ValueError: if no episode is long enough for one sequence.
+        ValueError: if no episode is long enough for one sequence, or ``start_weights`` misses an
+            episode or has the wrong number of starts for one.
     """
 
     def __init__(
@@ -321,18 +325,27 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
         cfg: LoaderConfig,
         seed: int = 0,
         train: bool = True,
+        start_weights: Mapping[str, np.ndarray] | None = None,
     ) -> None:
         self.paths = [Path(p) for p in paths]
         self.space, self.cfg, self.seed, self.train = space, cfg, seed, train
         self.senses = check_senses(senses)
         self._cache: OrderedDict[Path, Loaded] = OrderedDict()
-        weights = []
+        weights: list[float] = []
         for path in self.paths:
             header = read_header(path)
             with np.load(path, allow_pickle=False) as data:
                 length = int(data["action"].shape[0])
             span = cfg.steps * cfg.substeps * spacing(header.dt)
             weights.append(max(length - span + 1, 0))
+        self._start_p: list[np.ndarray | None] = [None] * len(self.paths)
+        if start_weights is not None:
+            for i, path in enumerate(self.paths):
+                w = np.asarray(start_weights[path.name], dtype=np.float64)
+                if len(w) != weights[i]:
+                    raise ValueError(f"{path.name}: {len(w)} start weights, {weights[i]} starts")
+                weights[i] = float(w.sum())
+                self._start_p[i] = w / w.sum() if w.sum() > 0 else None
         if sum(weights) == 0:
             raise ValueError("no episode is long enough for one sequence")
         self._weights = np.array(weights, dtype=np.float64) / sum(weights)
@@ -355,21 +368,31 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
 
     def sample(self, rng: np.random.Generator) -> dict[str, np.ndarray]:
         """Draw one sequence."""
-        return self._cut(self._pick(rng), rng)
+        i = self._pick(rng)
+        return self._cut(i, self.load(self.paths[i]), rng)
 
-    def _pick(self, rng: np.random.Generator) -> Loaded:
-        return self.load(self.paths[int(rng.choice(len(self.paths), p=self._weights))])
+    def _pick(self, rng: np.random.Generator) -> int:
+        return int(rng.choice(len(self.paths), p=self._weights))
 
-    def _cut(self, loaded: Loaded, rng: np.random.Generator) -> dict[str, np.ndarray]:
-        return sequence_from_episode(loaded, self.space, self.senses, self.cfg, rng, self.train)
+    def _start(self, i: int, rng: np.random.Generator) -> int | None:
+        """A weighted start in episode ``i``, or ``None`` (uniform, drawn by the cutter)."""
+        p = self._start_p[i]
+        return None if p is None else int(rng.choice(len(p), p=p))
+
+    def _cut(self, i: int, loaded: Loaded, rng: np.random.Generator) -> dict[str, np.ndarray]:
+        start = self._start(i, rng)
+        return sequence_with_ends(
+            loaded, self.space, self.senses, self.cfg, rng, self.train, start=start
+        )[0]
 
     def __iter__(self) -> Iterator[dict[str, np.ndarray]]:
         info = get_worker_info()
         rng = np.random.default_rng([self.seed, info.id if info else 0])
         while True:
-            loaded = self._pick(rng)
+            i = self._pick(rng)
+            loaded = self.load(self.paths[i])
             for _ in range(self.cfg.reuse):
-                yield self._cut(loaded, rng)
+                yield self._cut(i, loaded, rng)
 
 
 def to_tensors(batch: Mapping[str, np.ndarray]) -> dict[str, torch.Tensor]:

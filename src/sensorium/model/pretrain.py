@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader
 
 from sensorium.episode import Episode
 from sensorium.model.data import LoaderConfig, SequenceDataset, compute_stats, spacing
+from sensorium.model.events import load_start_weights
 from sensorium.model.layout import INPUT_KEY, ChannelSpace, check_senses, read_header
 from sensorium.model.probes import run_probes
 from sensorium.model.sensory_layer import (
@@ -56,6 +57,8 @@ class DataConfig:
             one space (so a model trained on one kind of episode can be probed on another).
         drop_prefix: Proprio channel-name prefixes left out of the channel space (``("eff_",)``
             removes the actuator-effort channels: "proprio without effort").
+        event_index: Optional start-weight file of ``sensorium.model.events``: sequences are
+            drawn toward event windows (label-free signals) instead of uniformly.
     """
 
     paths: tuple[str, ...] = ()
@@ -65,6 +68,7 @@ class DataConfig:
     subset_key: str = ""
     space_paths: tuple[str, ...] = ()
     drop_prefix: tuple[str, ...] = ()
+    event_index: str = ""
 
 
 @dataclass(frozen=True)
@@ -347,7 +351,8 @@ def _record(
 def make_dataset(
     cfg: RunConfig, paths: Sequence[Path], space: ChannelSpace, senses: Sequence[str]
 ) -> SequenceDataset:
-    """The training sequences of a run: uniform, or restricted to a class of an index."""
+    """The training sequences of a run: uniform, restricted to a class of an index, or weighted
+    toward events (``data.event_index``)."""
     if cfg.data.subset_index:
         return IndexedSequences(
             paths,
@@ -358,7 +363,8 @@ def make_dataset(
             cfg.data.subset_key,
             seed=cfg.seed,
         )
-    return SequenceDataset(paths, space, senses, cfg.loader(), seed=cfg.seed)
+    weights = load_start_weights(Path(cfg.data.event_index)) if cfg.data.event_index else None
+    return SequenceDataset(paths, space, senses, cfg.loader(), seed=cfg.seed, start_weights=weights)
 
 
 def save_step(

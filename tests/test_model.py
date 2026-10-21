@@ -1496,6 +1496,38 @@ def test_paired_contrast_seed_and_episode_errors() -> None:
         contrast([same], [same, same], paired=True)
 
 
+def test_prediction_subset_scores_only_its_labels() -> None:
+    pred = synthetic_predictions(np.repeat(np.arange(10), 12), 0.5, 0)
+    full = pred.scores()
+    aurocs = pred.subset(probes.BINARY)
+    sub = aurocs.scores()
+    assert set(sub) == {f"{n}_auroc" for n in probes.BINARY} | {"mean"}
+    assert all(sub[k] == full[k] for k in sub if k != "mean")
+    assert sub["mean"] == pytest.approx(np.mean([2 * (sub[k] - 0.5) for k in sub if k != "mean"]))
+    assert pred.subset(("tip",)).pred.shape[1] == 6
+    with pytest.raises(ValueError, match="not in"):
+        pred.subset(("speed",))
+
+
+def test_difference_in_differences_matches_two_paired_contrasts() -> None:
+    from sensorium.model.paired import contrast, difference_in_differences  # noqa: PLC0415
+
+    groups = np.repeat(np.arange(10), 12)
+    fam = {
+        k: [synthetic_predictions(groups, noise, s + 10 * i) for s in range(3)]
+        for i, (k, noise) in enumerate((("a", 0.3), ("b", 0.6), ("c", 0.5), ("d", 0.6)))
+    }
+    did = difference_in_differences(fam["a"], fam["b"], fam["c"], fam["d"], draws=40)
+    first = contrast(fam["a"], fam["b"], paired=True, draws=40)
+    second = contrast(fam["c"], fam["d"], paired=True, draws=40)
+    assert did.point == pytest.approx(first.point - second.point)
+    assert did.point > 0 and did.se > 0
+    same = difference_in_differences(fam["a"], fam["b"], fam["a"], fam["b"], draws=20)
+    assert same.point == 0 and same.seed_se == 0 and same.episode_se == 0
+    with pytest.raises(ValueError, match="equal size"):
+        difference_in_differences(fam["a"], fam["b"], fam["c"], fam["d"][:2])
+
+
 @pytest.mark.parametrize(
     ("best", "last", "verdict"),
     [

@@ -25,6 +25,14 @@ The SSL arms read their episodes from a 128 px frame cache per set (opt-in, as B
     uv run python scripts/variety_test.py probe [--shard 0/16]
     uv run python scripts/variety_test.py report
 
+Event-weighted variant (``sensorium.model.events``; same split, its own root): ``events`` writes the
+start weights of each set's pretraining episodes (label-free signals from the frame cache, scales
+fitted on both sets together) and prints the share of drawn windows with an event; ``--events``
+makes ``train`` draw from them. Probes and test sets are unweighted as always.
+
+    uv run python scripts/variety_test.py events --root runs/variety_ew
+    uv run python scripts/variety_test.py train --events --root runs/variety_ew --arm mae-variety
+
 Pre-registration and outcome rules: ``docs/model.md``, "B-variety-0".
 """
 
@@ -35,6 +43,7 @@ import logging
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -45,11 +54,21 @@ import torch
 
 from sensorium.episode import Episode
 from sensorium.model.controls import SupervisedConfig, build_probe_data, train_supervised
-from sensorium.model.data import LoaderConfig, build, load_episode
+from sensorium.model.data import LoaderConfig, build, load_episode, spacing
 from sensorium.model.diagnostics import heldout_loss, state_geometry
+from sensorium.model.events import (
+    ALL_SIGNALS,
+    collect_signals,
+    event_flags,
+    fit_scales,
+    index_from,
+    raw_weights,
+    window_share,
+)
 from sensorium.model.frame_cache import build_cache
 from sensorium.model.layout import ChannelSpace
-from sensorium.model.paired import Contrast, contrast, describe
+from sensorium.model.outcomes import OUTCOME_BINARY, OUTCOMES
+from sensorium.model.paired import Contrast, contrast, describe, difference_in_differences
 from sensorium.model.pretrain import (
     RunConfig,
     TrainConfig,
@@ -59,9 +78,12 @@ from sensorium.model.pretrain import (
     train,
 )
 from sensorium.model.probes import (
+    BINARY,
     Predictions,
     ProbeData,
     collect,
+    event_steps,
+    hand_object_touch,
     predict_hidden,
     predict_probes,
 )
@@ -230,9 +252,71 @@ def write_cache(jobs: int, names: tuple[str, ...]) -> None:
         build_cache(files(s, "pretrain"), cache_dir(s), CACHE_SIZE, jobs)
 
 
-def train_arm(arm: str, seed: int, steps: int, workers: int, cache: bool = True) -> None:
-    """Pretrain one arm into ``runs/variety/runs/<arm>-s<seed>`` (from its set's frame cache
-    unless ``cache`` is false), or a supervised ceiling (always decodes: it reads labels)."""
+EW_SIGNALS = ("effector_speed", "effector_effort")
+"""B-variety-ew's pre-registered signal set (``docs/model.md``)."""
+
+
+def events_path(name: str, key: str = "pretrain") -> Path:
+    """The start-weight file of a set's ``pretrain`` (training) or ``heldout`` (table only)."""
+    return ROOT / "events" / f"{key}-{DIRS[name]}.json"
+
+
+def write_events(key: str, cache: bool, truth: bool, use: Sequence[str] = EW_SIGNALS) -> None:
+    """Start weights of each set's ``key`` episodes, with the scales fitted on both sets, and the
+    table of drawn-window event shares (``truth``: also privileged events, full episodes only)."""
+    paths = {s: files(s, key) for s in SETS}
+    collected = {s: collect_signals(paths[s], cache_dir(s) if cache else None) for s in SETS}
+    scales = fit_scales([sig for s in SETS for sig in collected[s][0]], use)
+    model = load_config(BASE).model
+    say(f"\nDrawn windows with an event ({key} episodes, signals {', '.join(use)}; unweighted ->")
+    say("weighted)\n")
+    head = (
+        "| set | event steps | label-free event | rest draws | pincer draws | max start / uniform |"
+    )
+    say(head + (" caused-change event | hand-object contact |" if truth else ""))
+    say("|---|---|---|---|---|---|" + ("---|---|" if truth else ""))
+    for s in SETS:
+        signals, dts, kinds = collected[s]
+        span_steps = model.steps * model.substeps
+        index = index_from(paths[s], signals, dts, kinds, span_steps, scales)
+        out = events_path(s, key)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(index))
+        weights = {k: np.asarray(v) for k, v in index["weights"].items()}  # type: ignore[attr-defined]
+        gap = spacing(dts[0])
+        flags = {p.name: event_flags(sig, scales) for p, sig in zip(paths[s], signals, strict=True)}
+        geometry = (model.steps, model.substeps, gap)
+        cells = [
+            f"{index['event_step_share']:.3f}",
+            f"{window_share(flags, None, *geometry):.3f} -> "
+            f"{window_share(flags, weights, *geometry):.3f}",
+        ]
+        span = model.steps * model.substeps * gap
+        rest = {k: raw_weights(flags[k], span) == 1.0 for k in flags}
+        w_all = np.concatenate([weights[k] for k in flags])
+        r_all = np.concatenate([rest[k] for k in flags])
+        cells.append(f"{r_all.mean():.3f} -> {w_all[r_all].sum() / w_all.sum():.3f}")
+        pincer = [p.name for p, k in zip(paths[s], kinds, strict=True) if k == "pincer"]
+        n_pincer = sum(len(weights[n]) for n in pincer)
+        w_pincer = sum(weights[n].sum() for n in pincer)
+        cells.append(f"{n_pincer / len(w_all):.3f} -> {w_pincer / w_all.sum():.3f}")
+        cells.append(f"{w_all.max() / w_all.mean():.2f}")
+        if truth:
+            for fn in (event_steps, lambda e: hand_object_touch(e).any(axis=1)):
+                true = {p.name: fn(Episode.load(p)) for p in paths[s]}
+                cells.append(
+                    f"{window_share(true, None, *geometry):.3f} -> "
+                    f"{window_share(true, weights, *geometry):.3f}"
+                )
+        say(f"| {s} | " + " | ".join(cells) + " |")
+
+
+def train_arm(
+    arm: str, seed: int, steps: int, workers: int, cache: bool = True, events: bool = False
+) -> None:
+    """Pretrain one arm into ``<root>/runs/<arm>-s<seed>`` (from its set's frame cache unless
+    ``cache`` is false), or a supervised ceiling (always decodes: it reads labels). ``events``
+    draws the training sequences with the set's start weights (``write_events``)."""
     base = load_config(BASE)
     out = ROOT / "runs"
     if arm in SUPERVISED:
@@ -242,6 +326,7 @@ def train_arm(arm: str, seed: int, steps: int, workers: int, cache: bool = True)
                 steps=steps or SUP_STEPS,
                 seed=seed,
                 workers=workers,
+                event_index=str(events_path(SUPERVISED[arm])) if events else "",
             ),
             files(SUPERVISED[arm], "pretrain"),
             shared_space(),
@@ -266,6 +351,7 @@ def train_arm(arm: str, seed: int, steps: int, workers: int, cache: bool = True)
         paths=tuple(str(p) for p in files(name, "pretrain")),
         space_paths=tuple(str(p) for p in space_files()),
         drop_prefix=DROP,
+        event_index=str(events_path(name)) if events else "",
     )
     model = replace(base.model, senses=NO_TOUCH, **extra)  # type: ignore[arg-type]
     augment = replace(
@@ -301,9 +387,10 @@ def raw_proprio_data(test: str) -> ProbeData:
     return build_probe_data(files(test, "heldout"), k, STRIDE, raw_features)
 
 
-def pred_path(test: str, name: str) -> Path:
-    """Out-of-fold predictions of one encoder on one test set."""
-    return ROOT / "preds" / test / f"{name}.npz"
+def pred_path(test: str, name: str, root: Path | None = None) -> Path:
+    """Out-of-fold predictions of one encoder on one test set (under ``root``, default the
+    current root)."""
+    return (root or ROOT) / "preds" / test / f"{name}.npz"
 
 
 def probe_path(test: str, name: str) -> Path:
@@ -320,9 +407,9 @@ def save_predictions(test: str, name: str, pred: Predictions) -> None:
 
 
 @functools.cache
-def load_predictions(test: str, name: str) -> Predictions | None:
+def load_predictions(test: str, name: str, root: Path | None = None) -> Predictions | None:
     """Inverse of ``save_predictions``; ``None`` if not probed (memoised)."""
-    path = pred_path(test, name)
+    path = pred_path(test, name, root)
     if not path.exists():
         return None
     raw = np.load(path)
@@ -390,9 +477,9 @@ def probe_all(shard: int, shards: int) -> None:
 # report
 
 
-def family(test: str, arm: str, step: int) -> list[Predictions]:
+def family(test: str, arm: str, step: int, root: Path | None = None) -> list[Predictions]:
     """Predictions of every probed seed of an arm at a checkpoint on a test set, in seed order."""
-    preds = [load_predictions(test, f"{arm}-s{s}-n{step}") for s in SEEDS]
+    preds = [load_predictions(test, f"{arm}-s{s}-n{step}", root) for s in SEEDS]
     return [p for p in preds if p is not None]
 
 
@@ -668,13 +755,127 @@ def report() -> None:
             plot_curves(test, ROOT / "figures" / f"variety_curves_{test}.png")
 
 
+def did_verdict(weighted: Contrast | None, change: Contrast | None) -> str:
+    """The pre-registered reading of the MAE variety drop under event weighting
+    (``docs/model.md``, B-variety-ew), on one judged score: ``weighted`` is ``variety - babble``
+    with the weighted sampler, ``change`` is that minus the same contrast with the uniform one."""
+    if weighted is None or change is None:
+        return "incomplete"
+    if weighted.resolved and weighted.point < 0:
+        return "drop persists"
+    if change.resolved and change.point > 0:
+        return "drop removed"
+    return "inconclusive"
+
+
+def contact_aurocs(preds: list[Predictions]) -> list[Predictions]:
+    """The battery restricted to the three contact AUROCs (no log force, no tip)."""
+    return [p.subset(BINARY) for p in preds]
+
+
+def outcome_family(
+    test: str, arm: str, step: int | None, root: Path | None = None
+) -> list[Predictions]:
+    """Outcome-probe predictions (``scripts/outcome_test.py`` under ``root``) of an arm's seeds at
+    a step, or of the floors (``arm == "floor"``)."""
+    names = (
+        [f"floor-vp-s{s}" for s in FLOOR_SEEDS]
+        if arm == "floor"
+        else [f"{arm}-s{s}-n{step}" for s in SEEDS]
+    )
+    out = []
+    for name in names:
+        path = (root or ROOT) / "outcomes" / "preds" / test / f"{name}.npz"
+        if path.exists():
+            raw = np.load(path)
+            blocks = [slice(int(a), int(b)) for a, b in raw["edges"]]
+            out.append(
+                Predictions(
+                    raw["pred"], raw["target"], blocks, raw["groups"], OUTCOMES, OUTCOME_BINARY
+                )
+            )
+    return out
+
+
+JUDGED = ("contact AUROCs", "outcome battery")
+"""The scores B-variety-ew's verdicts are judged on (log force is reported, not judged)."""
+
+
+def judged(
+    test: str, arm: str, step: int | None, root: Path | None = None
+) -> dict[str, list[Predictions]]:
+    """An arm's (or the floors', ``arm == "floor"``) predictions on each judged score."""
+    if arm == "floor":
+        names = [f"floor-vp-s{s}" for s in FLOOR_SEEDS]
+        battery = [p for p in (load_predictions(test, n, root) for n in names) if p is not None]
+    else:
+        battery = family(test, arm, step or STEPS, root)
+    return {
+        "contact AUROCs": contact_aurocs(battery),
+        "outcome battery": outcome_family(test, arm, step, root),
+    }
+
+
+def compare(uniform: Path) -> None:
+    """Event-weighted (this root) against uniform (``uniform``) B-variety-0: the pre-registered
+    outcomes of B-variety-ew and the per-arm changes, at 10,000 steps (ceilings at 1,000)."""
+    for test in SETS:
+        say(f"\n## {test} test set: weighted ({ROOT}) against uniform ({uniform})\n")
+        say("Full battery mean, log force included (reported, not judged):\n")
+        say("| arm | weighted | uniform | weighted - uniform (paired by seed) |")
+        say("|---|---|---|---|")
+        for arm in (*ARMS, *SUPERVISED):
+            step = SUP_STEPS if arm in SUPERVISED else STEPS
+            w, u = family(test, arm, step), family(test, arm, step, uniform)
+            c = contrast(w, u, paired=True) if len(w) == len(u) > 1 else None
+            say(f"| {arm} | {scale.cell(w)} | {scale.cell(u)} | {describe(c) if c else '-'} |")
+            if w and u:
+                terms = [k for k in w[0].scores() if k != "mean"]
+                deltas = [
+                    np.mean([p.scores()[k] for p in w]) - np.mean([p.scores()[k] for p in u])
+                    for k in terms
+                ]
+                say(
+                    "|  | per term, weighted - uniform: "
+                    + ", ".join(f"{k} {d:+.3f}" for k, d in zip(terms, deltas, strict=True))
+                    + " | | |"
+                )
+        for score in JUDGED:
+            say(f"\nP1 on the {score}: variety - babble at {STEPS:,}\n")
+            say("| objective | weighted | change from uniform | reading |\n|---|---|---|---|")
+            for obj in ("mae", "jepa"):
+                a, b = f"{obj}-variety", f"{obj}-babble"
+                fams = [
+                    judged(test, a, STEPS)[score],
+                    judged(test, b, STEPS)[score],
+                    judged(test, a, STEPS, uniform)[score],
+                    judged(test, b, STEPS, uniform)[score],
+                ]
+                ok = len({len(f) for f in fams}) == 1 and len(fams[0]) > 1
+                weighted = contrast(fams[0], fams[1], paired=True) if ok else None
+                change = difference_in_differences(*fams) if ok else None
+                say(
+                    f"| {obj} | {describe(weighted) if weighted else '-'} | "
+                    f"{describe(change) if change else '-'} | {did_verdict(weighted, change)} |"
+                )
+            say(f"\nP2 on the {score}: weighted arm minus floor\n")
+            say("| arm | minus floor | reading |\n|---|---|---|")
+            floor = judged(test, "floor", None)[score]
+            for arm in ARMS:
+                fam = judged(test, arm, STEPS)[score]
+                c = contrast(fam, floor, paired=False) if fam and floor else None
+                say(f"| {arm} | {describe(c) if c else '-'} | {level(c)} the floor |")
+
+
 def main() -> None:
     """Command-line entry point."""
     global DATA, ROOT, CACHE  # noqa: PLW0603
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("command", choices=("split", "cache", "train", "probe", "report"))
+    parser.add_argument(
+        "command", choices=("split", "cache", "events", "train", "probe", "report", "compare")
+    )
     parser.add_argument("--arm", choices=(*ARMS, *SUPERVISED))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--steps", type=int, default=0, help="default 10,000 (1,000 supervised)")
@@ -687,7 +888,24 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="split: print, do not write")
     parser.add_argument("--data", type=Path, default=DATA, help="parent of variety/, babble_v2/")
     parser.add_argument("--cache", type=Path, default=CACHE, help="parent of the frame caches")
-    parser.add_argument("--root", type=Path, default=ROOT, help="smoke tests only")
+    parser.add_argument(
+        "--root", type=Path, default=ROOT, help="output root (default runs/variety)"
+    )
+    parser.add_argument("--events", action="store_true", help="train: event-weighted sampling")
+    parser.add_argument(
+        "--uniform", type=Path, default=Path("runs/variety"), help="compare: the uniform root"
+    )
+    parser.add_argument(
+        "--key", choices=("pretrain", "heldout"), default="pretrain", help="events: episodes"
+    )
+    parser.add_argument("--truth", action="store_true", help="events: privileged columns too")
+    parser.add_argument(
+        "--signals",
+        nargs="+",
+        choices=ALL_SIGNALS,
+        default=EW_SIGNALS,
+        help="events: signals (default: B-variety-ew's pre-registered set)",
+    )
     args = parser.parse_args()
     DATA, ROOT, CACHE = args.data, args.root, args.cache
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
@@ -698,10 +916,16 @@ def main() -> None:
     elif args.command == "train":
         if args.arm is None:
             parser.error("train needs --arm")
-        train_arm(args.arm, args.seed, args.steps, args.workers, not args.no_cache)
+        train_arm(args.arm, args.seed, args.steps, args.workers, not args.no_cache, args.events)
+    elif args.command == "events":
+        write_events(
+            args.key, args.key == "pretrain" and not args.no_cache, args.truth, args.signals
+        )
     elif args.command == "probe":
         shard, shards = (int(x) for x in args.shard.split("/"))
         probe_all(shard, shards)
+    elif args.command == "compare":
+        compare(args.uniform)
     else:
         report()
 

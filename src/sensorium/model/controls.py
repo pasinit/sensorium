@@ -33,6 +33,7 @@ from sensorium.model.data import (
     sequence_with_ends,
     spacing,
 )
+from sensorium.model.events import load_start_weights
 from sensorium.model.layout import ChannelSpace
 from sensorium.model.pretrain import RunConfig, TrainConfig, lr_at, save_checkpoint
 from sensorium.model.probes import (
@@ -96,10 +97,14 @@ class LabelledSequences(SequenceDataset):
             self._cache.popitem(last=False)
         return loaded
 
-    def labelled(self, path: Path, rng: np.random.Generator) -> dict[str, np.ndarray]:
-        """One sequence from an episode with ``y_*`` labels per window."""
+    def labelled(self, i: int, rng: np.random.Generator) -> dict[str, np.ndarray]:
+        """One sequence from episode ``i`` with ``y_*`` labels per window."""
+        path = self.paths[i]
         loaded = self.load(path)
-        seq, ends = sequence_with_ends(loaded, self.space, self.senses, self.cfg, rng, self.train)
+        start = self._start(i, rng)
+        seq, ends = sequence_with_ends(
+            loaded, self.space, self.senses, self.cfg, rng, self.train, start=start
+        )
         labels = window_labels(
             self._labels[path], ends, self.cfg.substeps, spacing(loaded.header.dt)
         )
@@ -114,14 +119,14 @@ class LabelledSequences(SequenceDataset):
 
     def sample(self, rng: np.random.Generator) -> dict[str, np.ndarray]:
         """Draw one labelled sequence."""
-        return self.labelled(self.paths[int(rng.choice(len(self.paths), p=self._weights))], rng)
+        return self.labelled(self._pick(rng), rng)
 
     def __iter__(self):  # type: ignore[no-untyped-def]
         rng = np.random.default_rng([self.seed, 0])
         while True:
-            path = self.paths[int(rng.choice(len(self.paths), p=self._weights))]
+            i = self._pick(rng)
             for _ in range(self.cfg.reuse):
-                yield self.labelled(path, rng)
+                yield self.labelled(i, rng)
 
 
 def label_scale(paths: Sequence[Path], limit: int = 24) -> tuple[np.ndarray, np.ndarray]:
@@ -148,6 +153,9 @@ class SupervisedConfig:
         freeze_steps: For the first steps only the linear head is trained (the encoder is held
             fixed): linear-probe-then-fine-tune.
         encoder_lr_scale: The encoder's learning rate relative to the head's (after the freeze).
+        hidden: Also train on the hidden-property labels.
+        event_index: Optional start-weight file of ``sensorium.model.events`` (draw sequences
+            toward event windows).
     """
 
     model: ModelConfig
@@ -163,6 +171,7 @@ class SupervisedConfig:
     freeze_steps: int = 0
     encoder_lr_scale: float = 1.0
     hidden: bool = False
+    event_index: str = ""
 
 
 def hidden_scale(paths: Sequence[Path], limit: int = 24) -> tuple[np.ndarray, np.ndarray]:
@@ -242,8 +251,15 @@ def train_supervised(
         h_mean, h_std = hidden_scale(paths)
         mean, std = np.concatenate([mean, h_mean]), np.concatenate([std, h_std])
     scale = (torch.as_tensor(mean, dtype=torch.float32), torch.as_tensor(std, dtype=torch.float32))
+    weights = load_start_weights(Path(cfg.event_index)) if cfg.event_index else None
     dataset = LabelledSequences(
-        paths, space, model.data_senses, loader_cfg, seed=cfg.seed, hidden=cfg.hidden
+        paths,
+        space,
+        model.data_senses,
+        loader_cfg,
+        seed=cfg.seed,
+        hidden=cfg.hidden,
+        start_weights=weights,
     )
     batches = iter(
         DataLoader(

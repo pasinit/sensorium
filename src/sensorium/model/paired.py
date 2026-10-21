@@ -107,6 +107,37 @@ def contrast(
     return Contrast(float(sa.mean() - sb.mean()), seed_se, float(boot.std()), len(a), len(b))
 
 
+def difference_in_differences(
+    a: list[Predictions],
+    b: list[Predictions],
+    c: list[Predictions],
+    d: list[Predictions],
+    draws: int = DRAWS,
+) -> Contrast:
+    """``(a - b) - (c - d)`` of the probe mean, every family paired by seed (``a[i]``, ``b[i]``,
+    ``c[i]`` and ``d[i]`` share seed ``i``) and all scored on the same held-out windows: e.g. the
+    change of a data contrast when the sampler changes. Seed SE from the per-seed values, episode
+    SE from the shared bootstrap.
+
+    Raises:
+        ValueError: if the families are empty or differ in size, or any two encoders were not
+            scored on the same windows.
+    """
+    families = (a, b, c, d)
+    if not a or len({len(f) for f in families}) != 1:
+        raise ValueError("difference_in_differences needs four non-empty families of equal size")
+    ref = a[0]
+    for p in (x for f in families for x in f):
+        if not np.array_equal(p.groups, ref.groups) or not np.array_equal(p.target, ref.target):
+            raise ValueError("every encoder must be scored on the same held-out windows")
+    m = [np.array([p.scores()["mean"] for p in f]) for f in families]
+    per_seed = (m[0] - m[1]) - (m[2] - m[3])
+    seed_se = float(per_seed.std(ddof=1) / np.sqrt(len(per_seed))) if len(per_seed) > 1 else 0.0
+    boot = [np.mean([boot_means(p, draws) for p in f], 0) for f in families]
+    episode = (boot[0] - boot[1]) - (boot[2] - boot[3])
+    return Contrast(float(per_seed.mean()), seed_se, float(episode.std()), len(a), len(c))
+
+
 def describe(c: Contrast) -> str:
     """``+0.012 (seed SE 0.010, episode SE 0.015, combined 0.018, MDD 0.050, resolved)``."""
     tag = ", resolved" if c.resolved else ""

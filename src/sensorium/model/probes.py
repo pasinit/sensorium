@@ -448,6 +448,25 @@ class Predictions:
     names: tuple[str, ...] = (*BINARY, *CONTINUOUS)
     binary: tuple[str, ...] = BINARY
 
+    def subset(self, names: Sequence[str]) -> "Predictions":
+        """The same predictions restricted to the labels ``names`` (so ``mean`` averages only
+        those, e.g. the three contact AUROCs without log force).
+
+        Raises:
+            ValueError: if a name is not one of ``self.names``.
+        """
+        missing = set(names) - set(self.names)
+        if missing:
+            raise ValueError(f"labels {sorted(missing)} not in {self.names}")
+        block = dict(zip(self.names, self.blocks, strict=True))
+        cols = np.concatenate([np.arange(block[n].start, block[n].stop) for n in names])
+        edges = np.cumsum([0, *(block[n].stop - block[n].start for n in names)])
+        blocks = [slice(int(x), int(y)) for x, y in zip(edges[:-1], edges[1:], strict=True)]
+        binary = tuple(n for n in names if n in self.binary)
+        return Predictions(
+            self.pred[:, cols], self.target[:, cols], blocks, self.groups, tuple(names), binary
+        )
+
     def scores(self, rows: np.ndarray | None = None) -> dict[str, float]:
         """Scores of every label (and their ``mean``) on all windows or on the windows ``rows``."""
         rows = np.arange(len(self.groups)) if rows is None else rows
