@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from sensorium import caused_change as cc
-from sensorium.babble_stats import CONTACT_N, runs, tilt_degrees
+from sensorium.babble_stats import AIR_M, CONTACT_N, runs, tilt_degrees
 from sensorium.episode import Episode
 from sensorium.model.data import build, load_episode, spacing
 from sensorium.model.sensory_layer import SensoryLayer
@@ -435,22 +435,26 @@ class Predictions:
 
     Attributes:
         pred, target: ``[N, 10]`` predictions and labels (the three binary labels, force, tip).
-        blocks: Column slice of each label, in the order ``BINARY + CONTINUOUS``.
+        blocks: Column slice of each label, in the order of ``names``.
         groups: ``[N]`` episode of each window.
+        names: The labels (default the contact battery, ``BINARY + CONTINUOUS``).
+        binary: The labels of ``names`` scored by AUROC; the others are scored by R^2.
     """
 
     pred: np.ndarray
     target: np.ndarray
     blocks: list[slice]
     groups: np.ndarray
+    names: tuple[str, ...] = (*BINARY, *CONTINUOUS)
+    binary: tuple[str, ...] = BINARY
 
     def scores(self, rows: np.ndarray | None = None) -> dict[str, float]:
         """Scores of every label (and their ``mean``) on all windows or on the windows ``rows``."""
         rows = np.arange(len(self.groups)) if rows is None else rows
         scores: dict[str, float] = {}
-        for name, block in zip((*BINARY, *CONTINUOUS), self.blocks, strict=True):
+        for name, block in zip(self.names, self.blocks, strict=True):
             p, y = self.pred[rows][:, block], self.target[rows][:, block]
-            if name in BINARY:
+            if name in self.binary:
                 scores[f"{name}_auroc"] = auroc(p[:, 0], y[:, 0])
             else:
                 scores[f"{name}_r2"] = r_squared(p, y)
@@ -474,14 +478,21 @@ class Predictions:
         return out
 
 
-def predict_probes(data: ProbeData, feature: str) -> Predictions:
-    """Leave-one-episode-out ridge predictions of every label from one feature matrix."""
+def predict_probes(
+    data: ProbeData,
+    feature: str,
+    names: tuple[str, ...] = (*BINARY, *CONTINUOUS),
+    binary: tuple[str, ...] = BINARY,
+) -> Predictions:
+    """Leave-one-episode-out ridge predictions of the labels ``names`` (default: the contact
+    battery) from one feature matrix; ``binary`` are scored by AUROC."""
     x = data.features[feature]
-    columns = [data.labels[n].reshape(len(x), -1) for n in (*BINARY, *CONTINUOUS)]
+    columns = [data.labels[n].reshape(len(x), -1) for n in names]
     y = np.concatenate(columns, axis=1)
     edges = np.cumsum([0, *(c.shape[1] for c in columns)])
     blocks = [slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:], strict=True)]
-    return Predictions(cross_validated_blocks(x, y, data.groups, blocks), y, blocks, data.groups)
+    pred = cross_validated_blocks(x, y, data.groups, blocks)
+    return Predictions(pred, y, blocks, data.groups, names, binary)
 
 
 def score_probes(data: ProbeData, feature: str) -> dict[str, float]:
@@ -537,3 +548,56 @@ def run_probes(
         for name in BINARY:
             scores[f"positive_rate_{name}"] = float(data.labels[name].mean())
     return out
+
+
+OUTCOME_HORIZON = cc.WINDOW_STEPS
+"""Steps ahead (1 s at 20 Hz) of the ``displaced`` and ``toppled`` outcome labels."""
+SPEED_SCALE = 0.01
+"""m/s: the unit of the ``log_speed`` outcome label."""
+
+
+def _ahead(values: np.ndarray, horizon: int) -> np.ndarray:
+    """``[T, ...]`` value at ``min(t + horizon, T - 1)`` for every step ``t``."""
+    t = np.arange(len(values))
+    return values[np.minimum(t + horizon, len(values) - 1)]
+
+
+def _future_max(values: np.ndarray, horizon: int) -> np.ndarray:
+    """``[T, n]`` maximum of ``values`` over ``(t, t + horizon]`` (``-inf`` at the last step)."""
+    out = np.full(values.shape, -np.inf)
+    for k in range(1, horizon + 1):
+        out[:-k] = np.maximum(out[:-k], values[k:])
+    return out
+
+
+def outcome_steps(episode: Episode, horizon: int = OUTCOME_HORIZON) -> dict[str, np.ndarray]:
+    """Per-step outcome labels of an episode (``[T]`` each), defined in
+    ``sensorium.model.outcomes`` (which keeps this module the only reader of privileged state).
+
+    Raises:
+        KeyError: if the episode lacks ``privileged/object_pose`` or ``object_contact``.
+    """
+    pose = np.asarray(episode.privileged["object_pose"], dtype=float)
+    touching = np.asarray(episode.privileged["object_contact"]) >= CONTACT_N
+    names = episode.meta.get("object_names")
+    round_objects = cc.spherical(names if isinstance(names, list) else ["obj"] * pose.shape[1])
+    xy = pose[:, :, :2]
+    moved = np.linalg.norm(_ahead(xy, horizon) - xy, axis=-1) > cc.DISPLACED_M
+    kernel = np.ones(2 * horizon + 1)
+    near = np.stack(
+        [np.convolve(touching[:, i], kernel, mode="same") > 0 for i in range(touching.shape[1])],
+        axis=1,
+    )
+    rest = pose[:3, :, 2].mean(axis=0)
+    lifted = (pose[:, :, 2] - rest >= AIR_M) & touching
+    tilt = tilt_degrees(pose[:, :, 3:7])
+    tips = (tilt < cc.TOPPLE_DEG) & (_future_max(tilt, horizon) >= cc.TOPPLE_DEG)
+    tips[:, round_objects] = False
+    step = np.linalg.norm(np.diff(pose[:, :, :3], axis=0), axis=-1) / episode.dt
+    speed = np.concatenate([np.zeros(1), step.max(axis=1)])
+    return {
+        "displaced": (moved & near).any(axis=1),
+        "lifted": lifted.any(axis=1),
+        "toppled": tips.any(axis=1),
+        "log_speed": np.log1p(speed / SPEED_SCALE),
+    }
