@@ -1,0 +1,192 @@
+# Event-dense table episodes (Track A, the supervisor's direction of 2026-10-21): seated babbling
+# with the pretraining props and a scene director (bodies/h1_director.py) that keeps things
+# happening: a stack to knock over in half of the episodes, objects that fall off or stay out of
+# reach dropped back in, and an object dropped onto a hand or the table after 2.5 s with nothing
+# moving. Measured with sensorium.event_rate (docs/event-dense.md): 88-92% of 1 s windows hold an
+# event (babble_v2 76%, variety 67%) and 8-12% stay at rest. 1,110 episodes of 600 steps in 30
+# blocks of 37 (15 hand, 15 pincer, one process each); hidden properties and effort on, as in
+# configs/babble_v2.toml and configs/variety.toml.
+#
+#   uv run sensorium-generate configs/event_dense.toml
+out_dir = "data/event_dense"
+master_seed = 6
+
+[humanoid.hand_event_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.hand_event_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "hand", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_00]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_01]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_02]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_03]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_04]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_05]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_06]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_07]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_08]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_09]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_10]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_11]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_12]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_13]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+
+[humanoid.pincer_event_14]
+policies = ["seated_babble"]
+episodes_per_policy = 37
+steps = 600
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
