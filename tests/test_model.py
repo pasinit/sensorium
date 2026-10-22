@@ -1766,3 +1766,61 @@ def test_stopping_the_target_gradient_changes_only_the_encoder_gradient(
 def test_reuse_reaches_the_loader() -> None:
     cfg = replace(RunConfig(), augment=replace(RunConfig().augment, reuse=1))
     assert cfg.loader().reuse == 1 and RunConfig().loader().reuse == 8
+
+
+def test_recon_weight_zero_changes_nothing_and_positive_trains_the_encoder(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
+    cfg = replace(TINY, senses=senses)
+    batch = batch_of(episodes, space, check_senses(senses))
+    torch.manual_seed(0)
+    plain = SensoryModel(cfg, space)
+    torch.manual_seed(0)
+    off = SensoryModel(replace(cfg, recon_weight=0.0), space)
+    torch.manual_seed(0)
+    on = SensoryModel(replace(cfg, recon_weight=0.5), space)
+    assert off.recon is None and on.recon is not None
+    base = plain.state_dict()
+    assert all(torch.equal(base[k], v) for k, v in off.state_dict().items())
+    assert all(torch.equal(base[k], on.state_dict()[k]) for k in base)  # same init, plus a decoder
+    torch.manual_seed(1)
+    a = plain(batch)
+    torch.manual_seed(1)
+    b = off(batch)
+    assert torch.equal(a["loss"], b["loss"]) and "recon" not in b
+    torch.manual_seed(1)
+    out = on(batch)
+    assert float(out["recon"]) > 0
+    total = out["pred"] + out["reg"] + 0.5 * out["recon"]
+    assert float(out["loss"]) == pytest.approx(float(total), rel=1e-5)
+    with pytest.raises(ValueError, match="sigreg"):
+        replace(cfg, recon_weight=0.1, objective="mae")
+
+
+def test_recon_term_skips_the_projector(episodes: dict[str, Episode], space: ChannelSpace) -> None:
+    senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
+    cfg = replace(TINY, senses=senses, recon_weight=1.0)
+    model = SensoryModel(cfg, space)
+    batch = batch_of(episodes, space, check_senses(senses))
+    _, pix, prop = model._masked_recon(batch, model.recon, pre=True)  # type: ignore[arg-type]
+    (pix + prop).backward()  # type: ignore[no-untyped-call]
+    params = dict(model.named_parameters())
+    assert params["encoder.projector.0.weight"].grad is None  # pre-projector state only
+    assert params["recon.vision.0.weight"].grad is not None
+    fusion = [p.grad for k, p in params.items() if k.startswith("encoder.fusion")]
+    assert any(g is not None and float(g.abs().sum()) > 0 for g in fusion)  # trains the encoder
+
+
+def test_proprio_dropout_hides_every_proprio_sense_of_a_sequence(space: ChannelSpace) -> None:
+    senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
+    enc = SensoryModel(replace(TINY, senses=senses, proprio_dropout=0.99), space).encoder
+    present = torch.ones(64, len(enc.senses), dtype=torch.bool)
+    torch.manual_seed(0)
+    keep = enc.keep_mask(present, drop=True)
+    proprio = [i for i, s in enumerate(enc.senses) if s != "vision"]
+    dropped = ~keep[:, proprio].any(1)
+    assert dropped.float().mean() > 0.9  # whole sequences lose all proprio senses together
+    assert keep[:, proprio].all(1)[~dropped].all()  # never a partial drop
+    assert keep[:, enc.senses.index("vision")].all()
+    assert enc.keep_mask(present, drop=False).all()  # never at evaluation

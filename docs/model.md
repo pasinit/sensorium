@@ -2020,6 +2020,86 @@ weights. If it clears its floor at 250 steps, a 10k GCP check on babble_v2 (3 se
 about 6 vCPU-h, about $1. Reading the probe pre-projector is free, but it only brings the JEPA to its
 floor.
 
+## B-fix-0: reconstruction or proprio dropout against the JEPA's contact loss (pre-registered)
+
+**Written before any run.** B-diag-0 found that the pooled-SIGReg JEPA keeps what state and action
+predict, and its projector then removes contact information:
+
+* vision reliance 0.11 to 0.15, body proprio 0.68 to 0.84;
+* between-episode variance share 0.04 to 0.08;
+* the layer effect against the floor +0.05 to +0.08, resolved.
+
+The supervisor asked to compare two fixes. Code: `scripts/fix_test.py` (`train`, `encode`, `probe`,
+`report`) and two model options, both off by default:
+
+* `model.recon_weight`: a light MAE-style decoder reads the **pre-projector** state of a masked
+  copy of the batch and reconstructs the masked pixels and proprio. These are the `mae` objective's
+  targets and code. Loss = next-state MSE + 0.1 SIGReg + `recon_weight` x reconstruction. With
+  weight 0 the model and its loss are bit-identical to before (tested, and checked against the
+  previous code: same loss and gradients).
+* `model.proprio_dropout` (existing): for a training sequence with this probability, every proprio
+  sense (body, vestibular, effector) is hidden together, so vision has to carry the state (tested).
+
+**Arms.** B-variety-0's recipe on the babble_v2 pretraining set (n = 791): V+P, 10,000 steps x 16,
+checkpoints at 0, 250, 1,000, 2,500, 5,000 and 10,000, seeds 0 to 2, the shared channel space
+without `eff_`, the 128 px frame cache. One data set only, to keep the run under $5.
+
+| arm | change |
+|---|---|
+| `recon01`, `recon05` | `recon_weight` 0.1, 0.5 |
+| `drop01`, `drop02` | `proprio_dropout` 0.1, 0.2 |
+| `recon05drop02` | both |
+| A0 (reused) | B-variety-0's `jepa-babble`: the same recipe with both options off |
+| MAE (reused) | B-variety-0's `mae-babble` |
+| floor | random init, seeds 0 to 2 (seed s is the initial encoder of every arm's seed s) |
+
+**Evaluation.** Every encoder at every checkpoint is re-probed with one protocol, so A0 and MAE are
+scored exactly like the new arms. The probe is an episode-grouped 5-fold ridge (B-variety-0 used
+leave-one-episode-out).
+
+* Two scores:
+  * **the three contact AUROCs** (the battery without force and tip);
+  * **the outcome battery** (displaced, lifted, toppled, object speed).
+* Two layers: pre-projector (the fusion summary token) and post-projector.
+* Three episode sets: 100 held-out babble_v2 episodes; 100 babble_v2 pretraining episodes, seen by
+  every trained encoder; 100 held-out variety episodes.
+
+**Verdict, stated in advance.** At 10,000 steps an arm **works** if
+`arm - floor` on the **pre-projector contact AUROCs** of the **held-out babble_v2** episodes is
+positive and resolved:
+
+* paired by seed and by episode (`sensorium.model.paired`);
+* MDD = 2.8 x combined SE;
+* read by `fix_test.verdict`.
+
+Otherwise it **does not work**. A0 and MAE get the same reading as references.
+
+**Reported with it, not part of the rule.**
+
+* The same `arm - floor` on the other layer, score and episode sets.
+* `arm - A0` at both layers (did the fix change the JEPA?).
+* Every score against steps (figure per episode set).
+* Training loss terms per seed (pred, reg, recon).
+
+**Expectation, so it can be wrong.**
+
+* `recon05` works. The reconstruction term pulls the pre-projector state toward MAE's, and MAE is
+  +0.06 to +0.08 above the floor pre-projector.
+* `recon01` is smaller and may not resolve.
+* Dropout raises vision reliance but not the contact score: proprio is the input most tied to the
+  contact targets.
+
+**Compute** (n2-standard-32, on demand). From B-variety-0's measured times, and the reconstruction
+arms' 2.1x step cost on the Mac:
+
+| stage | wall |
+|---|---|
+| setup, data copy, cache rebuild | about 15 min |
+| 15 runs at once | about 1.6 to 2 h |
+| encode and probe 129 encoders, 16 shards | about 15 to 20 min |
+| report and upload | about 10 min |
+| **total** | **about 2.5 h, about $4; capped at 3 h ($4.70)** |
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:

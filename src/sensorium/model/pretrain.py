@@ -344,7 +344,7 @@ def _record(
         "seq_per_s": step * tc.batch_size / elapsed,
         "elapsed_s": elapsed,
     }
-    metrics |= {k: float(result[k]) for k in ("aux", "teacher_own") if k in result}
+    metrics |= {k: float(result[k]) for k in ("aux", "teacher_own", "recon") if k in result}
     if on_log is not None:
         metrics |= on_log(metrics)
     return metrics

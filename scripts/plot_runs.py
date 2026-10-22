@@ -7,7 +7,8 @@ score (``vp.mean``, ``heldout.mean``); the held-out loss comes from ``heldout_pr
 ``heldout_reg`` in the same files when present. One row of three panels per arm, every seed
 drawn thin, the seed mean thick:
 
-1. training loss terms (``loss``, ``pred``, ``reg``, ``aux``, ``teacher_own``, as logged);
+1. training loss terms (``loss``, ``pred``, ``reg``, ``aux``, ``teacher_own``, ``recon``, as
+   logged);
 2. held-out loss against the checkpoint step;
 3. held-out probe score against the checkpoint step, with the random-init floor as dashed lines
    (``--floor arm=prefix`` reads ``<probes>/<prefix>-s<seed>.json``, one line per floor seed).
@@ -31,13 +32,14 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-LOSS_KEYS = ("loss", "pred", "reg", "aux", "teacher_own")
+LOSS_KEYS = ("loss", "pred", "reg", "aux", "teacher_own", "recon")
 COLORS = {
     "loss": "#222222",
     "pred": "#1f77b4",
     "reg": "#ff7f0e",
     "aux": "#2ca02c",
     "teacher_own": "#9467bd",
+    "recon": "#8c564b",
 }
 RUN = re.compile(r"^(?P<arm>.+)-s(?P<seed>\d+)$")
 PROBE = re.compile(r"^(?P<arm>.+)-s(?P<seed>\d+)-n(?P<step>\d+)$")

@@ -143,6 +143,11 @@ def save_episodes(root: Path, blocks: tuple[str, ...], per_block: int, seed: int
             )
             props = np.array([rng.uniform(0.2, 2.0), rng.uniform(0.3, 1.0), 0.02])
             ep.privileged["hidden_properties"] = np.tile(props, (96, 1, 1)).astype(np.float32)
+            pose = np.zeros((96, 1, 7), dtype=np.float32)
+            pose[:, 0, 0] = np.cumsum(rng.normal(0, 0.01, 96))  # the box wanders
+            pose[:, 0, 2], pose[:, 0, 3] = 0.85, 1.0
+            ep.privileged["object_pose"] = pose
+            ep.privileged["object_contact"] = (rng.random((96, 1)) < 0.3).astype(np.float32) * 2
             ep.meta |= {"object_names": ["obj_box"]}
             ep.save(root / f"humanoid-{block}-policy-{i:03d}.npz")
             k += 1
