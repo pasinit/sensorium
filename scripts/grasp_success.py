@@ -89,8 +89,8 @@ class Tracker:
         plan, advance, pick = policy.plan, policy.advance, policy.pick_object
         self.picked: int | None = None
 
-        def tracked_pick(side: str, data: mujoco.MjData, **options: object) -> int | None:
-            self.picked = pick(side, data, **options)  # the last pick is the queued plan's object
+        def tracked_pick(side: str, data: mujoco.MjData, *options: object) -> int | None:
+            self.picked = pick(side, data, *options)  # type: ignore[arg-type]  # the last pick
             return self.picked
 
         def tracked_plan(side: str, data: mujoco.MjData) -> None:
@@ -222,7 +222,14 @@ def cause(attempt: dict[str, object], pincer: bool) -> str:
     return "slip" if rise.max() >= 0.01 else "no rise"
 
 
-def run(effector: str, episodes: int, first: int, config: Path, render: bool) -> list[dict]:
+def run(
+    effector: str,
+    episodes: int,
+    first: int,
+    config: Path,
+    render: bool,
+    extra: dict[str, object] | None = None,
+) -> list[dict]:
     """Classified grasp attempts of ``episodes`` episodes of the config's first block."""
     blocks = tomllib.loads(config.read_text())["humanoid"]
     spec = next(s for name, s in blocks.items() if name.startswith(effector))
@@ -230,7 +237,7 @@ def run(effector: str, episodes: int, first: int, config: Path, render: bool) ->
         HumanoidRecorder.render = lambda self, camera: np.zeros(  # type: ignore[method-assign]
             (IMAGE_SIZE, IMAGE_SIZE, 3), np.uint8
         )
-    rec = HumanoidRecorder(dict(spec["settings"]))
+    rec = HumanoidRecorder(dict(spec["settings"]) | (extra or {}))
     pincer, primitive = effector == "pincer", "grasp" if effector == "pincer" else "power"
     m, d = rec.model, rec.data
     attempts: list[dict] = []
@@ -287,9 +294,16 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/event_dense.toml"))
     parser.add_argument("--set", action="append", default=[], dest="overrides")
     parser.add_argument("--render", action="store_true")
+    parser.add_argument(
+        "--setting",
+        action="append",
+        default=[],
+        help="recorder setting key=json, e.g. grasp_library",
+    )
     args = parser.parse_args()
     apply_overrides(args.overrides)
-    attempts = run(args.effector, args.episodes, args.first, args.config, args.render)
+    extra = {k: json.loads(v) for k, v in (item.split("=", 1) for item in args.setting)}
+    attempts = run(args.effector, args.episodes, args.first, args.config, args.render, extra)
     report(attempts, args.episodes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(attempts))

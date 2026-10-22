@@ -5,7 +5,9 @@
 # moving. Measured with sensorium.event_rate (docs/event-dense.md): 88-92% of 1 s windows hold an
 # event (babble_v2 76%, variety 67%) and 8-12% stay at rest. 1,110 episodes of 600 steps in 30
 # blocks of 37 (15 hand, 15 pincer, one process each); hidden properties and effort on, as in
-# configs/babble_v2.toml and configs/variety.toml.
+# configs/babble_v2.toml and configs/variety.toml. The pincers choose their grasps with the grasp
+# library (configs/grasp_library/, bodies/h1_grasp_library.py): 63% of their grasps lift against
+# 32% without it (docs/touch.md).
 #
 #   uv run sensorium-generate configs/event_dense.toml
 out_dir = "data/event_dense"
@@ -105,88 +107,88 @@ settings = { effector = "hand", posture = "seated", props = ["button", "friction
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_01]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_02]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_03]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_04]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_05]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_06]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_07]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_08]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_09]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_10]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_11]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_12]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_13]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }
 
 [humanoid.pincer_event_14]
 policies = ["seated_babble"]
 episodes_per_policy = 37
 steps = 600
-settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", props = ["button", "friction_patches", "hinged_flap", "tall_block"], director = { respawn = true, idle_s = 2.5, onto_hand = 0.5, stacks = 0.5 }, hidden_properties = true, effort = true, grasp_library = ["configs/grasp_library/pincer_obj_metal_box.jsonl", "configs/grasp_library/pincer_obj_metal_cylinder.jsonl", "configs/grasp_library/pincer_obj_plastic_box.jsonl", "configs/grasp_library/pincer_obj_plastic_sphere.jsonl", "configs/grasp_library/pincer_obj_plastic_tallcylinder.jsonl", "configs/grasp_library/pincer_obj_rubber_sphere.jsonl", "configs/grasp_library/pincer_obj_wood_box.jsonl", "configs/grasp_library/pincer_obj_wood_tallbox.jsonl"] }

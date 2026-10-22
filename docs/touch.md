@@ -439,6 +439,74 @@ in the sweep, lying cylinders). Pincers fail to raise the plastic box they grip 
 (23-25% "no rise"). Gripping across the narrow side needs an arm that can turn the gripper; the
 H1's wrist yaw does not reach far enough, and the span check only avoids those grasps.
 
+### A grasp library (2026-10-22)
+
+The target after the checkpoint above: most grasp attempts succeed. The approach is a grasp database
+(as in GraspIt-style pipelines). The 5-joint H1 arm cannot reach an arbitrary effector pose, so the
+library (`bodies/h1_grasp_library.py`) does not store poses to reach. It stores descriptors of grasps
+the planner actually made and executed, each with its outcome.
+- **Descriptor**, in the object's frame with absolute values (the objects are symmetric under axis
+  flips): the approach axis, the second axis (pad closing axis or palm normal) and the grasp point's
+  offset from the centre over the half sizes. Then, in the world: both axes' heights, the grasp
+  height over the centre, and the object's extent along each frame axis.
+- **Key**: the object, and which of its axes is up (how it lies).
+
+`scripts/grasp_library.py` makes a library in an isolated scene. Each trial puts the object alone at
+a random place within reach, at a random yaw, upright or (not spheres, half of the time) on a side
+face, and redraws the hidden properties. The planner then plans one grasp in `explore` mode (random
+IK starts and postures, a jittered grasp point) and executes it. Lifted means 3 cm for 0.5 s,
+touched. 300 trials per object and effector took 19 minutes on the Mac.
+
+Coverage: planned grasps and the share that lifted.
+
+| object | hand: planned (of 300) | hand: lifted | pincer: planned (of 300) | pincer: lifted |
+|---|---|---|---|---|
+| wood box | 136 | 34% | 64 | 22% |
+| plastic sphere | 112 | 17% | 53 | 17% |
+| metal cylinder | 131 | 37% | 74 | 58% |
+| rubber sphere | 119 | 23% | 56 | 43% |
+| plastic box | 144 | 26% | 59 | 22% |
+| metal box | 141 | 32% | 67 | 70% |
+| wood tall box | 108 | 14% | 62 | 48% |
+| plastic tall cylinder | 77 | 42% | 60 | 32% |
+| all | 968 | 28% | 495 | 40% |
+
+At run time (`grasp_library` recorder setting) the planner draws `GRASP_CANDIDATES` (8) reachable
+grasps, scores each by its 7 nearest library grasps of the same key (success rate shrunk by half a
+success in one trial), and makes the best if it reaches `LIBRARY_MIN_SCORE` (0.6). Objects whose key
+lifts less than `LIBRARY_MIN_RATE` (20%) in the library are not grasp targets. Re-aiming stays.
+Leave-one-out on the library: pincer grasps scored 0.6 or more lift 72% (24% of grasps qualify),
+0.7 or more 81% (14%); for hands only 42% (0.5) and 54% (0.6).
+
+Pincers on the event-dense table (`configs/event_dense.toml` now gives the pincer blocks the library
+in `configs/grasp_library/`), every planned grasp counted, aborted ones included:
+
+| pincers | episodes | grasps | success per grasp [Wilson 95%] | own lifts/ep | distinct objects lifted/ep |
+|---|---|---|---|---|---|
+| planner alone (seeds 0-29 and 100-129) | 60 | 326 | 32% [27, 37] | 1.75 | 1.27 |
+| library, minimum 0.6, seeds 0-29 | 30 | 116 | 70% [61, 77] | 3.00 | |
+| library, minimum 0.6, seeds 100-129 | 30 | 96 | 56% [46, 66] | 2.00 | |
+| library, minimum 0.6, pooled | 60 | 212 | 63% [57, 70] | 2.25 | 1.35 |
+| library, minimum 0.5 (seeds 0-29) | 30 | 122 | 63% [54, 71] | 2.75 | |
+| library, minimum 0.7 (seeds 0-29) | 30 | 92 | 61% [51, 70] | 2.33 | |
+
+(Runs of the same setting differ by about 10 points: the pooled 60 episodes are the figure to use.)
+Remaining pincer causes, pooled: no pinch 17%, metal box 7%, reflex 5%, no rise 4%, director 2%. The
+lifts concentrate on the metal box (64 of 135) and the metal cylinder (32). No grasp of the plastic
+sphere or the wood box reached 0.6 in these runs, so the pincers no longer lift them.
+
+Hands: the library does not get them there.
+- With the explored library: 22-25% per grasp, but 1.7-2.2 grasps per episode, so 0.39-0.54 own
+  lifts/ep against 0.60 without it.
+- A planner-mode library (the planner's own grasps, 200 isolated trials per object, used as a filter
+  by object as it lies): 21% [14, 30], 0.66 own lifts/ep.
+- Per object as it lies, the claw pinch lifts at most 40-60% even where it fits best (plastic box on
+  its long side, standing tall cylinder, metal box on end), and 4-19% on spheres and the lying tall
+  block.
+
+Hands stay without a library. The next steps change how they grasp: touch-triggered closed-loop
+closing, then a side power wrap for the objects where the pinch is weak.
+
 ## Load-time noise (`touch_noise.perturb_touch`)
 
 Stored episodes are clean. The training loader draws, per episode:
