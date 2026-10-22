@@ -23,12 +23,14 @@ arm cannot meet a full 6-D pose (see ``.tmp/phd-a/lift_spike.md`` in the D0.3 PR
 
 import copy
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import mujoco
 import numpy as np
 
 from sensorium.bodies.h1_forces import LEFT_ARM, RIGHT_ARM, GeomClasses
+from sensorium.bodies.h1_grasp_library import GraspLibrary, grasp_features, grasp_key
 from sensorium.bodies.h1_policies import (
     ARM_JOINTS,
     ARM_READY,
@@ -299,6 +301,13 @@ class BabblePolicy:
     # (0: no check). The 2F-85 opens 85 mm; the 10 cm plastic box gripped along its length was
     # held by the pads' tips on its top and never rose.
     PINCER_SPAN = 0.0
+    GRASP_CANDIDATES = 8  # with a grasp library: candidates scored per grasp
+    LIBRARY_MIN_SCORE = 0.6  # ... the best must reach this predicted success, else no grasp
+    LIBRARY_MIN_RATE = (
+        0.2  # an object, as it lies, is a grasp target if its library rate reaches this
+    )
+    EXPLORE_STARTS = 12  # random IK starts per explored posture
+    EXPLORE_JITTER = 0.006  # m of noise on an explored grasp point
     REAIMS = 2  # times a hand's grasp is aimed again at its moved object before it is dropped
     MOVED = 0.015  # m an object may have moved since its grasp was planned before it is replanned
     LINE_POS_TOL = 0.012  # m: an oriented waypoint of a line may miss its point by this much
@@ -383,6 +392,9 @@ class BabblePolicy:
         self.failures = dict.fromkeys(self.primitives, 0)  # plans dropped, per primitive
         self.replans = 0  # grasps dropped at the descent because the object had moved
         self.reaims = 0  # ... and grasps aimed again at the moved object instead
+        self.library: GraspLibrary | None = None  # set by the recorder (``grasp_library`` setting)
+        self.explore = False  # varied grasps (library making, or choosing with a library)
+        self.last_grasp: dict[str, object] = {}
         self.reaims_left = dict.fromkeys(SIDES, 0)  # re-aims still allowed in this grasp
 
     def effector_mean(self, side: str) -> np.ndarray:
@@ -577,11 +589,24 @@ class BabblePolicy:
         return [Waypoint(q, speed)]
 
     def oriented_pose(
-        self, data: mujoco.MjData, side: str, goal: np.ndarray, approach_z: float
+        self,
+        data: mujoco.MjData,
+        side: str,
+        goal: np.ndarray,
+        approach_z: float,
+        seed: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray] | None:
-        """A clear 5-joint posture with the grasp point at ``goal``, and the way to advance."""
+        """A clear 5-joint posture with the grasp point at ``goal``, and the way to advance.
+
+        ``seed`` is tried first. With ``explore``, the other starts are drawn over the arm's
+        range (the wrist yaw too) and a random one of the clear postures found is returned.
+        """
         oriented = self.oriented[side]
         starts = [self.cmd_q[side], self.hover_q[side]]
+        if self.explore:
+            return self.explored_pose(data, side, goal, approach_z, seed)
+        if seed is not None:
+            starts = [seed, *starts]
         best: tuple[float, np.ndarray, np.ndarray] | None = None
         for attempt in range(20):
             if attempt < len(starts):
@@ -605,6 +630,39 @@ class BabblePolicy:
                 if best is None or distance < best[0]:
                     best = (distance, q, advance)
         return None if best is None else (best[1], best[2])
+
+    def explored_pose(
+        self,
+        data: mujoco.MjData,
+        side: str,
+        goal: np.ndarray,
+        approach_z: float,
+        seed: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """``oriented_pose`` with random starts; ``seed`` alone if it already works."""
+        oriented = self.oriented[side]
+        found: list[tuple[np.ndarray, np.ndarray]] = []
+        for attempt in range(self.EXPLORE_STARTS):
+            if attempt == 0 and seed is not None:
+                start = seed
+            else:
+                ready = self.ready[side] + self.rng.normal(0.0, self.FAR_SPREAD, 4)
+                start = np.append(
+                    np.clip(ready, oriented.low[:4], oriented.high[:4]),
+                    self.rng.uniform(oriented.low[4], oriented.high[4]),
+                )
+            q, pos_error, ori_error = oriented.solve(
+                data.qpos, start, goal, approach_z, self.axis_weight
+            )
+            if pos_error < 0.004 and ori_error < 0.03 and self.posture_ok(data, side, q):
+                _, approach, axis = oriented.frame_at(data.qpos, q)
+                advance = approach if self.frames[side].advance == "approach" else axis
+                if attempt == 0 and seed is not None:
+                    return q, advance
+                found.append((q, advance))
+        if not found:
+            return None
+        return found[int(self.rng.integers(len(found)))]
 
     # ------------------------------------------------------------------ choosing
 
@@ -683,9 +741,19 @@ class BabblePolicy:
             target = rest  # no plan: park low and to the side rather than freezing mid-air
         self.queue[side] = [Waypoint(target, self.FAST, hold=10, wait=True)]
 
-    def pick_object(self, side: str, data: mujoco.MjData) -> int | None:
-        """An object on this hand's side, fewest tried first; counts it as tried."""
+    def pick_object(
+        self,
+        side: str,
+        data: mujoco.MjData,
+        allowed: Callable[[mujoco.MjData, int], bool] | None = None,
+    ) -> int | None:
+        """An object on this hand's side, fewest tried first; counts it as tried.
+
+        ``allowed`` filters the candidates (the grasp library's ``graspable``).
+        """
         candidates = self.free_objects(data, side)
+        if allowed is not None:
+            candidates = [i for i in candidates if allowed(data, i)]
         if not candidates:
             return None
         index = candidates[self.choose(self.object_counts[candidates])]
@@ -847,28 +915,20 @@ class BabblePolicy:
 
         ``index`` names the object (a re-aim, see ``advance``); by default one is picked.
         """
-        index = self.pick_object(side, data) if index is None else index
+        if index is None:
+            index = self.pick_object(side, data, self.graspable if self.library else None)
         if index is None:
             return None
-        centre = self.grasp_centre(data, index)
-        goal = centre
         body = self.objects[index]  # the forearm may graze the object it grasps, nothing else
         self.exempt[:] = False
         self.exempt[
             self.model.body_geomadr[body] : self.model.body_geomadr[body]
             + self.model.body_geomnum[body]
         ] = True
-        approach_z = float(self.rng.choice(GRASP_HEIGHTS if self.pincer else HAND_GRASP_HEIGHTS))
-        found = self.oriented_pose(data, side, centre, approach_z)
-        if found is not None and not self.pincer:
-            # The hand's frame point is the object's near face: back it off along the fingers by
-            # the object's half extent in their direction, and solve again from there.
-            approach = self.oriented[side].frame_at(data.qpos, found[0])[1]
-            goal = centre - self.half_extent(data, index, approach) * approach
-            found = self.oriented_pose(data, side, goal, approach_z)
-        if found is None or not self.fits(data, side, index, found[0]):
+        chosen = self.choose_grasp(data, side, index)
+        if chosen is None:
             return None
-        q_grasp, advance = found
+        q_grasp, advance, goal, approach_z = chosen
         pre = goal - self.frames[side].back_off * advance
         above = pre + np.array([0.0, 0.0, self.APPROACH_MARGIN])
         q_above, pos_error, ori_error = self.oriented[side].solve(
@@ -937,6 +997,64 @@ class BabblePolicy:
             self.clearance, self.axis_weight = self.CLEARANCE, 0.0
             self.exempt[:] = False
         return queue
+
+    def grasp_candidate(
+        self, data: mujoco.MjData, side: str, index: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
+        """One grasp of object ``index``: ``(q, advance, grasp point, approach height)`` or None.
+
+        With ``explore`` (library making, or choosing with a library) the IK starts and the
+        posture among those found are drawn at random, so that repeated calls give varied grasps.
+        """
+        centre = self.grasp_centre(data, index)
+        if self.explore and self.library is None:  # making a library: vary the point too
+            centre = centre + self.rng.normal(0.0, self.EXPLORE_JITTER, 3)
+        approach_z = float(self.rng.choice(GRASP_HEIGHTS if self.pincer else HAND_GRASP_HEIGHTS))
+        goal = centre
+        found = self.oriented_pose(data, side, centre, approach_z)
+        if found is not None and not self.pincer:
+            # The hand's frame point is the object's near face: back it off along the fingers by
+            # the object's half extent in their direction, and solve again from there.
+            approach = self.oriented[side].frame_at(data.qpos, found[0])[1]
+            goal = centre - self.half_extent(data, index, approach) * approach
+            found = self.oriented_pose(data, side, goal, approach_z, seed=found[0])
+        if found is None or not self.fits(data, side, index, found[0]):
+            return None
+        return found[0], found[1], goal, approach_z
+
+    def choose_grasp(
+        self, data: mujoco.MjData, side: str, index: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
+        """The grasp to make of object ``index``, or None.
+
+        Without a library, the first candidate. With one, the best of ``GRASP_CANDIDATES`` by the
+        library's score, if it reaches ``LIBRARY_MIN_SCORE``. ``last_grasp`` keeps the chosen
+        grasp's key, descriptor and score (the library maker records them).
+        """
+        body = self.objects[index]
+        key = grasp_key(self.model, data, body)
+        best: tuple[float, tuple[np.ndarray, np.ndarray, np.ndarray, float], np.ndarray] | None
+        best = None
+        for _ in range(self.GRASP_CANDIDATES if self.library is not None else 1):
+            candidate = self.grasp_candidate(data, side, index)
+            if candidate is None:
+                continue
+            point, approach, axis = self.oriented[side].frame_at(data.qpos, candidate[0])
+            features = grasp_features(self.model, data, body, point, approach, axis)
+            score = 1.0 if self.library is None else self.library.score(key, features)
+            if best is None or score > best[0]:
+                best = (score, candidate, features)
+        if best is None or (self.library is not None and best[0] < self.LIBRARY_MIN_SCORE):
+            return None
+        self.last_grasp = {"key": key, "features": best[2].tolist(), "score": best[0]}
+        return best[1]
+
+    def graspable(self, data: mujoco.MjData, index: int) -> bool:
+        """With a library: True if object ``index``, as it lies, has a reliable grasp in it."""
+        if self.library is None:
+            return True
+        key = grasp_key(self.model, data, self.objects[index])
+        return self.library.rate(key) >= self.LIBRARY_MIN_RATE
 
     def grasp_centre(self, data: mujoco.MjData, index: int) -> np.ndarray:
         """Where object ``index`` is grasped: its centre, or for a hand at most

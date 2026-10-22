@@ -49,6 +49,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import TracebackType
 
 # Offscreen rendering backend: EGL on Linux GPU boxes, GLFW on macOS. Must be set
@@ -77,6 +78,7 @@ from sensorium.bodies.h1_forces import (
     GeomClasses,
     PeakForces,
 )  # noqa: E402
+from sensorium.bodies.h1_grasp_library import GraspLibrary  # noqa: E402
 from sensorium.bodies.h1_layout import skin_layout
 from sensorium.bodies.h1_looks import Appearance, apply_appearance, draw_appearance  # noqa: E402
 from sensorium.bodies.h1_policies import (  # noqa: E402
@@ -218,6 +220,14 @@ class HumanoidRecorder:
         self.director_settings = (
             DirectorSettings.from_setting(director) if director and self.has_table else None
         )
+        library = settings.get("grasp_library")
+        self.grasp_library_paths = [str(p) for p in library] if isinstance(library, list) else None
+        self.grasp_library = (
+            GraspLibrary.load([Path(p) for p in self.grasp_library_paths])
+            if self.grasp_library_paths
+            else None
+        )
+        self.grasp_explore = bool(settings.get("grasp_explore", True))
         tries = settings.get("plan_tries")
         self.plan_tries = int(tries) if tries is not None else None  # type: ignore[call-overload]
         chosen = settings.get("primitives")
@@ -359,6 +369,8 @@ class HumanoidRecorder:
             "task": True if self.task else None,
             "director": director if self.director_settings is not None else None,
             "plan_tries": self.plan_tries,
+            "grasp_library": self.grasp_library_paths,
+            "grasp_explore": None if self.grasp_explore else False,
         }
         return settings | {k: v for k, v in optional.items() if v is not None}
 
@@ -498,6 +510,8 @@ class HumanoidRecorder:
             )
             if self.plan_tries is not None:
                 babble.TRIES = self.plan_tries
+            if self.grasp_library is not None:
+                babble.library, babble.explore = self.grasp_library, self.grasp_explore
             return babble
         return SeatedBabblePolicy(*args, reach_x=self.reach_x)
 
