@@ -1955,6 +1955,71 @@ description and the message to the lead. Compute: about 64 vCPU-h as B-variety-0
 for the outcome probes of both trees, about $4 to $5 on demand. The weights only change which starts
 are drawn, not the cost of a step.
 
+## Why is the JEPA below its floor? (B-diag-0, exploratory, Mac only)
+
+**The fact to explain.** In every B-variety-0 cell the V+P JEPA (`sigreg` objective) scores below its
+random-init floor, on the contact battery and on the outcomes, while MAE is near or above it.
+
+**Code.** `scripts/jepa_diagnostics.py` (`curves`, `encode`, `report`, `trainprobe`, `paired`) runs on
+B-variety-0's checkpoints at 1k, 5k and 10k steps. `scripts/jepa_sanity.py` runs 250-step Mac
+reruns with one change at a time: 3 seeds, trained on the 100 held-out babble_v2 episodes and probed
+on them and on the 100 held-out variety episodes. Two opt-in options were added: `augment.reuse` and
+`model.target_grad`. The probes are the battery's 5-fold episode-grouped ridge. "Pre" is the fusion
+summary token (the projector's input); "post" is the projector output, the state probed so far and
+the one the loss acts on. Figures, not committed: `runs/variety/figures/jepa_curves.png` and
+`jepa_spectrum_{babble,variety}.png`.
+
+**What is ruled out.**
+
+| check | evidence |
+|---|---|
+| collapse or shrinking targets | Embedding std rises 0.66 -> 0.97. Loss / variance falls 0.43 -> 0.07 to 0.10. Effective rank on held-out windows: JEPA 21, floor 19, MAE 24 to 28. |
+| slowness (copying is enough) | At 10k, predictor error / variance is 0.07 to 0.08, while copying the current state gives 1.0. The JEPA state is less smooth than the floor's (lag-1 correlation 0.32 against 0.54). |
+| a nonlinear or badly scaled probe | Per-column standardised ridge equals ridge. A one-layer MLP is worse than ridge for every encoder. |
+| generalisation gap | On the encoder's own pretraining episodes the JEPA is also below its floor (post-projector -0.049 babble, -0.063 variety, resolved). Its train minus held-out gap (0.011 to 0.022) matches the floor's and MAE's. |
+| batch diversity (2 episodes per batch) | reuse 1 equals base (250 steps: -0.012 +- 0.005 against -0.013 +- 0.010). |
+| width below LeWM's threshold | dim 256 is no better (-0.036 +- 0.002). |
+| stop-gradient, a stronger regulariser, a touch teacher | Stop-gradient -0.045 +- 0.005 and SIGReg 1.0 -0.052 +- 0.012 are worse. SIGReg 0 collapses in scale (std 0.02 by step 150). SIGReg 0.01 collapses in rank (8 to 11). `teacher = touch` equals base. |
+
+**What the evidence points to (ranked).**
+
+1. **The objective's output layer discards contact information.** The layer effect relative to the
+   floor, `(JEPA - floor)_pre - (JEPA - floor)_post`, is resolved in all four cells (paired by seed and
+   episode, `paired.difference_in_differences`; MDD = 2.8 SE):
+
+   | data | episodes | JEPA layer effect | MAE layer effect (control) |
+   |---|---|---|---|
+   | babble | own pretraining | **+0.077** (0.011) | +0.010 (0.008) |
+   | babble | held-out | **+0.076** (0.013) | +0.008 (0.008) |
+   | variety | own pretraining | **+0.052** (0.005) | +0.021 (0.012) |
+   | variety | held-out | **+0.053** (0.007) | +0.029 (0.011) |
+
+   Before the projector, the JEPA is at its floor: babble +0.028 (resolved) on its own pretraining
+   episodes and +0.015 held-out; variety -0.011 and -0.018. It is not at MAE's level (MAE pre +0.06 to
+   +0.08 on babble). Guillotine Regularization (Bordes et al., TMLR 2023, arXiv 2206.13378) describes
+   the general effect.
+2. **Behind it: the objective keeps what the action predicts.** Measured with
+   `diagnostics.sense_reliance` at 10k:
+   * JEPA states move with proprio (body 0.68 to 0.84, effector 0.69 to 0.79) and hardly with
+     vision (0.11 to 0.15, down from 0.21 to 0.26 at 1k). MAE: vision 0.21 to 0.38.
+   * The between-episode share of state variance falls from 0.31 to 0.37 (floor) to 0.04 to 0.08
+     (JEPA). MAE keeps 0.10 to 0.25.
+   * About 17 directions carry the JEPA variance, then the spectrum drops by two orders of magnitude
+     (figure).
+   * The predictor beats copying twelvefold: the state is the arm's action-driven kinematics. Scene,
+     objects and contact cannot be predicted from state and action, so they are dropped.
+
+   Consistent with Littwin et al. (NeurIPS 2024, arXiv 2407.03475): JEPAs learn predictable,
+   high-influence features first, MAE high-variance ones.
+
+**Cheapest fix experiment.** Proposed, not run: a 250-step Mac sanity, same protocol, of
+**JEPA + a light pixel-and-proprio reconstruction term on the pre-projector state** (the existing MAE
+decoder, weight 0.1 to 0.5). It forces the encoder to keep vision and scene information that the
+next-state objective drops. Cost: about 40 lines of code and about 20 Mac-minutes for 3 seeds x 2
+weights. If it clears its floor at 250 steps, a 10k GCP check on babble_v2 (3 seeds, same recipe) is
+about 6 vCPU-h, about $1. Reading the probe pre-projector is free, but it only brings the JEPA to its
+floor.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
