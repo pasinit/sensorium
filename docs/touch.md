@@ -507,6 +507,96 @@ Hands: the library does not get them there.
 Hands stay without a library. The next steps change how they grasp: touch-triggered closed-loop
 closing, then a side power wrap for the objects where the pinch is weak.
 
+### A side wrap, the wrist and touch-closed grasps (2026-10-22)
+
+Hands after the library: they still lift about 20% of their grasps on the event-dense table, and
+mostly fail as "no pinch". The fingertips land on the object's top 3-6 cm before the descent ends,
+and the hand stays on it. Three checks follow.
+
+**Touch-closed grasps (removed).** The skin was used to close the loop: the effector's normal force
+against the world, read from the contacts.
+- An observe-only pass on 25 event-dense episodes logged what the skin felt at each closure. Every
+  closure that lifted touched on both sides (thumb and fingers, or both pads): 70 of 70 for the
+  pincers, 27 of 27 for the hands. Of the misses that ended as "no pinch", 0 of 10 and 8 of 52 did.
+  That makes the closure's touch a near-perfect check of whether a grasp holds anything.
+- The first touch during the descent is no such check: it comes early in grasps that lift too (15
+  of 70 pincer successes, 18 of 29 hand successes). Stopping or closing on it made both effectors
+  worse:
+  - pincers 74% -> 50% per grasp, and 37% when closing at the first touch;
+  - hands 21% -> 11%, and 7%.
+- Re-aiming after a closure that touched on one side only did not help either:
+  - hands 20% [15, 25] -> 22% [17, 27] pooled over 55 episodes, the same 18% on fresh seeds 100-129;
+  - pincers 74% -> 67% on the same seeds.
+
+  A failed claw grasp is wrong in its geometry, and aimed again it is the same grasp. The loop was
+  taken out.
+
+**The wrist.** `scripts/hand_reach.py` asks whether a hand pose is reachable at all.
+- Setup: 480 placements (each object 60 times, alone, at a random place, yaw and resting face). The
+  planner's oriented IK runs from 16 random starts.
+- Reached: the grasp point within 1 cm, the arm clear, and the hand no more than 5 mm into the table
+  or the object.
+- Joint sets: the 5 arm joints, which include the forearm's roll (`wrist_yaw`); then with the Shadow
+  wrist's flexion (`WRJ1`, pitch) solved for instead of held at the pinch's angle; then with its
+  deviation (`WRJ2`) as well.
+
+| hand pose | arm (as planned) | + wrist pitch | + pitch and deviation |
+|---|---|---|---|
+| claw pinch from above | 100% | 100% | 100% |
+| side wrap, palm level (vertical palm) | 12% | 12% | 44% |
+| side wrap, palm normal at z -0.4 | 55% | 60% | 64% |
+| side wrap, palm normal at z -0.7 | 81% | 84% | 84% |
+
+- Nearly every miss is the hand meeting the table (417 of 422 for the level wrap), not the IK.
+- The claw's failures are not a matter of wrist range: all its poses are reachable.
+- A more mobile wrist would buy a level side wrap, not more claw lifts. The body stays as it is.
+
+**A side wrap (parked).** `HAND_WRAP` and `wrap_frame` give the hand a second grasp:
+- The palm is turned down onto the object's side (normal at z -0.7, the reachable tilt above), and
+  the fingers point level, 0.3 or 0.6 down.
+- The oriented IK leaves the approach's azimuth free. So the frame point is the object's centre, its
+  extent in front of the palm's face, and the palm faces the object (`wrap_pose`).
+- On closing, the fingers flex fully round the far side and the opposed thumb closes over the top.
+- `WRAP_SHARE` (default 0) sets the share of a hand's grasps that are wraps. `scripts/grasp_library.py
+  --wrap` makes isolated wraps.
+
+Wraps of the table objects, 80 isolated placements each:
+
+| object | wraps planned | wraps lifted | claw lifted (explored library) |
+|---|---|---|---|
+| wood box | 36 | 3 (8%) | 34% |
+| plastic sphere | 27 | 0 | 17% |
+| metal cylinder | 20 | 1 (5%) | 37% |
+| rubber sphere | 20 | 0 | 23% |
+| plastic box | 26 | 2 (8%) | 26% |
+| metal box | 25 | 0 | 32% |
+| wood tall box | 28 | 3 (11%) | 14% |
+| plastic tall cylinder | 31 | 6 (19%) | 42% |
+| all | 213 | 15 (7%) [4, 11] | 28% |
+
+Films show the hand arriving over the object's side with the object inside it. The closing fingers
+then sweep over it, and it stays on the table as the hand rises.
+
+The table objects are small for a Shadow hand (3-10 cm). `--hand-sized` puts three temporary props
+in place of the tall block and bottle, with hidden properties as for the others:
+- a can: 7 cm across, 16 cm tall;
+- a bottle: 6 cm across, 18 cm tall;
+- a box: 11 x 7 x 6 cm.
+
+40 placements each:
+
+| object | claw: planned | claw: lifted | wrap: planned | wrap: lifted |
+|---|---|---|---|---|
+| can | 8 | 5 | 19 | 3 |
+| bottle | 13 | 7 | 18 | 3 |
+| box | 21 | 7 | 17 | 2 |
+| all | 42 | 19 (45%) [31, 60] | 54 | 8 (15%) [8, 27] |
+
+- The wrap does not work on hand-sized objects either, so it is parked.
+- The claw lifts 45% of its grasps of them, against 28% of the table objects; the samples are small.
+- The claw plans only a third of the placements, so the share of placements lifted is 16% (claw) and
+  7% (wrap).
+
 ## Load-time noise (`touch_noise.perturb_touch`)
 
 Stored episodes are clean. The training loader draws, per episode:

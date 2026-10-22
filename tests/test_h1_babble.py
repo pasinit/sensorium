@@ -402,3 +402,46 @@ def test_the_pincer_span_check_refuses_objects_wider_than_the_opening(
     assert not policy.fits(pincer.data, "left", 0, q)
     policy.PINCER_SPAN = 1.0
     assert policy.fits(pincer.data, "left", 0, q)
+
+
+@needs_assets
+def test_a_side_wrap_faces_the_object_with_its_palm() -> None:
+    with HumanoidRecorder(
+        {"effector": "hand", "posture": "seated", "props": ["tall_block"]}
+    ) as recorder:
+        policy = recorder.make_policy("seated_babble", np.random.default_rng(0))
+        assert isinstance(policy, BabblePolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        data = recorder.data
+        names = [recorder.model.body(b).name for b in policy.objects]
+        index = names.index("obj_plastic_tallcylinder")
+        body = policy.objects[index]
+        model = recorder.model
+        for other in policy.objects:  # the others out of the way, the bottle standing in reach
+            adr = model.jnt_qposadr[model.body_jntadr[other]]
+            data.qpos[adr : adr + 3] = (-1.0, -1.0 + 0.3 * policy.objects.index(other), 0.1)
+        adr = model.jnt_qposadr[model.body_jntadr[body]]
+        data.qpos[adr : adr + 7] = (0.45, -0.18, TABLE_TOP_Z + 0.076, 1, 0, 0, 0)
+        mujoco.mj_forward(model, data)
+        centre, side = policy.object_geometry(data, index)[0], "right"
+        radius = float(
+            recorder.model.geom_size[recorder.model.body_geomadr[policy.objects[index]]][0]
+        )
+        assert policy.extent(data, index, np.array([1.0, 0.0, 0.0])) == pytest.approx(
+            radius, abs=1e-3
+        )
+        policy.clearance, policy.axis_weight = policy.GRASP_CLEARANCE, 0.3
+        policy.wrap_plan = True
+        found = None
+        for _ in range(10):
+            found = policy.wrap_pose(data, side, index, centre, -0.3)
+            if found is not None:
+                break
+        assert found is not None
+        point, _, normal = policy.oriented[side].frame_at(data.qpos, found[0])
+        assert point == pytest.approx(centre, abs=0.01)
+        assert normal[2] == pytest.approx(-0.7, abs=0.05)  # turned down onto the object
+        palm = policy.wrap_frames[side]
+        face = point - (policy.extent(data, index, normal) + 0.005) * normal
+        assert np.linalg.norm(face - centre) > radius  # the palm's face is outside the object
+        assert palm.axis_z == pytest.approx(-0.7)

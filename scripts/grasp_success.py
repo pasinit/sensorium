@@ -177,7 +177,6 @@ class Tracker:
             "tip_lag": round(float(np.linalg.norm(tip_lag)), 3),
             # |cos| between the closing axis (pincer) / palm normal (hand) and the object's x axis
             "axis_cos_x": round(abs(float(normal @ data.xmat[body].reshape(3, 3)[:, 0])), 2),
-            "rise_ratio": None,
         }
 
     def parts(self, data: mujoco.MjData, side: str, body: int) -> list[str]:
