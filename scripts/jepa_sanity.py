@@ -10,8 +10,9 @@ model, batch and sampler are B-variety-0's (``configs/model/cpu_tiny.toml``, V+P
 Variants: ``base``; ``reuse1`` (each batch from 16 episodes instead of 2: ``augment.reuse`` 1);
 ``sigreg1``, ``sigreg001``, ``sigreg0`` (SIGReg weight 1.0, 0.01, 0 instead of 0.1); ``dim256``
 (state width 256 instead of 128; LeWM reports a drop below about 184); ``teacher`` (touch as a
-prediction target only, ``model.teacher``); ``stopgrad`` (no gradient into the next-state
-targets); ``mae`` (the reference objective). ``probe`` scores every checkpoint on unseen variety
+prediction target only, ``model.teacher``); ``teacher_in`` (touch as input AND target: this feeds
+touch to the encoder, so its contact probe is not comparable with the V+P arms); ``stopgrad`` (no
+gradient into the next-state targets); ``mae`` (the reference objective). ``probe`` scores every checkpoint on unseen variety
 episodes, ``trainprobe`` on the run's own training episodes.
 
     uv run python scripts/jepa_sanity.py cache
@@ -48,6 +49,7 @@ VARIANTS: dict[str, tuple[dict[str, object], dict[str, object]]] = {
     "sigreg001": ({"sigreg_weight": 0.01}, {}),
     "dim256": ({"dim": 256}, {}),
     "teacher": ({"teacher": "touch"}, {}),
+    "teacher_in": ({"teacher": "touch", "senses": (*variety.NO_TOUCH, "touch")}, {}),
 }
 
 
@@ -62,7 +64,7 @@ def run(variant: str, seed: int, steps: int) -> None:
     model_extra, augment_extra = VARIANTS[variant]
     paths = tuple(str(p) for p in train_paths())
     data = replace(base.data, paths=paths, space_paths=paths, drop_prefix=variety.DROP)
-    model = replace(base.model, senses=variety.NO_TOUCH, **model_extra)  # type: ignore[arg-type]
+    model = replace(base.model, **({"senses": variety.NO_TOUCH} | model_extra))  # type: ignore[arg-type]
     augment = replace(base.augment, cache_episodes=4, frame_cache=str(CACHE), **augment_extra)  # type: ignore[arg-type]
     tc = TrainConfig(
         steps=steps,
