@@ -77,6 +77,8 @@ class ModelConfig:
         mae_ratio, mae_proprio_ratio: Share of frame patches / proprio channels hidden by ``mae``.
         ema_momentum, ema_momentum_end: EMA momentum of the target encoder, linearly
             annealed over the run (``ema_vicreg`` only).
+        target_grad: ``sigreg`` only: gradients flow into the next-state targets (LeWM). False
+            stops them (the encoder is then shaped by the prediction only through its inputs).
         vicreg_var_weight, vicreg_cov_weight: Weights of VICReg's variance and covariance
             terms against an invariance (prediction) weight of 1 (VICReg's own 25 : 25 : 1
             is 1 : 1 : 0.04).
@@ -123,6 +125,7 @@ class ModelConfig:
     ema_momentum_end: float = 0.999
     vicreg_var_weight: float = 1.0
     vicreg_cov_weight: float = 0.04
+    target_grad: bool = True
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -441,7 +444,8 @@ class SensoryModel(nn.Module):
         else:
             extra_loss = torch.zeros((), device=states.device)
         if self.target is None:
-            err = (pred - states[:, 1:]).pow(2).mean(-1)  # [B, T-1]
+            nxt = states[:, 1:] if c.target_grad else states[:, 1:].detach()
+            err = (pred - nxt).pow(2).mean(-1)  # [B, T-1]
             mse = err.mean()
             weighted = (surprise_weights(c.surprise, err, batch) * err).mean()
             reg = self.sigreg(states, pool_time=c.sigreg_pool_time)

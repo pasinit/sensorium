@@ -126,6 +126,7 @@ class AugmentConfig:
     touch_noise: bool = True
     cache_episodes: int = 16
     frame_cache: str = ""  # a sensorium.model.frame_cache directory; "" decodes every episode
+    reuse: int = 8  # sequences cut from an episode per pick (a batch of 16 spans 2 episodes)
 
 
 @dataclass(frozen=True)
@@ -149,6 +150,7 @@ class RunConfig:
             touch_noise=self.augment.touch_noise,
             cache_episodes=self.augment.cache_episodes,
             frame_cache=self.augment.frame_cache,
+            reuse=self.augment.reuse,
         )
 
 

@@ -1741,3 +1741,28 @@ def test_fine_tune_from_a_pretrained_encoder_saves_a_head_that_reads_held_out_wi
     ridge = probes.predict_probes(data, "state")
     assert head.pred.shape == ridge.pred.shape and np.array_equal(head.target, ridge.target)
     assert np.isfinite(head.scores()["contact_left_auroc"])
+
+
+def test_stopping_the_target_gradient_changes_only_the_encoder_gradient(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    batch = batch_of(episodes, space, check_senses(TINY.senses))
+    grads = {}
+    for flag in (True, False):
+        torch.manual_seed(0)
+        model = SensoryModel(replace(TINY, target_grad=flag), space)
+        out = model(batch)
+        out["loss"].backward()
+        params = dict(model.named_parameters())
+        enc = params["encoder.projector.3.weight"].grad
+        pred = params["pred_proj.2.weight"].grad
+        assert enc is not None and pred is not None
+        grads[flag] = (enc.clone(), pred.clone(), float(out["pred"].detach()))
+    assert grads[True][2] == pytest.approx(grads[False][2])  # same forward
+    assert torch.allclose(grads[True][1], grads[False][1])  # same predictor gradient
+    assert not torch.allclose(grads[True][0], grads[False][0])  # the targets' share is gone
+
+
+def test_reuse_reaches_the_loader() -> None:
+    cfg = replace(RunConfig(), augment=replace(RunConfig().augment, reuse=1))
+    assert cfg.loader().reuse == 1 and RunConfig().loader().reuse == 8
