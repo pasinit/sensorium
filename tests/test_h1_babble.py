@@ -326,8 +326,33 @@ def test_hand_grasp_preshapes_over_the_object_and_replans_if_it_moved() -> None:
         mujoco.mj_forward(recorder.model, recorder.data)
         policy.queue[side] = queue[first + 1 :]
         policy.advance(side, recorder.data, 0.0)
-        assert policy.replans == 1
+        assert policy.replans + policy.reaims == 1
         assert policy.queue[side][0] is not queue[first + 1]
+        if policy.reaims:  # aimed again at the same object, where it is now
+            again = [w.watch for w in policy.queue[side] if w.watch is not None]
+            assert again and again[0][0] == body
+            assert np.allclose(again[0][1], recorder.data.xpos[body])
+        policy.reaims_left[side] = 0  # re-aims used up: the next move drops the grasp
+        policy.queue[side] = queue[first + 1 :]
+        policy.advance(side, recorder.data, 0.0)
+        assert policy.replans + policy.reaims == 2 and policy.replans >= 1
+
+
+@needs_assets
+def test_a_hand_pinches_a_standing_tall_block_near_its_top() -> None:
+    with HumanoidRecorder(
+        {"effector": "hand", "posture": "seated", "props": ["tall_block"]}
+    ) as recorder:
+        policy = recorder.make_policy("seated_babble", np.random.default_rng(0))
+        assert isinstance(policy, BabblePolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        names = [recorder.model.body(b).name for b in policy.objects]
+        index = names.index("obj_wood_tallbox")
+        centre, half_height, _ = policy.object_geometry(recorder.data, index)
+        assert policy.vertical_half_extent(recorder.data, index) == pytest.approx(half_height)
+        point = policy.grasp_centre(recorder.data, index)
+        top = centre[2] + half_height
+        assert point[2] == pytest.approx(top - policy.PINCH_BELOW_TOP)  # not at its centre
 
 
 @needs_assets
@@ -362,3 +387,18 @@ def test_scene_director_replaces_lost_objects_and_drops_when_idle() -> None:
         mujoco.mj_forward(recorder.model, recorder.data)
         assert director.step(recorder.data, 0) == 1  # re-placed
         assert recorder.data.qpos[adr + 2] > recorder.table_top
+
+
+@needs_assets
+def test_the_pincer_span_check_refuses_objects_wider_than_the_opening(
+    pincer: HumanoidRecorder,
+) -> None:
+    policy = pincer.make_policy("seated_babble", np.random.default_rng(0))
+    assert isinstance(policy, BabblePolicy)
+    pincer.reset(policy, np.random.default_rng(0))
+    q = policy.cmd_q["left"]
+    assert policy.fits(pincer.data, "left", 0, q)  # PINCER_SPAN 0: no check
+    policy.PINCER_SPAN = 0.001  # narrower than any object
+    assert not policy.fits(pincer.data, "left", 0, q)
+    policy.PINCER_SPAN = 1.0
+    assert policy.fits(pincer.data, "left", 0, q)

@@ -291,6 +291,15 @@ class BabblePolicy:
     FLOOR = 0.12  # m: no tip further under the table's surface (fingertips hang under the palm)
     TRAVEL_STEP = 0.04  # m between the waypoints of a Cartesian travel
     PRESHAPE_HOLD = 8  # control steps a hand waits over the object while its thumb moves under
+    # m under an object's top a hand pinches at most (0: at the centre, as before): the
+    # pinch lies 5.7 cm under the palm's face, so a 15 cm tall block pinched at its centre met the
+    # palm with its top and was pushed over
+    PINCH_BELOW_TOP = 0.045
+    # m: a pincer grasp is planned only if the object is narrower than this along the closing axis
+    # (0: no check). The 2F-85 opens 85 mm; the 10 cm plastic box gripped along its length was
+    # held by the pads' tips on its top and never rose.
+    PINCER_SPAN = 0.0
+    REAIMS = 2  # times a hand's grasp is aimed again at its moved object before it is dropped
     MOVED = 0.015  # m an object may have moved since its grasp was planned before it is replanned
     LINE_POS_TOL = 0.012  # m: an oriented waypoint of a line may miss its point by this much
     ENVELOPE_JUMP = 0.5  # rad: a joint move this big is checked against the tip envelope
@@ -373,6 +382,8 @@ class BabblePolicy:
         self.planning_failures = 0
         self.failures = dict.fromkeys(self.primitives, 0)  # plans dropped, per primitive
         self.replans = 0  # grasps dropped at the descent because the object had moved
+        self.reaims = 0  # ... and grasps aimed again at the moved object instead
+        self.reaims_left = dict.fromkeys(SIDES, 0)  # re-aims still allowed in this grasp
 
     def effector_mean(self, side: str) -> np.ndarray:
         """Normalised home action of this side's effector actuators (open)."""
@@ -660,6 +671,7 @@ class BabblePolicy:
                 self.exempt[:] = False
                 self.queue[side] = queue
                 self.primitive_counts[primitive] += 1
+                self.reaims_left[side] = self.REAIMS if grasping else 0
                 return
             self.failures[primitive] += 1
         self.clearance, self.axis_weight = self.CLEARANCE, 0.0
@@ -828,12 +840,17 @@ class BabblePolicy:
         """Hand: the same sequence with a power closure of the fingers."""
         return self.plan_oriented(side, data, lift=self.LIFT_HEIGHT)
 
-    def plan_oriented(self, side: str, data: mujoco.MjData, lift: float) -> list[Waypoint] | None:
-        """Approach an object oriented, close (1), lift, hold, release (0), retreat."""
-        index = self.pick_object(side, data)
+    def plan_oriented(
+        self, side: str, data: mujoco.MjData, lift: float, index: int | None = None
+    ) -> list[Waypoint] | None:
+        """Approach an object oriented, close (1), lift, hold, release (0), retreat.
+
+        ``index`` names the object (a re-aim, see ``advance``); by default one is picked.
+        """
+        index = self.pick_object(side, data) if index is None else index
         if index is None:
             return None
-        centre, _, _ = self.object_geometry(data, index)
+        centre = self.grasp_centre(data, index)
         goal = centre
         body = self.objects[index]  # the forearm may graze the object it grasps, nothing else
         self.exempt[:] = False
@@ -849,7 +866,7 @@ class BabblePolicy:
             approach = self.oriented[side].frame_at(data.qpos, found[0])[1]
             goal = centre - self.half_extent(data, index, approach) * approach
             found = self.oriented_pose(data, side, goal, approach_z)
-        if found is None:
+        if found is None or not self.fits(data, side, index, found[0]):
             return None
         q_grasp, advance = found
         pre = goal - self.frames[side].back_off * advance
@@ -900,6 +917,57 @@ class BabblePolicy:
         for waypoint in queue[len(lead) :]:  # a hand keeps its pre-shape until the retreat
             waypoint.preshape = not self.pincer
         return queue
+
+    def reaim(self, side: str, data: mujoco.MjData, index: int) -> list[Waypoint] | None:
+        """The hand's grasp planned again for object ``index`` where it is now, if allowed.
+
+        A grasp is re-aimed at most ``REAIMS`` times (2: hands' own lifts per event-dense episode
+        0.60 -> 0.87; 0 was the behaviour before); after that, and for pincers (whose descent is not
+        watched), the arm plans something new instead.
+        """
+        if self.pincer or self.reaims_left[side] <= 0:
+            return None
+        self.reaims_left[side] -= 1
+        self.clearance, self.axis_weight = self.GRASP_CLEARANCE, 0.3  # as plan() for a grasp
+        try:
+            queue = self.plan_oriented(side, data, self.LIFT_HEIGHT, index)
+            if queue and not self.plan_ok(data, side, queue):
+                queue = None
+        finally:
+            self.clearance, self.axis_weight = self.CLEARANCE, 0.0
+            self.exempt[:] = False
+        return queue
+
+    def grasp_centre(self, data: mujoco.MjData, index: int) -> np.ndarray:
+        """Where object ``index`` is grasped: its centre, or for a hand at most
+        ``PINCH_BELOW_TOP`` under its top (pinched at the centre of a tall object, the palm would
+        land on its top)."""
+        centre, _, _ = self.object_geometry(data, index)
+        if self.pincer or not self.PINCH_BELOW_TOP:
+            return centre
+        top = centre[2] + self.vertical_half_extent(data, index)
+        return np.array([centre[0], centre[1], max(centre[2], top - self.PINCH_BELOW_TOP)])
+
+    def fits(self, data: mujoco.MjData, side: str, index: int, q: np.ndarray) -> bool:
+        """For a pincer with ``PINCER_SPAN``: True if object ``index`` is narrower than it along
+        the pads' closing axis at posture ``q``; always True otherwise."""
+        if not (self.pincer and self.PINCER_SPAN):
+            return True
+        axis = self.oriented[side].frame_at(data.qpos, q)[2]
+        return 2 * self.half_extent(data, index, axis) <= self.PINCER_SPAN
+
+    def vertical_half_extent(self, data: mujoco.MjData, index: int) -> float:
+        """Half the height of object ``index`` as it lies now (tipped boxes and cylinders too)."""
+        body = self.objects[index]
+        geom = int(self.model.body_geomadr[body])
+        kind, size = int(self.model.geom_type[geom]), self.model.geom_size[geom]
+        up = data.xmat[body].reshape(3, 3)[2]  # world z in the body's axes
+        if kind == int(mujoco.mjtGeom.mjGEOM_BOX):
+            return float(sum(abs(up[k]) * size[k] for k in range(3)))
+        if kind == int(mujoco.mjtGeom.mjGEOM_CYLINDER):
+            along = abs(float(up[2]))
+            return float(size[0] * math.sqrt(max(0.0, 1 - along * along)) + size[1] * along)
+        return float(size[0])
 
     def half_extent(self, data: mujoco.MjData, index: int, direction: np.ndarray) -> float:
         """An object's horizontal half extent along ``direction`` (its radius if round)."""
@@ -989,8 +1057,11 @@ class BabblePolicy:
             self.queue[side] = [Waypoint(retreat.copy(), self.FAST, hold=5)]
         watch = self.queue[side][0].watch if self.queue[side] else None
         if watch is not None and np.linalg.norm(data.xpos[watch[0]] - watch[1]) > self.MOVED:
-            self.replans += 1  # the object was pushed on the way: plan again from here
-            self.queue[side] = []
+            # the object was pushed on the way: aim at it again from here, else plan anew
+            queue = self.reaim(side, data, self.objects.index(watch[0]))
+            self.replans += queue is None
+            self.reaims += queue is not None
+            self.queue[side] = queue or []
         if not self.queue[side]:
             self.plan(side, data)
         waypoint = self.queue[side][0]
