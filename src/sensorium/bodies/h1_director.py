@@ -104,6 +104,7 @@ class SceneDirector:
         self.rng = np.random.default_rng(0)
         self.idle = 0
         self.last_dropped = np.zeros(len(objects))
+        self.moved: int | None = None  # the object the last intervention moved (an index)
 
     def reset(self, data: mujoco.MjData, rng: np.random.Generator) -> None:
         """Start an episode (after the objects are placed): maybe stack two of them."""
@@ -119,7 +120,11 @@ class SceneDirector:
             self.place(data, top, np.array([xy[0], xy[1], z]), np.zeros(3))
 
     def step(self, data: mujoco.MjData, tick: int) -> int:
-        """Intervene if needed before this control step; returns the ``INTERVENTIONS`` code."""
+        """Intervene if needed before this control step; returns the ``INTERVENTIONS`` code.
+
+        ``moved`` is then the index of the object it moved (None without an intervention).
+        """
+        self.moved = None
         if self.settings.respawn:
             for i, body in enumerate(self.objects):
                 position = data.xpos[body]
@@ -177,6 +182,7 @@ class SceneDirector:
         position = target + np.array([0.0, 0.0, height])
         self.place(data, index, position, np.zeros(3))
         self.last_dropped[index] = tick
+        self.moved = index
 
     def place(
         self, data: mujoco.MjData, index: int, position: np.ndarray, velocity: np.ndarray

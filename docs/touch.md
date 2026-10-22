@@ -387,6 +387,58 @@ J1 + J2 class `kp="0.5"`, and `<option cone="elliptic" impratio="10"/>`). The sp
 are too weak for a pinch; it does say the real hand holds far more than 1.17 kg when it wraps an
 object.
 
+### Own grasp success on the event-dense table (2026-10-22)
+
+The supervisor's priority after the event-dense data (docs/event-dense.md): more lifts the robot
+makes itself. Measured with `scripts/grasp_success.py` on the `configs/event_dense.toml` scene
+(props and scene director), Mac, no rendering. It follows every planned grasp (hands `power`,
+pincers `grasp`). An own lift is the object held 3 cm over its height at the plan for 0.5 s,
+touched. A failed grasp gets one cause: replanned (the object moved before the descent), reflex,
+director (the director moved this object), no pinch (never held between a finger and the thumb,
+or between both pads, in the first 0.75 s closed), metal box, slip (rose 1 cm or more), no rise.
+
+Baseline, 30 episodes per effector (seeds 0-29):
+
+| | grasps/ep | own lifts/ep | success per grasp [Wilson 95%] | main causes |
+|---|---|---|---|---|
+| hands | 6.4 | 0.60 | 9% [6, 14] | replanned 39%, no pinch 27%, no rise 9%, slip 7%, metal box 6% |
+| pincers | 5.6 | 1.97 | 35% [28, 43] | no rise 23%, no pinch 19%, director 11%, metal box 4% |
+
+Each change alone, 30 episodes (hands with re-aiming from the second row on):
+
+| change | effector | own lifts/ep | success per grasp | kept |
+|---|---|---|---|---|
+| re-aim a moved object up to 2 times (`REAIMS`) instead of planning something new | hands | 0.60 -> 0.87 | 9% -> 16% [11, 22] | yes |
+| raise the move threshold 1.5 -> 3 or 5 cm instead | hands | 0.67-0.73 (15 ep) | 11-13% | no: replans became missed pinches |
+| pinch at most 4.5 cm under the object's top (`PINCH_BELOW_TOP`); at the centre of a standing 15 cm block the palm met its top and pushed it over | hands | 0.87 -> 1.03 | 16% -> 20% [14, 27] | yes |
+| grip across the object's narrow side (IK restarts over the wrist yaw) | pincers / hands | 1.97 -> 1.41 / 0.87 (15 ep) | 35% -> 28% / 16% | no: the H1 wrist yaw rarely reaches an aligned grip |
+| pinch gap 7.5 -> 6.5 cm | hands | 0.87 -> 0.47 | 16% -> 9% | no |
+| close at half the rate | hands | 0.73 | 12% | no |
+| the director leaves objects a hand is on or near alone | both | no change | pincer "director" cause 11% -> 8% | no |
+| plan a pincer grasp only if the object is narrower than 7.5 cm along the closing axis (`PINCER_SPAN`) | pincers | 1.97 -> 1.97 | 35% -> 42% [34, 51] | off by default: fewer attempts on the wide boxes, not more lifts |
+
+Verification of the two kept changes (now the defaults) on 30 fresh episodes (seeds 100-129), and
+pooled with the ablation runs (60 episodes):
+
+| hands | own lifts/ep | success per grasp | replanned | no pinch |
+|---|---|---|---|---|
+| before, fresh seeds | 0.67 | 13% [8, 19] | 40% | 27% |
+| after, fresh seeds | 0.90 | 17% [12, 23] | 17% | 37% |
+| before, 60 episodes | 0.63 | 10% [8, 15] | 39% | 27% |
+| after, 60 episodes | 0.97 | 18% [14, 23] | 18% | 37% |
+
+Pincers are unchanged by both changes: 1.60 own lifts/ep and 29% [23, 36] on the fresh seeds
+(1.97 and 35% on seeds 0-29).
+
+Frame strips: `runs/grasp/strip_success_hand.png` (a hand lifts the wood box) and
+`runs/grasp/strip_no_pinch_hand.png` (the main remaining failure: the hand closes along the 10 cm
+plastic box and its fingers pass beside it).
+
+Not good yet: hands still miss the pinch in 37% of grasps (the wide plastic box, spheres that roll
+in the sweep, lying cylinders). Pincers fail to raise the plastic box they grip along its length
+(23-25% "no rise"). Gripping across the narrow side needs an arm that can turn the gripper; the
+H1's wrist yaw does not reach far enough, and the span check only avoids those grasps.
+
 ## Load-time noise (`touch_noise.perturb_touch`)
 
 Stored episodes are clean. The training loader draws, per episode:
