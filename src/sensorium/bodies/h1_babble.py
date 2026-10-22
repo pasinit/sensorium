@@ -24,7 +24,7 @@ arm cannot meet a full 6-D pose (see ``.tmp/phd-a/lift_spike.md`` in the D0.3 PR
 import copy
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import mujoco
 import numpy as np
@@ -62,6 +62,21 @@ HAND_PINCH = {
     "THJ5": (-0.25, -0.25), "THJ4": (1.22, 1.22), "THJ3": (0.0, 0.0), "THJ2": (0.35, 0.35),
     "THJ1": (0.9, 1.5), "WRJ2": (-0.3, -0.3), "WRJ1": (-0.35, -0.35),
 }  # fmt: skip
+# The hand's second grasp, a power wrap from the side (docs/touch.md, "A side wrap"): the palm
+# turned down onto the object's side (its normal at ``WRAP_PALM_Z``: level, it reached 12% of
+# placements, the hand meeting the table; at -0.7, 81%), the fingers flexing fully round its far
+# side and the opposed thumb closing over its top. The wrist as in the pinch. Parked
+# (``WRAP_SHARE`` 0): 7% of isolated wraps lifted, against 28% of claw pinches.
+HAND_WRAP = {
+    "FFJ3": (0.3, 1.57), "FFJ0": (0.4, 3.0), "MFJ3": (0.3, 1.57), "MFJ0": (0.4, 3.0),
+    "RFJ3": (0.3, 1.57), "RFJ0": (0.4, 3.0), "LFJ3": (0.3, 1.57), "LFJ0": (0.4, 3.0),
+    "THJ5": (0.3, 0.3), "THJ4": (1.0, 1.22), "THJ3": (0.0, 0.0), "THJ2": (0.0, 0.5),
+    "THJ1": (0.2, 1.2), "WRJ2": (-0.3, -0.3), "WRJ1": (-0.35, -0.35),
+}  # fmt: skip
+WRAP_PALM_Z = -0.7
+WRAP_HEIGHTS = (0.0, -0.3, -0.6)  # z of the fingers' direction in a wrap
+WRAP_GAP = 0.005  # m between the palm's face and the object, planned
+PALM_FACE = (0.045, 0.02)  # m along the fingers and the palm normal: the palm face's centre
 # Outside a grasp these follow the closure from 0 (open); the other hand actuators babble.
 HAND_FLEXORS = (
     "FFJ3", "FFJ0", "MFJ3", "MFJ0", "RFJ3", "RFJ0", "LFJ3", "LFJ0", "THJ4", "THJ1", "THJ2",
@@ -86,6 +101,7 @@ class Waypoint:
     preshape: bool = False  # hand: the grasp's pre-shape, closing towards the pinch with ``grip``
     watch: tuple[int, np.ndarray] | None = None  # (object body, planned position): see ``advance``
     phase: int = 0  # for the experiment programs: PHASES index (travel, descent, contact, ...)
+    wrap: bool = False  # hand: the pre-shape and closure are the side wrap's (``HAND_WRAP``)
 
 
 @dataclass(frozen=True)
@@ -257,6 +273,14 @@ def grasp_frame(model: mujoco.MjModel, effector: str, side: str) -> GraspFrame:
     return GraspFrame(palm, offset, fingers, normal, "axis", 0.10, HAND_PALM_Z, wrist)
 
 
+def wrap_frame(model: mujoco.MjModel, side: str) -> GraspFrame:
+    """The hand's side-wrap frame: the palm face's centre (``PALM_FACE``), the fingers as the
+    approach, the palm normal held at ``WRAP_PALM_Z``; the hand advances along the palm normal."""
+    pinch = grasp_frame(model, "hand", side)
+    offset = PALM_FACE[0] * pinch.approach + PALM_FACE[1] * pinch.axis
+    return replace(pinch, offset=offset, axis_z=WRAP_PALM_Z, back_off=0.05)
+
+
 class BabblePolicy:
     """Seated babbling from a repertoire of primitives with count-based goal selection.
 
@@ -308,6 +332,7 @@ class BabblePolicy:
     )
     EXPLORE_STARTS = 12  # random IK starts per explored posture
     EXPLORE_JITTER = 0.006  # m of noise on an explored grasp point
+    WRAP_SHARE = 0.0  # share of a hand's grasps that are side wraps
     REAIMS = 2  # times a hand's grasp is aimed again at its moved object before it is dropped
     MOVED = 0.015  # m an object may have moved since its grasp was planned before it is replanned
     LINE_POS_TOL = 0.012  # m: an oriented waypoint of a line may miss its point by this much
@@ -353,6 +378,10 @@ class BabblePolicy:
         }
         self.frames = {s: grasp_frame(model, effector, s) for s in SIDES}
         self.oriented = {s: OrientedIK(model, s, self.frames[s]) for s in SIDES}
+        if not self.pincer:
+            self.wrap_frames = {s: wrap_frame(model, s) for s in SIDES}
+            self.wrap_oriented = {s: OrientedIK(model, s, self.wrap_frames[s]) for s in SIDES}
+        self.wrap_plan = False  # planning a side wrap now (its frame is swapped in)
         self.home_ctrl = space.home("seated")
         # A copy of the model whose contact margin reaches CLEARANCE, so that near misses show
         # up as contacts with a positive distance (checked with kinematics and collision only:
@@ -381,6 +410,9 @@ class BabblePolicy:
         self.queue: dict[str, list[Waypoint]] = {s: [] for s in SIDES}
         self.grip = dict.fromkeys(SIDES, 0.0)
         self.closure = {s: self.closure_actuators(s) for s in SIDES}
+        self.wrap_closure = {s: self.closure_actuators(s, table=HAND_WRAP) for s in SIDES}
+        self.wrapping = dict.fromkeys(SIDES, False)  # the arm's waypoint is a side wrap's
+        self.grasp_wrap = dict.fromkeys(SIDES, False)  # the arm's grasp is a side wrap
         self.flexors = {s: self.closure_actuators(s, HAND_FLEXORS) for s in SIDES}
         self.preshape = dict.fromkeys(SIDES, False)  # the hand holds the grasp's pre-shape
         self.primitive_counts = dict.fromkeys(self.primitives, 0)
@@ -402,11 +434,15 @@ class BabblePolicy:
         return self.space.to_action(self.home_ctrl)[self.space.effector[side]]
 
     def closure_actuators(
-        self, side: str, names: tuple[str, ...] | None = None
+        self,
+        side: str,
+        names: tuple[str, ...] | None = None,
+        table: dict[str, tuple[float, float]] = HAND_PINCH,
     ) -> dict[int, tuple[float, float]]:
         """Hand: effector-action index -> (pre-shape, closed) ctrl value of the grasp's actuators.
 
-        ``names`` restricts it to those actuators (``HAND_PINCH`` keys).
+        ``names`` restricts it to those actuators (``HAND_PINCH`` keys); ``table`` gives the
+        values (``HAND_WRAP`` for the side wrap).
         """
         if self.pincer:
             return {}
@@ -414,7 +450,7 @@ class BabblePolicy:
         indices = self.space.effector[side]
         return {
             indices.index(self.space.index[prefix + name]): values
-            for name, values in HAND_PINCH.items()
+            for name, values in table.items()
             if names is None or name in names
         }
 
@@ -909,16 +945,46 @@ class BabblePolicy:
         return self.plan_oriented(side, data, lift=self.LIFT_HEIGHT)
 
     def plan_oriented(
-        self, side: str, data: mujoco.MjData, lift: float, index: int | None = None
+        self,
+        side: str,
+        data: mujoco.MjData,
+        lift: float,
+        index: int | None = None,
+        wrap: bool | None = None,
     ) -> list[Waypoint] | None:
         """Approach an object oriented, close (1), lift, hold, release (0), retreat.
 
-        ``index`` names the object (a re-aim, see ``advance``); by default one is picked.
+        ``index`` names the object (a re-aim, see ``advance``); by default one is picked. A hand's
+        grasp is a side wrap if ``wrap``, by default with probability ``WRAP_SHARE``.
         """
         if index is None:
             index = self.pick_object(side, data, self.graspable if self.library else None)
         if index is None:
             return None
+        if wrap is None:
+            # (no draw at a share of 0: the babbling's random stream stays as it was)
+            wrap = not self.pincer and self.WRAP_SHARE > 0 and self.rng.random() < self.WRAP_SHARE
+        saved = self.frames[side], self.oriented[side]
+        if wrap:
+            self.frames[side], self.oriented[side] = (
+                self.wrap_frames[side],
+                self.wrap_oriented[side],
+            )
+        self.wrap_plan = wrap
+        try:
+            queue = self.grasp_queue(side, data, lift, index)
+        finally:
+            self.frames[side], self.oriented[side] = saved
+            self.wrap_plan = False
+        self.grasp_wrap[side] = wrap
+        for waypoint in queue or []:
+            waypoint.wrap = wrap
+        return queue
+
+    def grasp_queue(
+        self, side: str, data: mujoco.MjData, lift: float, index: int
+    ) -> list[Waypoint] | None:
+        """``plan_oriented``'s movement for object ``index`` with the arm's current frame."""
         body = self.objects[index]  # the forearm may graze the object it grasps, nothing else
         self.exempt[:] = False
         self.exempt[
@@ -990,7 +1056,7 @@ class BabblePolicy:
         self.reaims_left[side] -= 1
         self.clearance, self.axis_weight = self.GRASP_CLEARANCE, 0.3  # as plan() for a grasp
         try:
-            queue = self.plan_oriented(side, data, self.LIFT_HEIGHT, index)
+            queue = self.plan_oriented(side, data, self.LIFT_HEIGHT, index, self.grasp_wrap[side])
             if queue and not self.plan_ok(data, side, queue):
                 queue = None
         finally:
@@ -1006,13 +1072,20 @@ class BabblePolicy:
         With ``explore`` (library making, or choosing with a library) the IK starts and the
         posture among those found are drawn at random, so that repeated calls give varied grasps.
         """
-        centre = self.grasp_centre(data, index)
+        if self.wrap_plan:
+            centre = self.object_geometry(data, index)[0]
+        else:
+            centre = self.grasp_centre(data, index)
         if self.explore and self.library is None:  # making a library: vary the point too
             centre = centre + self.rng.normal(0.0, self.EXPLORE_JITTER, 3)
-        approach_z = float(self.rng.choice(GRASP_HEIGHTS if self.pincer else HAND_GRASP_HEIGHTS))
+        heights = WRAP_HEIGHTS if self.wrap_plan else HAND_GRASP_HEIGHTS
+        approach_z = float(self.rng.choice(GRASP_HEIGHTS if self.pincer else heights))
         goal = centre
-        found = self.oriented_pose(data, side, centre, approach_z)
-        if found is not None and not self.pincer:
+        if self.wrap_plan:
+            found = self.wrap_pose(data, side, index, centre, approach_z)
+        else:
+            found = self.oriented_pose(data, side, centre, approach_z)
+        if found is not None and not self.pincer and not self.wrap_plan:
             # The hand's frame point is the object's near face: back it off along the fingers by
             # the object's half extent in their direction, and solve again from there.
             approach = self.oriented[side].frame_at(data.qpos, found[0])[1]
@@ -1022,12 +1095,34 @@ class BabblePolicy:
             return None
         return found[0], found[1], goal, approach_z
 
+    def wrap_pose(
+        self, data: mujoco.MjData, side: str, index: int, centre: np.ndarray, approach_z: float
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """A side wrap's posture for object ``index``: the palm facing ``centre``.
+
+        The oriented IK leaves the approach's azimuth free, so the frame point is put at the
+        object's centre, the object's extent along the palm normal (and ``WRAP_GAP``) in front of
+        the palm's face: the palm then faces the centre. The arm's IK is swapped for that frame's
+        for the rest of the plan (``plan_oriented`` restores it).
+        """
+        base = self.wrap_frames[side]
+        self.oriented[side] = self.wrap_oriented[side]
+        found = self.oriented_pose(data, side, centre, approach_z)  # the palm face at the centre
+        if found is None:
+            return None
+        normal = self.oriented[side].frame_at(data.qpos, found[0])[2]
+        reach = self.extent(data, index, normal) + WRAP_GAP
+        frame = replace(base, offset=base.offset + reach * base.axis)
+        self.oriented[side] = OrientedIK(self.model, side, frame)
+        return self.oriented_pose(data, side, centre, approach_z, seed=found[0])
+
     def choose_grasp(
         self, data: mujoco.MjData, side: str, index: int
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
         """The grasp to make of object ``index``, or None.
 
-        Without a library, the first candidate. With one, the best of ``GRASP_CANDIDATES`` by the
+        Without a library, the first candidate (a side wrap: the first found of
+        ``GRASP_CANDIDATES``). With one, the best of ``GRASP_CANDIDATES`` by the
         library's score, if it reaches ``LIBRARY_MIN_SCORE``. ``last_grasp`` keeps the chosen
         grasp's key, descriptor and score (the library maker records them).
         """
@@ -1035,7 +1130,10 @@ class BabblePolicy:
         key = grasp_key(self.model, data, body)
         best: tuple[float, tuple[np.ndarray, np.ndarray, np.ndarray, float], np.ndarray] | None
         best = None
-        for _ in range(self.GRASP_CANDIDATES if self.library is not None else 1):
+        tries = self.GRASP_CANDIDATES if self.library is not None or self.wrap_plan else 1
+        for _ in range(tries):
+            if best is not None and self.library is None:
+                break  # without a library the first grasp found is made
             candidate = self.grasp_candidate(data, side, index)
             if candidate is None:
                 continue
@@ -1097,6 +1195,19 @@ class BabblePolicy:
         flat /= max(float(np.linalg.norm(flat)), 1e-9)
         axes = data.xmat[body].reshape(3, 3)
         return float(sum(abs(flat @ axes[:, k]) * self.model.geom_size[geom][k] for k in range(3)))
+
+    def extent(self, data: mujoco.MjData, index: int, direction: np.ndarray) -> float:
+        """How far object ``index`` reaches from its centre along unit ``direction``."""
+        body = self.objects[index]
+        geom = int(self.model.body_geomadr[body])
+        kind, size = int(self.model.geom_type[geom]), self.model.geom_size[geom]
+        local = data.xmat[body].reshape(3, 3).T @ direction
+        if kind == int(mujoco.mjtGeom.mjGEOM_BOX):
+            return float(np.abs(local) @ size[:3])
+        if kind == int(mujoco.mjtGeom.mjGEOM_CYLINDER):
+            along = abs(float(local[2]))
+            return float(size[0] * math.sqrt(max(0.0, 1 - along * along)) + size[1] * along)
+        return float(size[0])
 
     # ------------------------------------------------------------------ acting
 
@@ -1185,6 +1296,7 @@ class BabblePolicy:
         waypoint = self.queue[side][0]
         self.wait_steps += int(waypoint.wait)
         self.preshape[side] = waypoint.preshape
+        self.wrapping[side] = waypoint.wrap
         self.phase[side] = PHASE_WAIT if waypoint.wait else waypoint.phase
         # One scale for all joints, so that the command follows the straight joint-space path that
         # ``path_ok`` checked (clipping each joint separately bends it, and swings the arm).
@@ -1221,7 +1333,8 @@ class BabblePolicy:
                 noise = np.clip(noise, -1, 1) * 0.2 + (-1.0 + 2.0 * grip)
             else:
                 shaped = self.preshape[side]
-                for j, (open_, closed) in (self.closure if shaped else self.flexors)[side].items():
+                closure = self.wrap_closure if self.wrapping[side] else self.closure
+                for j, (open_, closed) in (closure if shaped else self.flexors)[side].items():
                     actuator = self.space.effector[side][j]
                     value = open_ + grip * (closed - open_) if shaped else grip * closed
                     noise[j] = (
