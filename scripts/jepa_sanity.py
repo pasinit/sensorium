@@ -12,7 +12,8 @@ Variants: ``base``; ``reuse1`` (each batch from 16 episodes instead of 2: ``augm
 (state width 256 instead of 128; LeWM reports a drop below about 184); ``teacher`` (touch as a
 prediction target only, ``model.teacher``); ``teacher_in`` (touch as input AND target: this feeds
 touch to the encoder, so its contact probe is not comparable with the V+P arms); ``stopgrad`` (no
-gradient into the next-state targets); ``mae`` (the reference objective). ``probe`` scores every
+gradient into the next-state targets); ``mae`` (the reference objective); ``recon05`` (JEPA plus
+pre-projector reconstruction, weight 0.5); ``drop02`` (proprio dropout 0.2). ``probe`` scores every
 checkpoint on unseen variety episodes, ``trainprobe`` on the run's own training episodes.
 
     uv run python scripts/jepa_sanity.py cache
@@ -50,6 +51,8 @@ VARIANTS: dict[str, tuple[dict[str, object], dict[str, object]]] = {
     "dim256": ({"dim": 256}, {}),
     "teacher": ({"teacher": "touch"}, {}),
     "teacher_in": ({"teacher": "touch", "senses": (*variety.NO_TOUCH, "touch")}, {}),
+    "recon05": ({"recon_weight": 0.5}, {}),
+    "drop02": ({"proprio_dropout": 0.2}, {}),
 }
 
 

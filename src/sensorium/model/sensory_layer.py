@@ -77,6 +77,11 @@ class ModelConfig:
         mae_ratio, mae_proprio_ratio: Share of frame patches / proprio channels hidden by ``mae``.
         ema_momentum, ema_momentum_end: EMA momentum of the target encoder, linearly
             annealed over the run (``ema_vicreg`` only).
+        recon_weight: ``sigreg`` only: weight of an MAE-style reconstruction term (0: off). A
+            decoder reads the *pre-projector* state of a masked copy of the batch and reconstructs
+            the masked patches and proprio channels (``mae_ratio``, ``mae_proprio_ratio``; the
+            ``mae`` objective's targets), so the encoder must keep what next-state prediction can
+            drop; the projector and the next-state loss are unchanged.
         target_grad: ``sigreg`` only: gradients flow into the next-state targets (LeWM). False
             stops them (the encoder is then shaped by the prediction only through its inputs).
         vicreg_var_weight, vicreg_cov_weight: Weights of VICReg's variance and covariance
@@ -126,6 +131,7 @@ class ModelConfig:
     vicreg_var_weight: float = 1.0
     vicreg_cov_weight: float = 0.04
     target_grad: bool = True
+    recon_weight: float = 0.0
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -146,6 +152,10 @@ class ModelConfig:
             raise ValueError(
                 f"objective {self.objective!r} supports vision and proprio senses only"
             )
+        if self.recon_weight < 0:
+            raise ValueError(f"recon_weight must be >= 0, got {self.recon_weight}")
+        if self.recon_weight > 0 and (self.objective != "sigreg" or "vision" not in self.senses):
+            raise ValueError("recon_weight > 0 needs the sigreg objective and the vision sense")
 
 
 class StateEncoder(nn.Module):
@@ -251,6 +261,10 @@ class StateEncoder(nn.Module):
             batch: Tensors per sense, ``action``, ``present`` and ``region_mask``.
             drop: Apply sense dropout (training only).
         """
+        return self.project(self.summary_token(batch, drop))
+
+    def summary_token(self, batch: Mapping[str, Tensor], drop: bool = False) -> Tensor:
+        """The fusion's summary token ``[B, T, dim]``: the state before the projector."""
         b, t = batch["action"].shape[:2]
         keep = self.keep_mask(batch["present"], drop).repeat_interleave(t, 0)  # [N, S]
         tokens = [self.summary.expand(b * t, -1, -1), *self.sense_tokens(batch)]
@@ -258,8 +272,12 @@ class StateEncoder(nn.Module):
         valid += [keep[:, i : i + 1].expand(-1, n) for i, n in enumerate(self.n_tokens.values())]
         x = torch.cat(tokens, 1) + self.slot
         mask = torch.cat(valid, 1)[:, None, None, :]
-        summary = self.fusion(x, mask=mask)[:, 0]
-        return self.projector(summary).view(b, t, -1)
+        return self.fusion(x, mask=mask)[:, 0].view(b, t, -1)
+
+    def project(self, summary: Tensor) -> Tensor:
+        """Projector output ``[B, T, dim]`` of summary tokens ``[B, T, dim]`` (the state)."""
+        b, t = summary.shape[:2]
+        return self.projector(summary.flatten(0, 1)).view(b, t, -1)
 
 
 def surprise_weights(kind: str, err: Tensor, batch: Mapping[str, Tensor]) -> Tensor:
@@ -351,6 +369,13 @@ class SensoryModel(nn.Module):
         if cfg.objective == "ema_vicreg":
             self.target = copy.deepcopy(self.encoder)
             self.target.requires_grad_(False)
+        self.recon: reference.InputDecoder | None = None
+        if cfg.recon_weight > 0:  # created last: the other modules' initialisation is unchanged
+            side = cfg.vision_size // cfg.vision_patch
+            proprio = sum(space.size(s) for s in self.senses if s in PROPRIO_SENSES)
+            self.recon = reference.InputDecoder(
+                d, 4 * d, side * side, cfg.vision_patch**2 * 3, proprio
+            )
 
     def _view(self, batch: Mapping[str, Tensor]) -> Mapping[str, Tensor]:
         """The batch as the state encoder sees it: ``present`` restricted to its own senses."""
@@ -392,15 +417,7 @@ class SensoryModel(nn.Module):
         pixels = reference.patchify(batch["vision"], c.vision_patch)
         proprio = reference.proprio_last(batch, self.senses)
         if c.objective == "mae":
-            masked, hidden, channels = reference.mask_batch(
-                batch, self.senses, c.vision_patch, c.mae_ratio, c.mae_proprio_ratio
-            )
-            states = self.embed(masked)
-            vis, prop = decoder(states)
-            err = (vis - pixels).pow(2).mean(-1)
-            pix = (err * hidden).sum() / hidden.sum().clamp_min(1)
-            prop_err = (prop - proprio).pow(2)
-            prop_loss = (prop_err * channels).sum() / channels.sum().clamp_min(1)
+            states, pix, prop_loss = self._masked_recon(batch, decoder, pre=False)
         else:
             states = self.embed(batch)
             cond = self.action(batch["action"].flatten(0, 1)).view_as(states)
@@ -417,6 +434,27 @@ class SensoryModel(nn.Module):
             "prop": prop_loss.detach(),
             "states": states,
         }
+
+    def _masked_recon(
+        self, batch: Mapping[str, Tensor], decoder: "reference.InputDecoder", pre: bool
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """MAE-style masked reconstruction (``reference.mask_batch``): the states of the masked
+        batch (projector output, or the summary token if ``pre``) and the pixel and proprio
+        losses on the masked entries only."""
+        c = self.cfg
+        masked, hidden, channels = reference.mask_batch(
+            batch, self.senses, c.vision_patch, c.mae_ratio, c.mae_proprio_ratio
+        )
+        view = self._view(masked)
+        states = self.encoder.summary_token(view, drop=self.training) if pre else self.embed(masked)
+        vis, prop = decoder(states)
+        pixels = reference.patchify(batch["vision"], c.vision_patch)
+        proprio = reference.proprio_last(batch, self.senses)
+        err = (vis - pixels).pow(2).mean(-1)
+        pix = (err * hidden).sum() / hidden.sum().clamp_min(1)
+        prop_err = (prop - proprio).pow(2)
+        prop_loss = (prop_err * channels).sum() / channels.sum().clamp_min(1)
+        return states, pix, prop_loss
 
     def forward(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         """Losses of one batch.
@@ -449,6 +487,11 @@ class SensoryModel(nn.Module):
             mse = err.mean()
             weighted = (surprise_weights(c.surprise, err, batch) * err).mean()
             reg = self.sigreg(states, pool_time=c.sigreg_pool_time)
+            if self.recon is not None:
+                _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=True)
+                recon = pix + prop_loss
+                extra = {**extra, "recon": recon.detach()}
+                extra_loss = extra_loss + c.recon_weight * recon
             return {
                 "loss": weighted + c.sigreg_weight * reg + extra_loss,
                 "pred": mse,
