@@ -507,6 +507,27 @@ Hands: the library does not get them there.
 Hands stay without a library. The next steps change how they grasp: touch-triggered closed-loop
 closing, then a side power wrap for the objects where the pinch is weak.
 
+**Variety and reflexes of the library pincers (2026-10-22).** Event-dense seeds 0-24, lifts per 25
+episodes:
+
+| pincers with the library | per grasp [Wilson 95%] | own lifts/ep | distinct objects/ep | reflex |
+|---|---|---|---|---|
+| as merged | 74% [65, 82] | 2.80 | 1.40 | 9% |
+| each own lift counts as 3 extra tries when objects are picked | 77% | 2.88 | 1.36 | |
+| ... as 8 extra tries | 74% | 2.68 | 1.36 | |
+| bar 0.4 for objects not lifted yet in the episode (0.6 after) | 61% [52, 70] | 2.76 | 1.40 | |
+| grasp clearance +4 mm (from -3 mm) | 73% [62, 81] | 2.36 | 1.16 | 1% |
+
+- Picking is not what concentrates the lifts on the metal box (28 of 70) and metal cylinder (24).
+  The library is: few grasps of the plastic sphere, wood box and plastic box reach the bar.
+- The lower bar for unlifted objects spreads the lifts a little: the metal box is 23 of 69, and the
+  plastic box is lifted 6 times instead of once. But it adds failing grasps, and distinct objects per
+  episode do not change.
+- The reflexes are the forearm pressed into the table or the grasped object, both of which grasp
+  plans allow by a few millimetres. Planning them clear removes the reflexes but also a sixth of
+  the plans.
+- None was kept.
+
 ### A side wrap, the wrist and touch-closed grasps (2026-10-22)
 
 Hands after the library: they still lift about 20% of their grasps on the event-dense table, and
