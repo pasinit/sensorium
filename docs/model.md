@@ -2194,6 +2194,66 @@ recon05 - A0 is +0.084 post (resolved).
   predictor, which MAE does not have) is where the JEPA half could add something. Comparing the two
   needs a downstream use that reads the predictor, which the battery does not.
 
+## B-fix-1: reconstruction in one masked pass (pre-registered)
+
+**Written before any run.** In B-fix-0, `recon05` undid the JEPA's contact loss. It reached MAE but did
+not pass it. It ran two encoder passes per step: the next-state objective on the clean window, the
+reconstruction on a masked copy. The supervisor's variant uses **one masked input, so there is no
+clean pass and there are no clean targets**:
+
+* the window is masked once (`mae_ratio` 0.75, `mae_proprio_ratio` 0.5, `reference.mask_batch`);
+* the encoder runs once on it: `z` = summary token, `s` = projector(`z`);
+* next-state MSE on `s` (gradients through the targets, as in `sigreg`), plus 0.1 x SIGReg on `s`;
+* the decoder reads `z` and is scored on the hidden patches and channels, weight 0.5.
+
+The option is `model.recon_input = "masked"`. The default `"separate"` is B-fix-0's two-pass
+objective, and the code path is unchanged. Masking is part of the training objective only; `encode`
+and the probes see clean windows. Tested: one encoder forward per step with the option on, two with
+it off, and the decoder reads the pre-projector summary of that one pass.
+
+**Arm.** `fix1-recon05`, with the recipe of B-fix-0 (babble_v2, n = 791, V+P, 10,000 steps x 16,
+checkpoints 0 to 10,000, seeds 0 to 2, the 128 px cache).
+
+**References: B-fix-0's saved predictions, not re-probed.** recon05, MAE, A0 and the floor are read
+from B-fix-0's stored predictions. The new arm is probed on the same three episode sets, with the same
+windows, labels, probe (episode-grouped 5-fold ridge) and scores, so the contrasts pair directly. The
+contrast code checks that the windows and targets are identical and fails otherwise.
+
+**Primary contrast.** `fix1-recon05 - recon05` on the **contact AUROCs**, **pre- and post-projector**,
+**held-out babble_v2**, 10,000 steps:
+
+* paired by seed and episode, MDD = 2.8 x combined SE;
+* read per layer: **better** (resolved positive), **worse** (resolved negative) or **no difference**.
+
+**Secondary.**
+
+* `fix1-recon05 - MAE` and `fix1-recon05 - floor`, both scores and both layers.
+* Every contrast also on the own-pretraining babble_v2 and held-out variety sets.
+
+**Reported, not judged.**
+
+* **Next-state MSE against recon05 and A0** (figure `fix1_losses.png`, and the mean of the last 500
+  steps). The targets now come from masked windows, which the predictor cannot foresee, so a higher
+  next-state loss is expected and is not a failure by itself.
+* **Training speed (seq/s) against recon05.** One pass should cost about as much as A0, about half of
+  recon05's two passes. This VM runs 3 trainings instead of B-fix-0's 15, at the same 2 threads and
+  1 loader worker each, so absolute seq/s are not strictly comparable. The ratio against A0's logged
+  speed is reported with that caveat.
+
+**Expectation, so it can be wrong.** No difference pre-projector: the decoder still forces the summary
+token to keep the masked content. Possibly worse post-projector: the next-state objective now acts on
+masked states, and the projector is shaped by noisier targets.
+
+**Compute.**
+
+* n2-standard-16, on demand, 3 trainings at 2 threads each.
+* About 1 h 10 min: setup and cache 15 min, training about 40 min, encoding and probing the new arm's
+  18 checkpoints about 10 min, report about 5 min.
+* About $1 at about $0.78 per hour, capped at 2 h (about $1.60).
+* The report's bootstrap is now fast. AUROC is vectorised: the same values, tested against the
+  pairwise definition. Each saved prediction is loaded once, so its bootstrap is reused across
+  contrasts.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:

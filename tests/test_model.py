@@ -1824,3 +1824,51 @@ def test_proprio_dropout_hides_every_proprio_sense_of_a_sequence(space: ChannelS
     assert keep[:, proprio].all(1)[~dropped].all()  # never a partial drop
     assert keep[:, enc.senses.index("vision")].all()
     assert enc.keep_mask(present, drop=False).all()  # never at evaluation
+
+
+def test_auroc_matches_the_pairwise_definition_with_ties() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(20):
+        score = rng.integers(0, 6, 40).astype(float)  # many ties
+        label = (rng.random(40) < 0.4).astype(float)
+        pos, neg = score[label > 0.5], score[label <= 0.5]
+        pairs = (pos[:, None] > neg[None]).mean() + 0.5 * (pos[:, None] == neg[None]).mean()
+        assert probes.auroc(score, label) == pytest.approx(pairs)
+
+
+def test_single_masked_pass_runs_the_encoder_once_and_decodes_the_summary(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
+    batch = batch_of(episodes, space, check_senses(senses))
+    calls = {}
+    for mode in ("separate", "masked"):
+        torch.manual_seed(0)
+        model = SensoryModel(
+            replace(TINY, senses=senses, recon_weight=0.5, recon_input=mode), space
+        )
+        fusion_calls: list[int] = []
+        summaries: list[Tensor] = []
+        decoded: list[Tensor] = []
+        model.encoder.fusion.register_forward_hook(
+            lambda m, a, o, store=fusion_calls: store.append(1)
+        )
+        model.encoder.projector.register_forward_pre_hook(
+            lambda m, a, store=summaries: store.append(a[0].detach())
+        )
+        assert model.recon is not None
+        model.recon.register_forward_pre_hook(
+            lambda m, a, store=decoded: store.append(a[0].detach())
+        )
+        out = model(batch)
+        calls[mode] = len(fusion_calls)
+        assert float(out["recon"]) > 0 and torch.isfinite(out["loss"])
+        if mode == "masked":  # the decoder reads the one pass's pre-projector summary
+            assert len(summaries) == 1 and len(decoded) == 1
+            assert torch.equal(decoded[0].flatten(0, 1), summaries[0])
+    assert calls == {"separate": 2, "masked": 1}
+    torch.manual_seed(0)
+    plain = SensoryModel(replace(TINY, senses=senses, recon_weight=0.5), space)
+    assert plain.cfg.recon_input == "separate"  # the default is the two-pass objective
+    with pytest.raises(ValueError, match="recon_weight > 0"):
+        replace(TINY, senses=senses, recon_input="masked")
