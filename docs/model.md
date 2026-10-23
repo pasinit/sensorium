@@ -2254,6 +2254,80 @@ masked states, and the projector is shaped by noisier targets.
   pairwise definition. Each saved prediction is loaded once, so its bootstrap is reused across
   contrasts.
 
+### B-fix-1: results (GCP, n2-standard-16 then a finishing n2-standard-8, 3 seeds)
+
+**Runs.**
+
+* All 3 seeds reached 10,000 steps (training 08:24 to 09:01 UTC).
+* Three probe shards crashed on the reused floor references: `probe` opened encodings that were not on
+  the VM. The fix made `probe` skip already-probed encoders, as `encode` does.
+* A finishing run probed the remaining checkpoints and wrote the report (09:35 to 09:49 UTC).
+* About $1 in all (on-demand list prices).
+* The references are B-fix-0's saved predictions, paired directly with the new arm on the same windows
+  and targets.
+* Figures, not committed: `fix1_losses.png` and `fix_probe_<set>.png` (the new arm in black).
+
+**Scores at 10,000 steps** (mean +- sd over 3 seeds):
+
+| arm | set | contact pre | contact post | outcome pre | outcome post |
+|---|---|---|---|---|---|
+| recon05 (two passes) | held-out babble_v2 | 0.61 +- 0.01 | 0.55 +- 0.01 | 0.41 +- 0.00 | 0.37 +- 0.01 |
+| **fix1-recon05 (one masked pass)** | held-out babble_v2 | 0.61 +- 0.01 | 0.56 +- 0.00 | 0.41 +- 0.01 | 0.38 +- 0.00 |
+| MAE | held-out babble_v2 | 0.62 +- 0.00 | 0.58 +- 0.01 | 0.41 +- 0.01 | 0.38 +- 0.01 |
+| fix1-recon05 | own-pretraining babble_v2 | 0.61 +- 0.01 | 0.57 +- 0.01 | 0.42 +- 0.01 | 0.41 +- 0.00 |
+| fix1-recon05 | held-out variety | 0.62 +- 0.01 | 0.59 +- 0.01 | 0.42 +- 0.01 | 0.40 +- 0.01 |
+
+**Primary contrast** `fix1-recon05 - recon05`, contact AUROCs, held-out babble_v2 (paired by seed and
+episode; combined SE, MDD):
+
+| layer | contrast | reading |
+|---|---|---|
+| pre-projector | -0.004 (0.006, MDD 0.017) | **no difference** |
+| post-projector | +0.014 (0.008, MDD 0.024) | **no difference** |
+
+**Secondary** (contrast, combined SE in brackets; *resolved* = beyond 2.8 SE):
+
+| contrast | set | contact pre | contact post | outcome pre | outcome post |
+|---|---|---|---|---|---|
+| fix1 - recon05 | own-pretraining | +0.001 | +0.013 | +0.008 | **+0.026 (0.008), resolved** |
+| fix1 - recon05 | held-out variety | -0.008 | +0.007 | -0.005 | +0.021 |
+| fix1 - MAE | held-out babble_v2 | **-0.018 (0.006), resolved** | -0.015 | -0.003 | +0.006 |
+| fix1 - MAE | own-pretraining | **-0.020 (0.007), resolved** | -0.018 | -0.010 | +0.008 |
+| fix1 - MAE | held-out variety | -0.016 | -0.015 | -0.002 | +0.024 |
+| fix1 - floor | held-out babble_v2 | **+0.078**, resolved | **+0.064**, resolved | **+0.045**, resolved | +0.034 |
+
+By B-fix-0's rule (pre-projector contact AUROCs above the floor, held-out babble_v2), fix1-recon05
+**works** (+0.078, MDD 0.034).
+
+**Training** (seed means; loss terms over the last 500 steps):
+
+| arm | next-state MSE | reconstruction | seq/s |
+|---|---|---|---|
+| A0 (B-variety-0: 12 runs on 32 vCPU) | 0.090 | - | 83.5 |
+| recon05 (B-fix-0: 15 runs on 32 vCPU) | 0.089 | 0.415 | 36.1 |
+| fix1-recon05 (3 runs on 16 vCPU) | **0.257** | 0.408 | 81.7 |
+
+* **Next-state MSE is 2.9 times recon05's.** The targets are states of masked windows, which the
+  predictor cannot foresee. This was expected, and it is not a failure by itself.
+* **Reconstruction is the same** (0.408 against 0.415).
+* **Speed: 2.3 times recon05's seq/s, and about A0's.** Every run used 2 threads and 1 loader worker,
+  but the machines and the number of concurrent runs differ, so absolute seq/s are not strictly
+  comparable. The step costs about one plain JEPA pass, as one encoder pass should.
+
+**Reading.**
+
+* **One masked pass gives the same representation as two passes, at less than half the compute.** No
+  contact contrast against recon05 is resolved on any set or layer. The one resolved difference,
+  outcome post-projector on its own pretraining episodes, is +0.026 in fix1's favour.
+* **It does not pass MAE either.** It is -0.018 pre-projector on held-out babble_v2 (resolved), the same
+  pattern as recon05.
+* **Expectation in advance:** no difference pre-projector (right); possibly worse post-projector (wrong:
+  +0.014, not resolved).
+* **What this means for the default.** If JEPA + reconstruction stays, the single masked pass is the
+  cheaper form. The open question of B-fix-0 still holds: on single-window probes the reconstruction
+  term carries the signal, and only a use of the action-conditioned predictor can show what the JEPA
+  half adds.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
