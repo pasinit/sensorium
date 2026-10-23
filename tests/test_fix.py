@@ -90,10 +90,21 @@ def test_fix_end_to_end_tiny(
     (held / "recon05-s0-n2.npz").unlink()  # probed already: a later encode must not redo it
     fix.encode("0/1")
     assert not (held / "recon05-s0-n2.npz").exists()
+    for path in held.glob("floor-s*.npz"):  # nor may a later probe need its encodings
+        path.unlink()
+    fix.probe("0/1")
     for label in fix.EVAL_SETS:
         for score in fix.SCORES:
             pred = fix.predictions(label, score, "pre", "recon05-s1-n2")
             assert pred is not None and "mean" in pred.scores()
+    gone = fix.pred_path("held-out babble", "contact AUROCs", "post", "fix1-recon05-s1-n2")
+    kept = gone.read_bytes()
+    gone.unlink()
+    fix.predictions.cache_clear()
+    with pytest.raises(RuntimeError, match="incomplete"):  # never a table of "-"
+        fix.fix1()
+    gone.write_bytes(kept)
+    fix.predictions.cache_clear()
     capsys.readouterr()
     fix.report()
     out = capsys.readouterr().out
