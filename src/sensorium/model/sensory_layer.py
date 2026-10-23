@@ -82,6 +82,11 @@ class ModelConfig:
             the masked patches and proprio channels (``mae_ratio``, ``mae_proprio_ratio``; the
             ``mae`` objective's targets), so the encoder must keep what next-state prediction can
             drop; the projector and the next-state loss are unchanged.
+        recon_input: ``separate`` (two encoder passes: the next-state objective on the clean
+            batch, the reconstruction on a masked copy) or ``masked`` (one pass: the batch is
+            masked once and the encoder runs once on it; the next-state loss and SIGReg use its
+            projected states, the decoder reads its pre-projector states, scored on the hidden
+            entries). Training objective only: ``embed`` and ``encode`` always see clean inputs.
         target_grad: ``sigreg`` only: gradients flow into the next-state targets (LeWM). False
             stops them (the encoder is then shaped by the prediction only through its inputs).
         vicreg_var_weight, vicreg_cov_weight: Weights of VICReg's variance and covariance
@@ -132,6 +137,7 @@ class ModelConfig:
     vicreg_cov_weight: float = 0.04
     target_grad: bool = True
     recon_weight: float = 0.0
+    recon_input: str = "separate"
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -152,10 +158,18 @@ class ModelConfig:
             raise ValueError(
                 f"objective {self.objective!r} supports vision and proprio senses only"
             )
+        self._check_recon()
+
+    def _check_recon(self) -> None:
+        """Validate the reconstruction options (``recon_weight``, ``recon_input``)."""
         if self.recon_weight < 0:
             raise ValueError(f"recon_weight must be >= 0, got {self.recon_weight}")
         if self.recon_weight > 0 and (self.objective != "sigreg" or "vision" not in self.senses):
             raise ValueError("recon_weight > 0 needs the sigreg objective and the vision sense")
+        if self.recon_input not in ("separate", "masked"):
+            raise ValueError(f"recon_input must be separate or masked, got {self.recon_input!r}")
+        if self.recon_input == "masked" and self.recon_weight <= 0:
+            raise ValueError("recon_input = masked needs recon_weight > 0")
 
 
 class StateEncoder(nn.Module):
@@ -447,6 +461,20 @@ class SensoryModel(nn.Module):
         )
         view = self._view(masked)
         states = self.encoder.summary_token(view, drop=self.training) if pre else self.embed(masked)
+        pix, prop_loss = self._recon_loss(batch, decoder, states, hidden, channels)
+        return states, pix, prop_loss
+
+    def _recon_loss(
+        self,
+        batch: Mapping[str, Tensor],
+        decoder: "reference.InputDecoder",
+        states: Tensor,
+        hidden: Tensor,
+        channels: Tensor,
+    ) -> tuple[Tensor, Tensor]:
+        """Pixel and proprio losses of the decoder on ``states``, scored on the entries the
+        masks hid (``reference.mask_batch``), against the clean batch."""
+        c = self.cfg
         vis, prop = decoder(states)
         pixels = reference.patchify(batch["vision"], c.vision_patch)
         proprio = reference.proprio_last(batch, self.senses)
@@ -454,7 +482,7 @@ class SensoryModel(nn.Module):
         pix = (err * hidden).sum() / hidden.sum().clamp_min(1)
         prop_err = (prop - proprio).pow(2)
         prop_loss = (prop_err * channels).sum() / channels.sum().clamp_min(1)
-        return states, pix, prop_loss
+        return pix, prop_loss
 
     def forward(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
         """Losses of one batch.
@@ -467,11 +495,20 @@ class SensoryModel(nn.Module):
         """
         if self.decoder is not None:
             return self._reference_loss(batch, self.decoder)
-        states = self.embed(batch)
+        c = self.cfg
+        single: tuple[Tensor, Tensor, Tensor] | None = None
+        if self.recon is not None and c.recon_input == "masked":
+            masked, hidden, channels = reference.mask_batch(
+                batch, self.senses, c.vision_patch, c.mae_ratio, c.mae_proprio_ratio
+            )
+            summary = self.encoder.summary_token(self._view(masked), drop=self.training)
+            states = self.encoder.project(summary)
+            single = (summary, hidden, channels)
+        else:
+            states = self.embed(batch)
         cond = self.action(batch["action"].flatten(0, 1)).view_as(states)
         trunk = self.trunk(states[:, :-1], cond[:, :-1])
         pred = self.pred_proj(trunk)
-        c = self.cfg
         extra: dict[str, Tensor] = {}
         if self.teacher is not None:
             has = batch["present"][:, self.data_senses.index("touch")].float()
@@ -488,7 +525,10 @@ class SensoryModel(nn.Module):
             weighted = (surprise_weights(c.surprise, err, batch) * err).mean()
             reg = self.sigreg(states, pool_time=c.sigreg_pool_time)
             if self.recon is not None:
-                _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=True)
+                if single is not None:
+                    pix, prop_loss = self._recon_loss(batch, self.recon, *single)
+                else:
+                    _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=True)
                 recon = pix + prop_loss
                 extra = {**extra, "recon": recon.detach()}
                 extra_loss = extra_loss + c.recon_weight * recon

@@ -26,6 +26,7 @@ def fix() -> Iterator[Any]:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     yield module
+    module.predictions.cache_clear()
     module.variety.load_predictions.cache_clear()
     sys.path.remove(str(SCRIPTS))
 
@@ -56,7 +57,13 @@ def test_fix_end_to_end_tiny(
     monkeypatch.setattr(fix.diag, "FLOORS", (0, 1))
     monkeypatch.setattr(fix, "ROOT", tmp_path / "runs/fix")
     monkeypatch.setattr(
-        fix, "ARMS", {"recon05": {"recon_weight": 0.5}, "drop02": {"proprio_dropout": 0.2}}
+        fix,
+        "ARMS",
+        {
+            "recon05": {"recon_weight": 0.5},
+            "drop02": {"proprio_dropout": 0.2},
+            "fix1-recon05": {"recon_weight": 0.5, "recon_input": "masked"},
+        },
     )
     save_episodes(
         tmp_path / "data/babble_v2/humanoid", ("hand_seated_00", "pincer_seated_00"), 5, 0
@@ -75,10 +82,14 @@ def test_fix_end_to_end_tiny(
     space = fix.load_layer(tmp_path / "runs/variety/runs/jepa-babble-s0/ckpt-2.pt").space
     monkeypatch.setattr(variety, "shared_space", lambda: space)
     names = fix.encoder_names()
-    assert len(names) == 2 + (2 + 2) * 2 * 2  # floors, 2 references + 2 arms x 2 seeds x 2 steps
+    assert len(names) == 2 + (2 + 3) * 2 * 2  # floors, 2 references + 3 arms x 2 seeds x 2 steps
     fix.encode("0/2")
     fix.encode("1/2")
     fix.probe("0/1")
+    held = tmp_path / "runs/fix/enc/held-out_babble"
+    (held / "recon05-s0-n2.npz").unlink()  # probed already: a later encode must not redo it
+    fix.encode("0/1")
+    assert not (held / "recon05-s0-n2.npz").exists()
     for label in fix.EVAL_SETS:
         for score in fix.SCORES:
             pred = fix.predictions(label, score, "pre", "recon05-s1-n2")
@@ -87,5 +98,7 @@ def test_fix_end_to_end_tiny(
     fix.report()
     out = capsys.readouterr().out
     assert "Pre-registered verdict" in out and "recon05" in out
+    assert "B-fix-1" in out and "fix1-recon05 - recon05" in out
+    assert (tmp_path / "runs/fix/figures/fix1_losses.png").exists()
     assert (tmp_path / "runs/fix/figures/fix_probe_held-out_babble.png").exists()
     assert (tmp_path / "runs/fix/figures/fix_curves.png").exists()

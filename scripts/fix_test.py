@@ -1,4 +1,4 @@
-"""B-fix-0: does reconstruction or proprio dropout stop the JEPA losing contact information?
+"""B-fix-0 and B-fix-1: can reconstruction or proprio dropout stop the JEPA losing contact?
 
 B-diag-0 found that the pooled-SIGReg JEPA keeps what state and action predict: arm kinematics,
 almost no vision, no scene context. Its projector then removes contact information. Two fixes,
@@ -12,6 +12,11 @@ without ``eff_``; the 128 px frame cache):
 * ``drop01``, ``drop02``: ``model.proprio_dropout`` 0.1 and 0.2. Every proprio sense of a training
   sequence is hidden together, so vision has to carry the state.
 * ``recon05drop02``: both.
+* ``fix1-recon05`` (B-fix-1): reconstruction weight 0.5 in **one masked pass**
+  (``model.recon_input = masked``): the batch is masked once, the encoder runs once on it, the
+  next-state loss and SIGReg use its projected states and the decoder its pre-projector states.
+  Encoders already probed (their predictions saved) are not encoded again, so B-fix-1 reuses
+  B-fix-0's predictions of the references and pairs with them directly.
 
 References, not retrained: B-variety-0's ``jepa-babble`` (A0, the same recipe with both options
 off; the code path is unchanged when they are off) and ``mae-babble``, and the random-init floor
@@ -35,6 +40,7 @@ Pre-registration and outcome rules: ``docs/model.md``, "B-fix-0".
 """
 
 import argparse
+import functools
 import json
 import logging
 from dataclasses import replace
@@ -64,7 +70,9 @@ ARMS: dict[str, dict[str, object]] = {
     "drop01": {"proprio_dropout": 0.1},
     "drop02": {"proprio_dropout": 0.2},
     "recon05drop02": {"recon_weight": 0.5, "proprio_dropout": 0.2},
+    "fix1-recon05": {"recon_weight": 0.5, "recon_input": "masked"},
 }
+"""B-fix-0's arms and B-fix-1's single-masked-pass arm (``model.recon_input = masked``)."""
 REFERENCES = {"A0": "jepa-babble", "mae": "mae-babble"}
 EVAL_SETS = ("held-out babble", "own-pretraining babble", "held-out variety")
 SCORES = ("contact AUROCs", "outcome battery")
@@ -77,6 +85,7 @@ COLORS = {
     "drop01": "#e87ba4",
     "drop02": "#4a3aa7",
     "recon05drop02": "#eda100",
+    "fix1-recon05": "#222222",
 }
 
 
@@ -168,7 +177,11 @@ def encode(shard: str) -> None:
     for label in EVAL_SETS:
         out = ROOT / "enc" / slug(label)
         out.mkdir(parents=True, exist_ok=True)
-        names = [n for n in shard_of(encoder_names(), shard) if not (out / f"{n}.npz").exists()]
+        names = [
+            n
+            for n in shard_of(encoder_names(), shard)
+            if not (out / f"{n}.npz").exists() and not probed(label, n)
+        ]
         if not names:
             continue
         layers = {n: layer_of(n) for n in names}
@@ -233,6 +246,13 @@ def probe(shard: str) -> None:
             logging.info("probed %s on %s", name, label)
 
 
+def probed(label: str, name: str) -> bool:
+    """Whether every probe of an encoder on an evaluation set is saved (then it is not encoded
+    again: a later study reuses an earlier study's predictions, which pair directly)."""
+    return all(pred_path(label, sc, la, name).exists() for sc in SCORES for la in LAYERS)
+
+
+@functools.cache
 def predictions(label: str, score: str, layer: str, name: str) -> Predictions | None:
     """A saved probe as ``Predictions`` (contact: the three AUROCs only); ``None`` if missing."""
     path = pred_path(label, score, layer, name)
@@ -314,9 +334,79 @@ def report() -> None:
             family("held-out babble", "contact AUROCs", "pre", "floor", step),
         )
         variety.say(f"| {arm} | {describe(c) if c else '-'} | {verdict(c)} |")
+    fix1()
     for label in EVAL_SETS:
         figure(label)
     curves()
+    loss_figure()
+
+
+def training_summary(arm: str) -> dict[str, float]:
+    """Seed means of the last 500 logged steps' ``pred`` and ``recon`` and the run's seq/s."""
+    rows = []
+    for path in sorted(collect_logs().glob(f"{arm}-s*/log.jsonl")):
+        log = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        last = [r for r in log if r["step"] > log[-1]["step"] - 500]
+        rows.append(
+            {
+                "pred": float(np.mean([r["pred"] for r in last])),
+                "recon": float(np.mean([r.get("recon", np.nan) for r in last])),
+                "seq_per_s": float(log[-1]["seq_per_s"]),
+            }
+        )
+    return {k: float(np.mean([r[k] for r in rows])) for k in rows[0]} if rows else {}
+
+
+def fix1() -> None:
+    """B-fix-1's pre-registered contrasts: the single masked pass against B-fix-0's two-pass
+    ``recon05``, then against MAE and the floor, on every evaluation set, with the training
+    summary (next-state loss, reconstruction, speed)."""
+    arm, step = "fix1-recon05", variety.STEPS
+    variety.say(f"\n## B-fix-1: {arm} (one masked pass) at {step:,} steps\n")
+    for label in EVAL_SETS:
+        variety.say(f"\n{label} (paired by seed and episode)\n")
+        variety.say("| contrast | score | pre-projector | post-projector |\n|---|---|---|---|")
+        for ref in ("recon05", "mae", "floor"):
+            for score in SCORES:
+                cells = []
+                for layer in LAYERS:
+                    c = paired(
+                        family(label, score, layer, arm, step),
+                        family(label, score, layer, ref, step),
+                    )
+                    cells.append(describe(c) if c else "-")
+                variety.say(f"| {arm} - {ref} | {score} | " + " | ".join(cells) + " |")
+    variety.say("\nTraining (seed means; loss terms over the last 500 steps)\n")
+    variety.say("| arm | next-state MSE | reconstruction | seq/s |\n|---|---|---|---|")
+    for name in ("A0", "recon05", arm):
+        t = training_summary(name)
+        if t:
+            variety.say(f"| {name} | {t['pred']:.3f} | {t['recon']:.3f} | {t['seq_per_s']:.1f} |")
+
+
+def loss_figure() -> None:
+    """Next-state MSE and reconstruction against steps: A0, recon05 and the single pass."""
+    runs = collect_logs()
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    for arm in ("A0", "recon05", "fix1-recon05"):
+        for path in sorted(runs.glob(f"{arm}-s*/log.jsonl")):
+            log = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            for ax, term in zip(axes, ("pred", "recon"), strict=True):
+                pts = [(r["step"], r[term]) for r in log if term in r]
+                if pts:
+                    x, y = zip(*pts, strict=True)
+                    label = arm if path.parent.name.endswith("-s0") else None
+                    ax.plot(x, y, color=COLORS[arm], lw=0.8, alpha=0.7, label=label)
+    for ax, title in zip(axes, ("next-state MSE (pred)", "reconstruction (recon)"), strict=True):
+        ax.set(xscale="log", xlabel="step", title=title)
+        ax.grid(alpha=0.25)
+    axes[0].legend(fontsize=8, frameon=False)
+    fig.suptitle("B-fix-1: loss terms per seed, one masked pass against two passes")
+    fig.tight_layout()
+    out = ROOT / "figures" / "fix1_losses.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
 
 
 def figure(label: str) -> None:
@@ -431,8 +521,12 @@ def main() -> None:
             parser.error("train needs --arm")
         train_arm(args.arm, args.seed, args.steps, args.workers)
         return
-    first = next(iter(sorted((variety.ROOT / "runs").glob("*/ckpt-10000.pt"))))
-    space = load_layer(first).space  # the arms' shared space, stored in every checkpoint
+    found = sorted((variety.ROOT / "runs").glob("*/ckpt-*.pt")) or sorted(
+        (ROOT / "runs").glob("*/ckpt-*.pt")
+    )
+    if not found:
+        parser.error("no checkpoint to read the shared channel space from")
+    space = load_layer(found[0]).space  # the arms' shared space, stored in every checkpoint
     variety.shared_space = lambda: space
     if args.command == "encode":
         encode(args.shard)

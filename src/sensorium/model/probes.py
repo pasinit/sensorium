@@ -411,14 +411,9 @@ def auroc(score: np.ndarray, label: np.ndarray) -> float:
     n_pos, n_neg = int(pos.sum()), int((~pos).sum())
     if n_pos == 0 or n_neg == 0:
         return float("nan")
-    order = np.argsort(score, kind="mergesort")
-    ranks = np.empty(len(score))
-    sorted_scores = score[order]
-    start = 0
-    for end in range(1, len(score) + 1):
-        if end == len(score) or sorted_scores[end] != sorted_scores[start]:
-            ranks[order[start:end]] = (start + end + 1) / 2.0
-            start = end
+    _, inverse, counts = np.unique(score, return_inverse=True, return_counts=True)
+    ends = np.cumsum(counts)
+    ranks = (ends - (counts - 1) / 2.0)[inverse.ravel()]  # 1-based ranks, ties averaged
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
 
 
