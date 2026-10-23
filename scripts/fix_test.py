@@ -226,13 +226,17 @@ def pred_path(label: str, score: str, layer: str, name: str) -> Path:
 
 
 def probe(shard: str) -> None:
-    """Fit this shard's probes (every evaluation set, score and layer of its encoders)."""
+    """Fit this shard's probes (every evaluation set, score and layer of its encoders); an
+    encoder whose predictions on a set are all saved is skipped (its encodings may not exist:
+    a later study reuses an earlier one's predictions)."""
     for label in EVAL_SETS:
         enc = ROOT / "enc" / slug(label)
         raw = np.load(enc / "labels.npz")
         groups = raw["groups"]
         y = {k: raw[k] for k in raw.files if k != "groups"}
         for name in shard_of(encoder_names(), shard):
+            if probed(label, name):
+                continue
             feats = np.load(enc / f"{name}.npz")
             for score in SCORES:
                 t, blocks, names, binary = targets(y, score)
@@ -362,6 +366,20 @@ def fix1() -> None:
     ``recon05``, then against MAE and the floor, on every evaluation set, with the training
     summary (next-state loss, reconstruction, speed)."""
     arm, step = "fix1-recon05", variety.STEPS
+    counts = {
+        f"{label} / {score} / {layer}": len(family(label, score, layer, arm, step))
+        for label in EVAL_SETS
+        for score in SCORES
+        for layer in LAYERS
+    }
+    if not any(counts.values()):
+        variety.say(f"\n## B-fix-1: {arm} has no predictions (not run)\n")
+        return
+    missing = [where for where, n in counts.items() if n < len(variety.SEEDS)]
+    if missing:
+        raise RuntimeError(
+            f"B-fix-1 is incomplete: {arm} lacks seeds at {step:,} steps on " + "; ".join(missing)
+        )
     variety.say(f"\n## B-fix-1: {arm} (one masked pass) at {step:,} steps\n")
     for label in EVAL_SETS:
         variety.say(f"\n{label} (paired by seed and episode)\n")
