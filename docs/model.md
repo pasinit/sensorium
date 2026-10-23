@@ -2100,6 +2100,100 @@ arms' 2.1x step cost on the Mac:
 | report and upload | about 10 min |
 | **total** | **about 2.5 h, about $4; capped at 3 h ($4.70)** |
 
+### B-fix-0: results (GCP, n2-standard-32, 3 seeds; `scripts/fix_test.py report`)
+
+All 15 runs reached 10,000 steps, inside the 3 h cap (about $4.50 or less). Stages (UTC):
+
+* cache rebuilt by 23:44;
+* training 23:44 to 01:06 (1 h 22 min);
+* encoding and probing to 01:25;
+* the report (its bootstrap contrasts) to 02:34. Every encoder and checkpoint was
+re-probed with one protocol, A0 and MAE included. Contact means the three contact AUROCs (rescaled
+2 x (AUROC - 0.5) and averaged); outcome means the outcome battery. Figures are in `runs/fix/figures/`
+(not committed):
+
+* `fix_probe_<set>.png`: score against steps for every arm, both scores and both layers, with the
+  floor;
+* `fix_curves.png`: pred, reg, recon and total loss per seed.
+
+**Held-out babble_v2, 10,000 steps** (mean +- sd over 3 seeds):
+
+| arm | contact pre | contact post | outcome pre | outcome post |
+|---|---|---|---|---|
+| floor | 0.53 +- 0.01 | 0.50 +- 0.00 | 0.36 +- 0.01 | 0.35 +- 0.02 |
+| A0 (JEPA) | 0.55 +- 0.01 | 0.45 +- 0.02 | 0.40 +- 0.02 | 0.32 +- 0.02 |
+| recon01 | 0.59 +- 0.01 | 0.51 +- 0.01 | 0.41 +- 0.01 | 0.35 +- 0.01 |
+| **recon05** | **0.61 +- 0.01** | **0.55 +- 0.01** | 0.41 +- 0.00 | 0.37 +- 0.01 |
+| drop01 | 0.56 +- 0.00 | 0.45 +- 0.01 | 0.41 +- 0.01 | 0.34 +- 0.00 |
+| drop02 | 0.54 +- 0.01 | 0.41 +- 0.01 | 0.39 +- 0.00 | 0.31 +- 0.02 |
+| recon05drop02 | 0.59 +- 0.01 | 0.52 +- 0.01 | 0.41 +- 0.00 | 0.36 +- 0.01 |
+| MAE | 0.62 +- 0.00 | 0.58 +- 0.01 | 0.41 +- 0.01 | 0.38 +- 0.01 |
+
+**Pre-registered verdict.** `arm - floor` on the pre-projector contact AUROCs, held-out babble_v2,
+10,000 steps, paired by seed and episode (combined SE, MDD = 2.8 SE):
+
+| arm | arm - floor | verdict |
+|---|---|---|
+| recon01 | +0.063 (0.011, MDD 0.032), resolved | **works** |
+| recon05 | +0.082 (0.012, MDD 0.034), resolved | **works** |
+| recon05drop02 | +0.066 (0.011, MDD 0.032), resolved | **works** |
+| drop01 | +0.028 (0.012, MDD 0.033) | does not work |
+| drop02 | +0.012 (0.015, MDD 0.041) | does not work |
+| A0 (reference) | +0.026 (0.009, MDD 0.026), resolved by 0.000 | works (borderline) |
+| MAE (reference) | +0.096 (0.011, MDD 0.030), resolved | works |
+
+**The rule is weak, because A0 passes it too.** On the three contact AUROCs alone, the unfixed
+JEPA's pre-projector state sits just above its floor. B-diag-0 found the same with the full battery
+(+0.015, not resolved). The contrast that separates a fix from the JEPA it fixes is `arm - A0`, below.
+
+**Against A0** (held-out babble_v2; own-pretraining babble_v2 in brackets; **bold** = resolved):
+
+| arm | contact pre | contact post |
+|---|---|---|
+| recon01 | **+0.036** (**+0.037**) | **+0.059** (**+0.059**) |
+| recon05 | **+0.055** (**+0.047**) | **+0.098** (**+0.100**) |
+| recon05drop02 | **+0.039** (+0.028) | **+0.063** (**+0.056**) |
+| drop01 | +0.002 (-0.015) | -0.002 (-0.006) |
+| drop02 | -0.015 (-0.025) | **-0.038** (**-0.042**) |
+| MAE | **+0.069** (**+0.068**) | **+0.127** (**+0.132**) |
+
+**Further contrasts** (held-out babble_v2; own-pretraining babble_v2 in brackets):
+
+| contrast | contact pre | contact post |
+|---|---|---|
+| recon05 - MAE | -0.014, MDD 0.021 (**-0.021**) | -0.029, MDD 0.040 (-0.032) |
+| recon05 - recon01 | +0.019, MDD 0.025 (+0.010) | **+0.040** (**+0.042**) |
+| recon05drop02 - recon05 | -0.016, MDD 0.030 (**-0.019**) | **-0.035** (**-0.044**) |
+
+Held-out variety agrees in sign. There recon05 - floor is +0.044 pre (resolved) and +0.015 post, and
+recon05 - A0 is +0.084 post (resolved).
+
+**Reading.**
+
+* **Reconstruction fixes the JEPA's contact loss, and the effect grows with its weight.**
+  * Post-projector, recon05 takes contact from 0.45 (A0, below the floor) to 0.55 (above it):
+    +0.098 against A0, the projector loss of B-diag-0 undone.
+  * Pre-projector, it adds +0.055.
+  * recon05 beats recon01 post-projector (+0.040, resolved).
+* **It reaches MAE but does not pass it.** recon05 - MAE is -0.014 pre and -0.029 post on held-out
+  episodes (not resolved), and -0.021 pre on its own pretraining episodes (resolved). The
+  reconstruction term carries the contact signal; the next-state objective adds nothing measurable to
+  it on these probes.
+* **Proprio dropout does not help.**
+  * Pre-projector it equals A0.
+  * At 0.2 it costs contact post-projector (-0.038 against A0, resolved; post 0.41).
+  * Added to recon05 it costs -0.035 post (resolved) and about -0.016 pre.
+  * Hiding proprio removes the input most tied to the contact targets, as expected. Vision does not
+    take over at this scale.
+* **The outcome battery does not separate the arms.** Every arm, A0 included, is +0.03 to +0.05 above
+  the floor pre-projector. The arm - A0 outcome contrasts are +0.010 to +0.015 pre (not resolved).
+* Expectation in advance: recon05 works, recon01 smaller, dropout raises vision but not contact.
+  Right on recon05 and dropout. recon01 also passed the rule. Vision reliance was not measured here.
+* **Open question for the next step:** does JEPA + reconstruction ever beat plain MAE? The contact
+  and outcome probes read the state of one window. Prediction or planning (the action-conditioned
+  predictor, which MAE does not have) is where the JEPA half could add something. Comparing the two
+  needs a downstream use that reads the predictor, which the battery does not.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:

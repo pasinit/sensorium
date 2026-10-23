@@ -35,6 +35,7 @@ Pre-registration and outcome rules: ``docs/model.md``, "B-fix-0".
 """
 
 import argparse
+import json
 import logging
 from dataclasses import replace
 from pathlib import Path
@@ -70,12 +71,12 @@ SCORES = ("contact AUROCs", "outcome battery")
 LAYERS = ("pre", "post")
 COLORS = {
     "A0": "#2a78d6",
-    "mae": "#eb6834",
+    "mae": "#e34948",
     "recon01": "#1baf7a",
     "recon05": "#008300",
     "drop01": "#e87ba4",
     "drop02": "#4a3aa7",
-    "recon05drop02": "#e34948",
+    "recon05drop02": "#eda100",
 }
 
 
@@ -351,11 +352,8 @@ def figure(label: str) -> None:
     logging.info("wrote %s", out)
 
 
-def curves() -> None:
-    """Training loss terms per seed per arm (``plot_runs.py``), the A0 runs included."""
-    import subprocess  # noqa: PLC0415
-    import sys  # noqa: PLC0415
-
+def collect_logs() -> Path:
+    """Copy every run's ``log.jsonl`` (A0 from ``runs/variety``) to ``runs/fix/curve_runs``."""
     runs = ROOT / "curve_runs"
     runs.mkdir(parents=True, exist_ok=True)
     for seed in variety.SEEDS:
@@ -366,24 +364,49 @@ def curves() -> None:
             if log.exists():
                 (runs / f"{arm}-s{seed}").mkdir(exist_ok=True)
                 (runs / f"{arm}-s{seed}" / "log.jsonl").write_text(log.read_text())
-    subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            str(Path(__file__).with_name("plot_runs.py")),
-            "--runs",
-            str(runs),
-            "--probes",
-            str(ROOT / "no_probes"),
-            "--arms",
-            "A0",
-            *ARMS,
-            "--title",
-            "B-fix-0: training loss terms per seed (pred, reg, recon)",
-            "--out",
-            str(ROOT / "figures" / "fix_curves.png"),
-        ],
-        check=True,
-    )
+    return runs
+
+
+def curves() -> None:
+    """Training loss terms per seed (thin) and their seed mean (thick), one row per arm: the
+    next-state MSE, the weighted SIGReg, the reconstruction term and the total."""
+    runs = collect_logs()
+    terms = ("pred", "reg", "recon", "loss")
+    arms = ("A0", *ARMS)
+    fig, axes = plt.subplots(len(arms), len(terms), figsize=(15, 2.6 * len(arms)), squeeze=False)
+    for row, arm in enumerate(arms):
+        logs = [
+            [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            for path in sorted(runs.glob(f"{arm}-s*/log.jsonl"))
+        ]
+        for col, term in enumerate(terms):
+            ax = axes[row][col]
+            series = []
+            for rows in logs:
+                pts = [(r["step"], r[term]) for r in rows if term in r]
+                if pts:
+                    x, y = zip(*pts, strict=True)
+                    ax.plot(x, y, color=COLORS[arm], lw=0.7, alpha=0.5)
+                    series.append(np.array(y))
+            if series and len({len(v) for v in series}) == 1:
+                ax.plot(x, np.mean(series, 0), color=COLORS[arm], lw=2)
+            if not series:
+                ax.text(0.5, 0.5, "not in this arm", ha="center", transform=ax.transAxes)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+            ax.set_xscale("log")
+            ax.grid(alpha=0.25)
+            if row == 0:
+                ax.set_title(term)
+        axes[row][0].set_ylabel(arm)
+    fig.suptitle("B-fix-0: training loss terms per seed (thin) and seed mean (thick)")
+    fig.tight_layout()
+    out = ROOT / "figures" / "fix_curves.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    logging.info("wrote %s", out)
 
 
 def main() -> None:
