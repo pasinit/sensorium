@@ -3,6 +3,7 @@
 Usage:
     uv run python scripts/grasp_success.py <hand|pincer> <episodes> [--first N] [--out FILE]
         [--config configs/event_dense.toml] [--set module.ATTR=json ...] [--render]
+        [--strips DIR]
 
 Runs the first block of ``--config`` for the effector (its settings: props, scene director,
 hidden properties), without rendering unless ``--render``, and follows every grasp the babbling
@@ -39,6 +40,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+from PIL import Image
 
 from sensorium.babble_stats import runs
 from sensorium.bodies.h1_babble import BabblePolicy
@@ -221,6 +223,43 @@ def cause(attempt: dict[str, object], pincer: bool) -> str:
     return "slip" if rise.max() >= 0.01 else "no rise"
 
 
+STRIP_EVERY, STRIP_FRAMES, STRIP_KEEP, STRIP_SIZE = 4, 12, 2, 160
+
+
+class Strips:
+    """Frame strips of grasps: a camera follows each open attempt's object, a frame every
+    ``STRIP_EVERY`` steps; the first ``STRIP_KEEP`` attempts per object and cause are saved as one
+    PNG row of ``STRIP_FRAMES`` frames, ``<effector>_<object>_<cause>_<episode>_<n>.png``."""
+
+    def __init__(self, model: mujoco.MjModel, out: Path) -> None:
+        self.renderer = mujoco.Renderer(model, STRIP_SIZE, STRIP_SIZE)
+        self.out, self.frames, self.kept = out, {}, Counter()
+        out.mkdir(parents=True, exist_ok=True)
+
+    def step(self, data: mujoco.MjData, tracker: "Tracker", step: int) -> None:
+        """Render a frame for every open attempt (every ``STRIP_EVERY`` steps)."""
+        if step % STRIP_EVERY:
+            return
+        for side, attempt in tracker.open.items():
+            camera = mujoco.MjvCamera()
+            camera.lookat[:] = data.xpos[int(attempt["body"])] + [0.0, 0.0, 0.03]  # type: ignore[call-overload]
+            camera.distance, camera.elevation = 0.35, -25.0
+            camera.azimuth = 90.0 if side == "right" else 270.0
+            self.renderer.update_scene(data, camera)
+            self.frames.setdefault(id(attempt), []).append(self.renderer.render().copy())
+
+    def save(self, effector: str, seed: int, attempt: dict, cause_: str) -> None:
+        """Save the attempt's strip if fewer than ``STRIP_KEEP`` of its object and cause are."""
+        frames = self.frames.pop(id(attempt), [])
+        key = (str(attempt["object"]), cause_)
+        if not frames or self.kept[key] >= STRIP_KEEP:
+            return
+        picked = frames[:: max(1, len(frames) // STRIP_FRAMES)][:STRIP_FRAMES]
+        name = f"{effector}_{key[0][4:]}_{cause_.replace(' ', '_')}_{seed}_{self.kept[key]}.png"
+        Image.fromarray(np.concatenate(picked, axis=1)).save(self.out / name)
+        self.kept[key] += 1
+
+
 def run(
     effector: str,
     episodes: int,
@@ -228,8 +267,10 @@ def run(
     config: Path,
     render: bool,
     extra: dict[str, object] | None = None,
+    strips: Path | None = None,
 ) -> list[dict]:
-    """Classified grasp attempts of ``episodes`` episodes of the config's first block."""
+    """Classified grasp attempts of ``episodes`` episodes of the config's first block (and their
+    frame strips in ``strips``, if given: ``Strips``)."""
     blocks = tomllib.loads(config.read_text())["humanoid"]
     spec = next(s for name, s in blocks.items() if name.startswith(effector))
     if not render:
@@ -239,6 +280,7 @@ def run(
     rec = HumanoidRecorder(dict(spec["settings"]) | (extra or {}))
     pincer, primitive = effector == "pincer", "grasp" if effector == "pincer" else "power"
     m, d = rec.model, rec.data
+    filmer = Strips(m, strips) if strips is not None else None
     attempts: list[dict] = []
     for seed in range(first, first + episodes):
         rng = np.random.default_rng(seed)
@@ -256,12 +298,16 @@ def run(
             d.ctrl[:] = rec.with_gravity_compensation(rec.space.to_ctrl(policy.act(step, d)))
             mujoco.mj_step(m, d, nstep=rec.substeps)
             tracker.record_step(d, moved)
+            if filmer is not None:
+                filmer.step(d, tracker, step)
         for attempt in tracker.done:
             attempts.append(
                 {"effector": effector, "episode": seed, "object": attempt["object"]}
                 | {"end": attempt["end"], "cause": cause(attempt, pincer)}
                 | {"at_close": attempt.get("at_close")}
             )
+            if filmer is not None:
+                filmer.save(effector, seed, attempt, attempts[-1]["cause"])
         print(f"{effector} episode {seed}: {len(tracker.done)} grasps", flush=True)
     return attempts
 
@@ -293,6 +339,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/event_dense.toml"))
     parser.add_argument("--set", action="append", default=[], dest="overrides")
     parser.add_argument("--render", action="store_true")
+    parser.add_argument("--strips", type=Path, default=None, help="save grasp frame strips here")
     parser.add_argument(
         "--setting",
         action="append",
@@ -302,7 +349,9 @@ def main() -> None:
     args = parser.parse_args()
     apply_overrides(args.overrides)
     extra = {k: json.loads(v) for k, v in (item.split("=", 1) for item in args.setting)}
-    attempts = run(args.effector, args.episodes, args.first, args.config, args.render, extra)
+    attempts = run(
+        args.effector, args.episodes, args.first, args.config, args.render, extra, args.strips
+    )
     report(attempts, args.episodes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(attempts))

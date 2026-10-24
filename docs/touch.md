@@ -598,8 +598,9 @@ Wraps of the table objects, 80 isolated placements each:
 Films show the hand arriving over the object's side with the object inside it. The closing fingers
 then sweep over it, and it stays on the table as the hand rises.
 
-The table objects are small for a Shadow hand (3-10 cm). `--hand-sized` puts three temporary props
-in place of the tall block and bottle, with hidden properties as for the others:
+The table objects are small for a Shadow hand (3-10 cm). Three temporary props in place of the
+tall block and bottle, with hidden properties as for the others (since 2026-10-24 the `hand_sized`
+prop, with a ball added: `docs/event-dense.md`):
 - a can: 7 cm across, 16 cm tall;
 - a bottle: 6 cm across, 18 cm tall;
 - a box: 11 x 7 x 6 cm.

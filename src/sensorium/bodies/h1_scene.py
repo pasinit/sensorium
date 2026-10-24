@@ -31,7 +31,7 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from sensorium.bodies.h1_props import STACK_OBJECTS, TALL_OBJECTS, prop_xml
+from sensorium.bodies.h1_props import HAND_SIZED_OBJECTS, STACK_OBJECTS, TALL_OBJECTS, prop_xml
 
 EFFECTORS = ("hand", "pincer")
 POSTURES = ("standing", "seated", "stand_supported")
@@ -506,14 +506,17 @@ def seated_props(
             f'size="0.02 0.02 {(top - 0.04) / 2}" material="table_wood"/>\n'
         )
     extra = TALL_OBJECTS if "tall_block" in props else ()
+    hand_sized = HAND_SIZED_OBJECTS if "hand_sized" in props else ()
     base = STACK_OBJECTS if "stack_blocks" in props else OBJECTS  # two cubes instead of the six
-    for name, material, shape, size in (*base, *extra):
+    objects = [(*o, None) for o in (*base, *extra)] + list(hand_sized)
+    for name, material, shape, size, mass in objects:
         rgba, friction, density, solref = MATERIALS[material]
+        weight = f'mass="{mass}"' if mass is not None else f'density="{density}"'
         lines.append(
             f'    <body name="{name}" pos="0.55 0 {top + 0.05}">\n'
             f'      <freejoint name="{name}"/>\n'
             f'      <geom name="{name}" type="{shape}" size="{size}" material="{material}" '
-            f'friction="{friction}" density="{density}" solref="{solref}"/>\n    </body>\n'
+            f'friction="{friction}" {weight} solref="{solref}"/>\n    </body>\n'
         )
     lines.append(prop_xml(props, top))
     return "".join(lines)
