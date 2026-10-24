@@ -15,7 +15,7 @@ leave-one-episode-out ridge probes and the same bootstrap.
 
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -238,7 +238,7 @@ def train_supervised(
         view_size=cfg.model.vision_size,
         cache_episodes=4,
     )
-    model = SensoryModel(cfg.model, space)
+    model = SensoryModel(replace(cfg.model, recon_weight=0.0), space)  # no reconstruction here
     if init is not None:
         saved = torch.load(init, weights_only=True)["model"]
         encoder = {
@@ -303,12 +303,12 @@ def train_supervised(
                     out / f"ckpt-{step}.pt",
                     model,
                     space,
-                    RunConfig(name=out.name, model=cfg.model),
+                    RunConfig(name=out.name, model=model.cfg),
                     step,
                 )
                 torch.save({"head": head.state_dict(), "scale": scale}, out / f"head-{step}.pt")
     save_checkpoint(
-        out / "ckpt.pt", model, space, RunConfig(name=out.name, model=cfg.model), cfg.steps
+        out / "ckpt.pt", model, space, RunConfig(name=out.name, model=model.cfg), cfg.steps
     )
     torch.save({"head": head.state_dict(), "scale": scale}, out / "head.pt")
     return out / "ckpt.pt"

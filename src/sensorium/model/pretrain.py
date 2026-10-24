@@ -255,7 +255,7 @@ def save_checkpoint(
     torch.save(
         {
             "model": model.state_dict(),
-            "model_config": asdict(cfg.model),
+            "model_config": asdict(cfg.model.resolved()),
             "loader_config": asdict(cfg.loader()),
             "space": space.to_json(),
             "step": step,
@@ -269,6 +269,9 @@ def load_layer(path: Path) -> SensoryLayer:
     raw = torch.load(path, weights_only=True)
     mc = dict(raw["model_config"])
     mc["senses"] = tuple(mc["senses"])
+    # checkpoints older than the options: no reconstruction (B-fix-0), two passes (B-fix-1)
+    mc.setdefault("recon_weight", 0.0)
+    mc.setdefault("recon_input", "separate")
     space = ChannelSpace.from_json(raw["space"])
     model = SensoryModel(ModelConfig(**mc), space)
     model.load_state_dict(raw["model"])
@@ -489,7 +492,8 @@ def _dump_config(cfg: RunConfig) -> str:
     lines = [f'name = "{cfg.name}"', f"seed = {cfg.seed}"]
     for section in ("data", "augment", "model", "train"):
         lines.append(f"\n[{section}]")
-        for key, value in asdict(getattr(cfg, section)).items():
+        part = cfg.model.resolved() if section == "model" else getattr(cfg, section)
+        for key, value in asdict(part).items():
             lines.append(
                 f"{key} = {json.dumps(list(value) if isinstance(value, tuple) else value)}"
             )

@@ -65,11 +65,11 @@ import matplotlib.pyplot as plt  # noqa: E402
 ROOT = Path("runs/fix")
 DATA_SET = "babble"
 ARMS: dict[str, dict[str, object]] = {
-    "recon01": {"recon_weight": 0.1},
-    "recon05": {"recon_weight": 0.5},
+    "recon01": {"recon_weight": 0.1, "recon_input": "separate"},
+    "recon05": {"recon_weight": 0.5, "recon_input": "separate"},
     "drop01": {"proprio_dropout": 0.1},
     "drop02": {"proprio_dropout": 0.2},
-    "recon05drop02": {"recon_weight": 0.5, "proprio_dropout": 0.2},
+    "recon05drop02": {"recon_weight": 0.5, "proprio_dropout": 0.2, "recon_input": "separate"},
     "fix1-recon05": {"recon_weight": 0.5, "recon_input": "masked"},
 }
 """B-fix-0's arms and B-fix-1's single-masked-pass arm (``model.recon_input = masked``)."""

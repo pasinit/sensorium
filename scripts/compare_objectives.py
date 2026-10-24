@@ -1,6 +1,6 @@
 """Compare the SIGReg and EMA + VICReg objectives at CPU scale on the H1 sample.
 
-One run per (variant, batch size, seed) of ``configs/model/cpu_tiny.toml``; each writes
+One run per (variant, batch size, seed) of ``configs/model/cpu_tiny_a0.toml``; each writes
 ``runs/compare/<name>.json`` with the in-batch std and effective rank (mean of the last
 four logged steps) and the eval-mode ones on a fixed sample of encoded windows (the
 latter do not depend on the batch size). ``--table`` prints the aggregate as markdown.
@@ -44,7 +44,7 @@ VARIANTS = {
 
 def run(variant: str, batch: int, seed: int, steps: int) -> None:
     """Train one configuration and write its summary."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     name = f"{variant}-b{batch}-s{seed}" + ("" if steps == 1000 else f"-n{steps}")
     train_cfg = TrainConfig(
         **{
@@ -86,7 +86,7 @@ def probe_all() -> None:
     The floor is the same tiny model at its random initialisation, one per seed.
     """
     paths = sorted(Path("data/sample_h1/humanoid").glob("*.npz"))
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     layers = {p.parent.name: load_layer(p) for p in sorted(OUT.glob("*/ckpt.pt"))}
     for seed in (0, 1):
         for label, senses in (("floor", base.model.senses), ("floor-novis", NO_VISION)):

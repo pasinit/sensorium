@@ -38,7 +38,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    cfg = load_config(Path("configs/model/cpu_tiny.toml"))
+    cfg = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     split = json.loads(SPLIT.read_text())
     space = build_space([DATA / n for n in split["pretrain"]], cfg.data.stats_episodes)
     k = cfg.model.substeps

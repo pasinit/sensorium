@@ -130,7 +130,7 @@ def space_files() -> list[str]:
 
 def make_index() -> None:
     """Build the consequence index over the experiment pretraining episodes."""
-    cfg = load_config(Path("configs/model/cpu_tiny.toml"))
+    cfg = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     index = build_index(paths("exp_pretrain"), cfg.model.steps * cfg.model.substeps)
     save_index(index, INDEX)
     logging.info("index: %s", summarise(index))
@@ -139,7 +139,7 @@ def make_index() -> None:
 def train_arm(arm: str, seed: int, steps: int, workers: int) -> None:
     """Pretrain one arm on the shared space; checkpoints every 250 steps."""
     spec = ARMS[arm]
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     tc = TrainConfig(
         steps=steps,
         batch_size=16,
@@ -179,7 +179,7 @@ def labelled(labels: str, seed: int) -> list[Path]:
 
 def finetune(init: str, labels: str, seed: int, workers: int) -> None:
     """Fine-tune the V+P encoder on ``K`` labelled episodes from random or an SSL init."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     ckpt = None if init == "random" else ROOT / f"{init}-s{seed}" / "ckpt-1000.pt"
     cfg = SupervisedConfig(
         model=replace(base.model, senses=NO_TOUCH),
@@ -200,7 +200,7 @@ def finetune(init: str, labels: str, seed: int, workers: int) -> None:
 
 def supervised(labels: str, seed: int, workers: int) -> None:
     """The supervised ceiling: the V+P encoder on every pretraining episode of a set."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     cfg = SupervisedConfig(
         model=replace(base.model, senses=NO_TOUCH), steps=STEPS, seed=seed, workers=workers
     )
@@ -229,7 +229,7 @@ def probe_all() -> None:
     """Probe every checkpoint and the floors that have no JSON yet."""
     out = ROOT / "probes"
     out.mkdir(parents=True, exist_ok=True)
-    cfg = load_config(Path("configs/model/cpu_tiny.toml"))
+    cfg = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     for drop, tag in (((), "floor"), (("eff_",), "floor-noeff")):
         space = shared_space(drop)
         for seed in range(5):

@@ -56,7 +56,7 @@ def files(key: str) -> list[Path]:
 
 def train_run(init: str, recipe: str, seed: int, workers: int) -> None:
     """Fine-tune on ``K`` labelled pretraining episodes (a seeded subset) from ``init``."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     episodes = files("pretrain")
     space = build_space(episodes, base.data.stats_episodes)
     picked = np.random.default_rng(seed).choice(len(episodes), K, replace=False)

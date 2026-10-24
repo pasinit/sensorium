@@ -1,5 +1,7 @@
 # A tiny model for CPU smoke runs on the H1 sample (hands and pincers): ~1 minute for 300 steps.
 # Run from the repo root with the sample at data/sample_h1 (make sample-h1), or symlink it.
+# Objective: the default JEPA, next-state prediction + SIGReg + reconstruction (weight 0.5) in one
+# masked pass (B-fix-1). cpu_tiny_a0.toml is the plain JEPA of the earlier studies.
 name = "cpu-tiny"
 seed = 0
 

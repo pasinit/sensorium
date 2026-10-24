@@ -145,7 +145,7 @@ def shared_space(drop: tuple[str, ...] = ()) -> ChannelSpace:
 
 def tiny() -> RunConfig:
     """The tiny model configuration and loader settings."""
-    return load_config(Path("configs/model/cpu_tiny.toml"))
+    return load_config(Path("configs/model/cpu_tiny_a0.toml"))
 
 
 def train_arm(arm: str, seed: int, workers: int) -> None:

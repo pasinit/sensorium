@@ -83,6 +83,7 @@ TINY = ModelConfig(
     steps=4,
     substeps=4,
     sigreg_proj=64,
+    recon_weight=0.0,  # the plain JEPA ("A0"): most tests here predate the reconstruction default
 )
 LOADER = LoaderConfig(steps=4, substeps=4, view_size=32)
 
@@ -1867,8 +1868,31 @@ def test_single_masked_pass_runs_the_encoder_once_and_decodes_the_summary(
             assert len(summaries) == 1 and len(decoded) == 1
             assert torch.equal(decoded[0].flatten(0, 1), summaries[0])
     assert calls == {"separate": 2, "masked": 1}
-    torch.manual_seed(0)
-    plain = SensoryModel(replace(TINY, senses=senses, recon_weight=0.5), space)
-    assert plain.cfg.recon_input == "separate"  # the default is the two-pass objective
-    with pytest.raises(ValueError, match="recon_weight > 0"):
-        replace(TINY, senses=senses, recon_input="masked")
+
+
+def test_the_default_sigreg_model_reconstructs_in_one_masked_pass(
+    space: ChannelSpace, tmp_path: Path
+) -> None:
+    senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
+    default = ModelConfig(senses=senses)
+    assert default.recon_weight is None and default.recon == 0.5
+    assert default.recon_input == "masked"
+    assert ModelConfig(senses=senses, objective="mae").recon == 0.0  # other objectives: none
+    assert ModelConfig(senses=("proprio_body",)).recon == 0.0  # nothing to reconstruct
+    small = replace(TINY, recon_weight=None, senses=senses)
+    assert SensoryModel(small, space).recon is not None
+    a0 = replace(small, recon_weight=0.0)  # the explicit flag for the plain JEPA
+    assert SensoryModel(a0, space).recon is None
+    assert small.resolved().recon_weight == 0.5 and a0.resolved().recon_weight == 0.0
+    # checkpoints store the resolved weight; a checkpoint from before the options loads as A0
+    model = SensoryModel(a0, space)
+    path = tmp_path / "ckpt.pt"
+    save_checkpoint(path, model, space, RunConfig(model=small), 0)
+    assert torch.load(path, weights_only=True)["model_config"]["recon_weight"] == 0.5
+    save_checkpoint(path, model, space, RunConfig(model=a0), 0)
+    raw = torch.load(path, weights_only=True)
+    for key in ("recon_weight", "recon_input"):
+        del raw["model_config"][key]
+    torch.save(raw, path)
+    layer = load_layer(path)
+    assert layer.model.cfg.recon == 0.0 and layer.model.recon is None

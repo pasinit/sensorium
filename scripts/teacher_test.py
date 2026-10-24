@@ -79,7 +79,7 @@ def files(key: str) -> list[Path]:
 
 def train_arm(arm: str, seed: int, steps: int, batch: int, workers: int) -> None:
     """Pretrain one arm on the 100 pretraining episodes; checkpoints at 1,000 and the end."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     tc = TrainConfig(
         **{
             **asdict(base.train),
@@ -101,7 +101,7 @@ def train_arm(arm: str, seed: int, steps: int, batch: int, workers: int) -> None
 
 def floor_layer(seed: int, senses: tuple[str, ...]) -> SensoryLayer:
     """The arm's encoder at a random initialisation."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     torch.manual_seed(seed)
     space = build_space(files("pretrain"), base.data.stats_episodes)
     model = SensoryModel(replace(base.model, senses=senses), space)
@@ -130,7 +130,7 @@ def probe_all(refresh_r2: bool = False) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for senses_name, senses in (
         ("vp", NO_TOUCH),
-        ("all", load_config(Path("configs/model/cpu_tiny.toml")).model.senses),
+        ("all", load_config(Path("configs/model/cpu_tiny_a0.toml")).model.senses),
     ):
         for seed in range(5):
             target = out / f"floor-{senses_name}-s{seed}.json"
