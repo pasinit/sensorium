@@ -82,7 +82,7 @@ def files(key: str) -> list[Path]:
 
 def make_index() -> None:
     """Build the subset index over the pretraining episodes (reads privileged object motion)."""
-    cfg = load_config(Path("configs/model/cpu_tiny.toml"))
+    cfg = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     span = cfg.model.steps * cfg.model.substeps
     index = build_index(files("pretrain"), span)
     save_index(index, INDEX)
@@ -91,7 +91,7 @@ def make_index() -> None:
 
 def train_arm(arm: str, seed: int, steps: int, workers: int) -> None:
     """Pretrain one arm; checkpoints every 250 steps."""
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     tc = TrainConfig(
         steps=steps,
         batch_size=16,

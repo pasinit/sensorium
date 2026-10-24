@@ -63,7 +63,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 CONFIG = Path("configs/scale_test.toml")
-BASE = Path("configs/model/cpu_tiny.toml")
+BASE = Path("configs/model/cpu_tiny_a0.toml")
 DATA = Path("data/scale_test/humanoid")
 CACHE = Path("data/scale_test_cache128")
 CACHE_SIZE = 128

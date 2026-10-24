@@ -4,7 +4,7 @@ B-variety-0's JEPA loses contact information within its first 250 steps (-0.026 
 its own step 0). These runs repeat those 250 steps on the Mac with one change at a time and probe
 the encoder at step 0 (the floor of that seed) and at the end. Training data: the 100 held-out
 babble_v2 episodes; probe set: the 100 held-out variety episodes (never trained on here). The
-model, batch and sampler are B-variety-0's (``configs/model/cpu_tiny.toml``, V+P, 16 x 8 steps,
+model, batch and sampler are B-variety-0's (``configs/model/cpu_tiny_a0.toml``, V+P, 16 x 8 steps,
 128 px frame cache), except for the variant's change.
 
 Variants: ``base``; ``reuse1`` (each batch from 16 episodes instead of 2: ``augment.reuse`` 1);
@@ -51,7 +51,7 @@ VARIANTS: dict[str, tuple[dict[str, object], dict[str, object]]] = {
     "dim256": ({"dim": 256}, {}),
     "teacher": ({"teacher": "touch"}, {}),
     "teacher_in": ({"teacher": "touch", "senses": (*variety.NO_TOUCH, "touch")}, {}),
-    "recon05": ({"recon_weight": 0.5}, {}),
+    "recon05": ({"recon_weight": 0.5, "recon_input": "separate"}, {}),
     "drop02": ({"proprio_dropout": 0.2}, {}),
 }
 

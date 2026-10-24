@@ -22,10 +22,22 @@ uv run sensorium-pretrain configs/model/v0.toml   # full size; needs a pool (dat
  proprio body / vestibular / effector, 4 sub-steps each ─ MLP ─► 1 each                ┘     (4 layers, + summary token)
                                                                                              │
  action chunk (4 actions) ─ MLP ─► conditioning c_t ──► causal predictor (AdaLN-zero) ──► ŝ_{t+1}
- objective "sigreg":      MSE(ŝ_{t+1}, s_{t+1}) + 0.1 · SIGReg(s)         no EMA, no stop-gradient
+ objective "sigreg":      MSE(ŝ_{t+1}, s_{t+1}) + 0.1 · SIGReg(s) + 0.5 · recon(z)   no EMA, no stop-gradient
+                          (one masked pass; z = the pre-projector summary; recon_weight = 0 is "A0")
  objective "ema_vicreg":  MSE(ŝ_{t+1}, EMA-encoder s_{t+1}) + var(s) + 0.04 · cov(s)   (see below)
 ```
 
+* **Default since B-fix-1: JEPA + reconstruction in one masked pass.**
+  * The input window is masked once, and the encoder runs once on it.
+  * The next-state MSE and SIGReg act on the projected state s.
+  * An MAE-style decoder reads the pre-projector summary z and reconstructs the hidden patches and
+    proprio channels, with weight `model.recon_weight` = 0.5.
+  * This is the default for `sigreg` with vision (`recon_weight` unset). `recon_input = "separate"`
+    is B-fix-0's two-pass form.
+  * `recon_weight = 0` is the plain JEPA ("A0") of every study before B-fix-0.
+    `configs/model/cpu_tiny_a0.toml` keeps that recipe for the historical study scripts, so their
+    results reproduce.
+  * Checkpoints store the weight in use. A checkpoint from before the option existed loads as A0.
 * **Two objectives**, `model.objective`. `sigreg` is LeWorldModel's (above). `ema_vicreg`
   has the predictor regress the states of an **EMA copy of the whole state encoder** (stems,
   fusion, projector; stop-gradient; momentum `ema_momentum` to `ema_momentum_end`, linear over
@@ -2327,6 +2339,106 @@ By B-fix-0's rule (pre-projector contact AUROCs above the floor, held-out babble
   cheaper form. The open question of B-fix-0 still holds: on single-window probes the reconstruction
   term carries the signal, and only a use of the action-conditioned predictor can show what the JEPA
   half adds.
+
+## B-plan-0: does the reconstruction default cost the JEPA its use as a world model? (pre-registered, not yet built)
+
+**Written before any code or run.** On single-window probes, B-fix-1 (one masked pass, now the
+default) equals B-fix-0's two passes and reaches MAE. The JEPA half is useful only through its
+action-conditioned predictor, and that is where the reconstruction default could lose:
+
+* fix1's next-state MSE is 0.257 against 0.089 for A0 and recon05;
+* LeWorldModel (arXiv 2603.19312) reports a decoder cutting Push-T planning success from 96% to 86%.
+
+This study measures prediction and planning with the existing 10,000-step checkpoints: no
+retraining, 3 seeds each.
+
+**Encoders and predictors.**
+
+| arm | checkpoints | predictor used |
+|---|---|---|
+| A0 | B-variety-0 `jepa-babble` | its own (trained) |
+| recon05 | B-fix-0 (two passes) | its own |
+| fix1 | B-fix-1 `fix1-recon05` (one masked pass) | its own |
+| MAE | B-variety-0 `mae-babble` | a **ridge dynamics head** (below); MAE has no predictor of its own |
+| A0, fix1 (control) | as above | the same ridge head, to separate the encoder from its predictor |
+
+**The ridge dynamics head.** `s_{t+1} = W [s_t, a_t, 1]`, fitted by ridge regression on the
+own-pretraining babble_v2 episodes (100) at every model step, with the strength chosen by the probes'
+episode-grouped inner folds. Every arm is evaluated with it. MAE is evaluated only with it, because
+it has no trained predictor.
+
+**(a) Open-loop multi-step prediction.**
+
+* **Rollout.** On the 100 held-out babble_v2 and 100 held-out variety episodes, start from the
+  encoded state of one observed step. Roll forward with the true action chunks:
+  * horizons 1, 2, 4 and 8 model steps (0.2 to 1.6 s);
+  * the predictor's context is the last 8 positions, true then predicted;
+  * 8 start times per episode, drawn with `rng(0)`.
+* **Metrics:**
+  * latent MSE / per-dimension variance of the target states (each arm in its own units);
+  * the copy-the-start-state baseline on the same scale;
+  * **decoded proprio error.** A ridge decoder from state to the current arm-joint positions
+    (fitted on the own-pretraining episodes) reads the predicted and the true future state. The
+    error is the RMS (radians) of decoded(predicted) - true joint positions. This puts every arm
+    on one scale.
+* **Primary (a):** fix1 - A0 decoded proprio RMS at horizon 8, each with its own predictor, on the
+  pooled held-out episodes:
+  * paired by seed and by episode (bootstrap of episodes, `rng(0)`, 300 draws);
+  * MDD = 2.8 x combined SE.
+
+**(b) Goal reaching, closed loop in the simulator.**
+
+* **Goal.** For a held-out episode and a start time t0 (2 per episode, `rng(0)`, at least 8 model
+  steps from the end), the goal is the encoded state at t0 + 8 model steps (1.6 s later).
+* **Start.** The simulator restores the episode's scene (its seed) and its recorded physical state
+  at t0 (`qpos`, `qvel`), and is rendered as recorded.
+* **Planner: CEM in latent space with MPC.**
+  * Horizon 8 model steps; actions are the 4-step chunks of joint targets.
+  * 5 iterations x 128 samples, 16 elites.
+  * Initial mean: hold the current targets. Initial std: the per-channel action std of the
+    pretraining data.
+  * Cost: squared latent distance of the predicted state at the horizon to the goal.
+  * Execute the first chunk, re-encode the new observation, replan, 8 times.
+* **Success, fixed now:** at t0 + 8, the RMS over the arm joints (shoulders and elbows, both arms)
+  of achieved minus goal joint positions is **under 0.10 rad**. Also reported, not judged: the
+  success curve over 0.05 to 0.30 rad and the final RMS itself.
+* **Bars:**
+  * random actions (chunks drawn from the CEM initial distribution): the floor;
+  * hold the current targets;
+  * replay the episode's true actions: the ceiling, and the check that state restore is faithful.
+* **Validity gate, decided now:** if replay succeeds on fewer than 90% of goals, restore is not
+  faithful, and the closed-loop result is not reported. The proxy below is used instead.
+* **Primary (b):** fix1 - A0 success rate, own predictors:
+  * 400 goals per arm-seed (200 per held-out set);
+  * paired by seed and by goal (bootstrap over episodes);
+  * MDD = 2.8 x combined SE. By the binomial alone, about 4 to 6 points at a 50% success rate.
+    The seed variance adds to it.
+
+  Read as **fix1 worse**, **fix1 better** or **no difference** (the MDD states what could have been
+  seen). The study is built to resolve a 5 to 10 point gap.
+* **Secondary (b):** fix1 - recon05, fix1 - MAE (ridge head), and each arm's own predictor against
+  the ridge head.
+
+**Proxy, if closed loop is unfaithful or too costly: goal-conditioned action ranking.**
+
+* For each goal, score the true action sequence and 63 others by the predicted final latent distance
+  to the goal. The 63 others are drawn from other start times of held-out episodes.
+* Report top-1 accuracy and mean rank; the chance floor is 1/64.
+* What it loses:
+  * actual execution (contacts, objects and the robot's response to the planned actions);
+  * compounding error and correction through replanning;
+  * the proprio success threshold, so it ranks the predictor's discrimination, not whether the
+    arm gets there.
+
+**Expectation, so it can be wrong.**
+
+* (a) fix1's normalised latent error is higher than A0's, because it was trained on masked
+  targets. Its decoded proprio error is within the MDD of A0's: the clean-input state is the same
+  kind of state.
+* (b) No difference beyond 5 points between fix1 and A0. Both predictors track arm kinematics,
+  which is what the success criterion measures.
+
+**Compute.** CPU only, spot. The cost and plan are in the brief to the lead, not in the repo.
 
 ## GPU smoke test (prepared, not run)
 

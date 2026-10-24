@@ -78,7 +78,7 @@ def files(key: str) -> list[Path]:
 
 def base_config():  # type: ignore[no-untyped-def]
     """The tiny model configuration and loader settings."""
-    return load_config(Path("configs/model/cpu_tiny.toml"))
+    return load_config(Path("configs/model/cpu_tiny_a0.toml"))
 
 
 # ---------------------------------------------------------------------------------------------

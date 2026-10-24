@@ -102,7 +102,7 @@ def write_split() -> None:
 def train_run(objective: str, seed: int, steps: int, batch: int, workers: int) -> None:
     """Pretrain the tiny model on the pretraining episodes, keeping the numbered checkpoints."""
     pretrain, _, _ = split()
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     tc = TrainConfig(
         **{
             **asdict(base.train),
@@ -124,7 +124,7 @@ def train_run(objective: str, seed: int, steps: int, batch: int, workers: int) -
 def floor_layer(seed: int) -> SensoryLayer:
     """The tiny model at a random initialisation, on the pretraining episodes' channel space."""
     pretrain, _, _ = split()
-    base = load_config(Path("configs/model/cpu_tiny.toml"))
+    base = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     torch.manual_seed(seed)
     space = build_space(pretrain, base.data.stats_episodes)
     return SensoryLayer(SensoryModel(base.model, space), space, base.loader())

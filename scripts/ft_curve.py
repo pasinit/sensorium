@@ -114,7 +114,7 @@ def train_cell(
     start: str, budget: int, seed: int, steps: int, workers: int, init_root: Path
 ) -> None:
     """Fine-tune one cell into ``runs/ftcurve/runs/<start>-b<budget>-s<seed>``."""
-    cfg = load_config(Path("configs/model/cpu_tiny.toml"))
+    cfg = load_config(Path("configs/model/cpu_tiny_a0.toml"))
     episodes = files("pretrain")
     space = build_space(episodes, cfg.data.stats_episodes)
     init = init_path(start, seed, init_root)

@@ -16,7 +16,7 @@ Design sources and what is unverified: ``docs/model.md``.
 
 import copy
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import torch
@@ -40,6 +40,9 @@ from sensorium.vision import eval_view
 REFERENCE = ("mae", "nextobs")
 OBJECTIVES = ("sigreg", "ema_vicreg", "mae", "nextobs")
 TEACHERS = ("none", "touch", "touch_placebo")
+DEFAULT_RECON = 0.5
+"""Reconstruction weight of the default ``sigreg`` model (B-fix-0 / B-fix-1: one masked pass,
+the decoder on the pre-projector state). ``recon_weight = 0`` gives the plain JEPA ("A0")."""
 
 
 @dataclass(frozen=True)
@@ -77,16 +80,19 @@ class ModelConfig:
         mae_ratio, mae_proprio_ratio: Share of frame patches / proprio channels hidden by ``mae``.
         ema_momentum, ema_momentum_end: EMA momentum of the target encoder, linearly
             annealed over the run (``ema_vicreg`` only).
-        recon_weight: ``sigreg`` only: weight of an MAE-style reconstruction term (0: off). A
+        recon_weight: ``sigreg`` only: weight of an MAE-style reconstruction term. ``None`` (the
+            default) means ``DEFAULT_RECON`` for ``sigreg`` with vision and 0 otherwise (``recon``);
+            0 is the plain JEPA of B-variety-0 ("A0"). A
             decoder reads the *pre-projector* state of a masked copy of the batch and reconstructs
             the masked patches and proprio channels (``mae_ratio``, ``mae_proprio_ratio``; the
             ``mae`` objective's targets), so the encoder must keep what next-state prediction can
             drop; the projector and the next-state loss are unchanged.
-        recon_input: ``separate`` (two encoder passes: the next-state objective on the clean
-            batch, the reconstruction on a masked copy) or ``masked`` (one pass: the batch is
-            masked once and the encoder runs once on it; the next-state loss and SIGReg use its
-            projected states, the decoder reads its pre-projector states, scored on the hidden
-            entries). Training objective only: ``embed`` and ``encode`` always see clean inputs.
+        recon_input: ``masked`` (the default, B-fix-1: one pass; the batch is masked once and
+            the encoder runs once on it; the next-state loss and SIGReg use its projected
+            states, the decoder reads its pre-projector states, scored on the hidden entries) or
+            ``separate`` (B-fix-0: two encoder passes, the next-state objective on the clean
+            batch and the reconstruction on a masked copy). Training objective only: ``embed``
+            and ``encode`` always see clean inputs.
         target_grad: ``sigreg`` only: gradients flow into the next-state targets (LeWM). False
             stops them (the encoder is then shaped by the prediction only through its inputs).
         vicreg_var_weight, vicreg_cov_weight: Weights of VICReg's variance and covariance
@@ -136,8 +142,8 @@ class ModelConfig:
     vicreg_var_weight: float = 1.0
     vicreg_cov_weight: float = 0.04
     target_grad: bool = True
-    recon_weight: float = 0.0
-    recon_input: str = "separate"
+    recon_weight: float | None = None
+    recon_input: str = "masked"
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -162,14 +168,25 @@ class ModelConfig:
 
     def _check_recon(self) -> None:
         """Validate the reconstruction options (``recon_weight``, ``recon_input``)."""
-        if self.recon_weight < 0:
+        if self.recon_weight is not None and self.recon_weight < 0:
             raise ValueError(f"recon_weight must be >= 0, got {self.recon_weight}")
-        if self.recon_weight > 0 and (self.objective != "sigreg" or "vision" not in self.senses):
+        if self.recon_weight and (self.objective != "sigreg" or "vision" not in self.senses):
             raise ValueError("recon_weight > 0 needs the sigreg objective and the vision sense")
         if self.recon_input not in ("separate", "masked"):
             raise ValueError(f"recon_input must be separate or masked, got {self.recon_input!r}")
-        if self.recon_input == "masked" and self.recon_weight <= 0:
-            raise ValueError("recon_input = masked needs recon_weight > 0")
+
+    @property
+    def recon(self) -> float:
+        """The reconstruction weight in use: ``recon_weight`` if set, else the default
+        (``DEFAULT_RECON`` for the ``sigreg`` objective with vision, 0 otherwise)."""
+        if self.recon_weight is not None:
+            return self.recon_weight
+        return DEFAULT_RECON if self.objective == "sigreg" and "vision" in self.senses else 0.0
+
+    def resolved(self) -> "ModelConfig":
+        """This config with ``recon_weight`` written out (what checkpoints store, so a later
+        change of the default cannot change how a saved model is rebuilt)."""
+        return replace(self, recon_weight=self.recon)
 
 
 class StateEncoder(nn.Module):
@@ -384,7 +401,7 @@ class SensoryModel(nn.Module):
             self.target = copy.deepcopy(self.encoder)
             self.target.requires_grad_(False)
         self.recon: reference.InputDecoder | None = None
-        if cfg.recon_weight > 0:  # created last: the other modules' initialisation is unchanged
+        if cfg.recon > 0:  # created last: the other modules' initialisation is unchanged
             side = cfg.vision_size // cfg.vision_patch
             proprio = sum(space.size(s) for s in self.senses if s in PROPRIO_SENSES)
             self.recon = reference.InputDecoder(
@@ -531,7 +548,7 @@ class SensoryModel(nn.Module):
                     _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=True)
                 recon = pix + prop_loss
                 extra = {**extra, "recon": recon.detach()}
-                extra_loss = extra_loss + c.recon_weight * recon
+                extra_loss = extra_loss + c.recon * recon
             return {
                 "loss": weighted + c.sigreg_weight * reg + extra_loss,
                 "pred": mse,
