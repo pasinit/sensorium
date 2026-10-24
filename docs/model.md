@@ -2340,7 +2340,7 @@ By B-fix-0's rule (pre-projector contact AUROCs above the floor, held-out babble
   term carries the signal, and only a use of the action-conditioned predictor can show what the JEPA
   half adds.
 
-## B-plan-0: does the reconstruction default cost the JEPA its use as a world model? (pre-registered, not yet built)
+## B-plan-0: does the reconstruction default cost the JEPA its use as a world model? (pre-registered)
 
 **Written before any code or run.** On single-window probes, B-fix-1 (one masked pass, now the
 default) equals B-fix-0's two passes and reaches MAE. The JEPA half is useful only through its
@@ -2429,6 +2429,24 @@ it has no trained predictor.
   * compounding error and correction through replanning;
   * the proprio success threshold, so it ranks the predictor's discrimination, not whether the
     arm gets there.
+
+**Implementation details, fixed before any run** (`scripts/plan_test.py`,
+`sensorium.model.planning`, `sensorium.bodies.restore`).
+
+* **Planned channels.** The planner chooses one target per chunk for the eight arm joints of the
+  success criterion (shoulders and elbows, both arms), held for the chunk's 4 steps. Every other
+  joint (legs, torso, wrists, hand or pincer) holds its target from the action before t0. This keeps
+  CEM at 8 x 8 dimensions.
+* **Sampling.** The initial std and the bounds are the per-channel std, minimum and maximum of the
+  arm actions in the 100 babble_v2 pretraining episodes, per effector.
+* **Restore.** The scene is rebuilt from the block's generator settings and the episode's seed, as
+  the generator does: appearance, props, hidden properties and layout. The recorded `qpos`/`qvel`
+  and the previous action's joint targets are then set.
+* **Stage 1, logged:** the replay gate on the first 20 goals. It writes `fidelity.json` (replay
+  success, median RMS, seconds per goal). If it fails, the VM runs the proxy instead of the closed
+  loop.
+* **The ridge heads and decoders** are fitted on every model step of the 100 pretraining episodes,
+  with the strength chosen by episode-grouped inner folds.
 
 **Expectation, so it can be wrong.**
 

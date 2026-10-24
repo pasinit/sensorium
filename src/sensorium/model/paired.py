@@ -138,6 +138,44 @@ def difference_in_differences(
     return Contrast(float(per_seed.mean()), seed_se, float(episode.std()), len(a), len(c))
 
 
+def contrast_values(
+    a: np.ndarray, b: np.ndarray, groups: np.ndarray, paired: bool = True, draws: int = DRAWS
+) -> Contrast:
+    """``a - b`` of per-item values (e.g. a success indicator or an error per goal), averaged
+    over items, with the same seed and episode uncertainty as ``contrast``.
+
+    Args:
+        a, b: ``[seeds, n]`` values of the two families on the same ``n`` items (with
+            ``paired``, row ``i`` of both shares a seed; otherwise the rows are independent and
+            the counts may differ).
+        groups: ``[n]`` episode of each item: the bootstrap resamples episodes with ``rng(0)``.
+        paired: See above.
+        draws: Bootstrap resamples.
+
+    Raises:
+        ValueError: on empty families, mismatched item counts, or unequal seed counts if paired.
+    """
+    a, b = np.atleast_2d(a), np.atleast_2d(b)
+    if a.size == 0 or b.size == 0 or a.shape[1] != b.shape[1] or a.shape[1] != len(groups):
+        raise ValueError("contrast_values needs two non-empty families on the same items")
+    if paired and a.shape[0] != b.shape[0]:
+        raise ValueError("paired families need the same number of seeds")
+    ma, mb = a.mean(1), b.mean(1)
+    if paired:
+        d = ma - mb
+        seed_se = float(d.std(ddof=1) / np.sqrt(len(d))) if len(d) > 1 else 0.0
+    else:
+        seed_se = float(np.sqrt(_family_var(ma) / len(ma) + _family_var(mb) / len(mb)))
+    episodes = np.unique(groups)
+    rows = {e: np.flatnonzero(groups == e) for e in episodes}
+    rng = np.random.default_rng(0)
+    boot = []
+    for _ in range(draws):
+        idx = np.concatenate([rows[e] for e in rng.choice(episodes, len(episodes))])
+        boot.append(a[:, idx].mean() - b[:, idx].mean())
+    return Contrast(float(ma.mean() - mb.mean()), seed_se, float(np.std(boot)), len(a), len(b))
+
+
 def describe(c: Contrast) -> str:
     """``+0.012 (seed SE 0.010, episode SE 0.015, combined 0.018, MDD 0.050, resolved)``."""
     tag = ", resolved" if c.resolved else ""
