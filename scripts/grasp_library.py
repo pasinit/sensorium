@@ -3,7 +3,6 @@
 Usage:
     uv run python scripts/grasp_library.py <hand|pincer> <object body name> <trials>
         [--first N] [--out FILE] [--config configs/event_dense.toml] [--planner] [--wrap]
-        [--hand-sized]
 
 The scene is the config's first block for the effector (its props, hidden object properties), with
 the scene director off. Each trial: reset (fresh hidden properties), the other objects on the floor,
@@ -25,18 +24,10 @@ import mujoco
 import numpy as np
 
 from sensorium.babble_stats import runs
-from sensorium.bodies import h1_scene
 from sensorium.bodies.h1_babble import BabblePolicy, Waypoint
 from sensorium.bodies.humanoid import IMAGE_SIZE, HumanoidRecorder, object_half_height
 
 LIFT_M, LIFT_STEPS, MAX_STEPS = 0.03, 10, 300
-# ``--hand-sized``: temporary props in place of the tall block and bottle (``tall_block``), sized
-# for a Shadow hand (docs/touch.md, "A side wrap"); hidden properties as for the other objects.
-HAND_SIZED = (
-    ("obj_metal_can", "metal", "cylinder", "0.035 0.08"),  # 7 cm across, 16 cm tall
-    ("obj_plastic_bottle", "plastic", "cylinder", "0.03 0.09"),  # 6 cm across, 18 cm tall
-    ("obj_wood_handbox", "wood", "box", "0.055 0.035 0.03"),  # 11 x 7 x 6 cm
-)
 
 
 def vertical_half(model: mujoco.MjModel, geom: int, quat: np.ndarray) -> float:
@@ -147,10 +138,7 @@ def main() -> None:
         help="the planner's own grasps (no random IK starts or jitter) instead of explored ones",
     )
     parser.add_argument("--wrap", action="store_true", help="hand: side wraps, not claw pinches")
-    parser.add_argument("--hand-sized", action="store_true", help="the HAND_SIZED props")
     args = parser.parse_args()
-    if args.hand_sized:
-        h1_scene.TALL_OBJECTS = HAND_SIZED
     blocks = tomllib.loads(args.config.read_text())["humanoid"]
     spec = next(s for name, s in blocks.items() if name.startswith(args.effector))
     settings = {k: v for k, v in dict(spec["settings"]).items() if k != "director"}

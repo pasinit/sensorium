@@ -1,10 +1,11 @@
 """Props for the experiments with consequences (docs/experiments.md), and hidden properties.
 
 A scene gets any subset of ``PROPS`` through the recorder's ``props`` setting. Free bodies (the
-tall block and bottle) are ``obj_*`` bodies like the six table objects, so every object statistic
-sees them. Articulated props have joints named ``prop_*`` whose travel (0 closed or up, 1 open or
-down) is logged as ``privileged/prop_state``; their geoms are named ``table_*`` so that contacts
-with them count as table contacts and sound like the table. The target disc is visual only.
+tall block and bottle; the hand-sized can, bottle, box and ball) are ``obj_*`` bodies like the six
+table objects, so every object statistic sees them. Articulated props have joints named
+``prop_*`` whose travel (0 closed or up, 1 open or down) is logged as ``privileged/prop_state``;
+their geoms are named ``table_*`` so that contacts with them count as table contacts and sound like
+the table. The target disc is visual only.
 
 Hidden properties (per object and episode): mass, sliding friction and contact softness, drawn
 from the ranges below and recorded in ``privileged/hidden_properties`` only. The look of an object
@@ -21,6 +22,7 @@ PROPS = (
     "drawer",
     "target_disc",
     "stack_blocks",
+    "hand_sized",
 )
 
 # The two blocks of ``stack_blocks`` (4 cm cubes), which replace the six standard objects.
@@ -36,6 +38,17 @@ STACK_MIN_GAP = 0.10
 TALL_OBJECTS = (
     ("obj_wood_tallbox", "wood", "box", "0.015 0.015 0.075"),  # 3 x 3 x 15 cm
     ("obj_plastic_tallcylinder", "plastic", "cylinder", "0.02 0.075"),  # a bottle: 4 cm, 15 cm
+)
+
+# (body name, material, geom type, size, mass kg): free bodies added by ``hand_sized``, sized for
+# the Shadow hand's claw pinch (thumb to fingertips about 10 cm open): in isolated trials it lifted
+# 45% of its grasps of the first three against 28% of the six table objects (docs/touch.md, "A side
+# wrap"). Nominal masses (with ``hidden_properties`` they are drawn like every object's).
+HAND_SIZED_OBJECTS = (
+    ("obj_metal_can", "metal", "cylinder", "0.035 0.08", 0.35),  # 7 cm across, 16 cm tall
+    ("obj_plastic_bottle", "plastic", "cylinder", "0.03 0.09", 0.3),  # 6 cm across, 18 cm tall
+    ("obj_wood_handbox", "wood", "box", "0.055 0.035 0.03", 0.25),  # 11 x 7 x 6 cm
+    ("obj_rubber_ball", "rubber", "sphere", "0.04", 0.15),  # 8 cm across
 )
 
 # Where each prop stands (m, in front of and to the side of the pelvis; the table's surface is z).

@@ -91,6 +91,79 @@ So 1-2e9 steps per full run, and about 2e8 for a single-object pilot.
 - **Data style.** A learned policy's movements differ from the babbling's (smoother or jerkier, other
   contact sequences). The dataset's statistics should be compared before mixing.
 
+## Pre-registration: scripted grasp success with hand-sized objects (cloud)
+
+**Question.** Does adding the `hand_sized` objects (`docs/event-dense.md`) raise the scripted hand's
+grasp success on the event-dense table above its current level (20% [15, 25] per grasp, 1.04 own
+lifts per episode, pooled over 55 episodes in `docs/touch.md`)?
+
+**Runs.** One CPU machine; all runs use the same code and seeds, and count every planned grasp.
+- **A, without the new objects:** `scripts/grasp_success.py hand 60 --first 0` with
+  `--setting 'props=["button", "friction_patches", "hinged_flap", "tall_block"]'`.
+- **B, with them:** `scripts/grasp_success.py hand 60 --first 0`, the config's hand block as
+  committed, with `--strips` (frame strips of the first two grasps per object and cause).
+- **C, isolated claw grasps:** `scripts/grasp_library.py hand <object> 100 --planner` for each of
+  the four objects.
+
+Both table runs cover 60 episodes (seeds 0-59), split over parallel processes. A 1-episode smoke
+run of B checks the rendering before the rest.
+
+**Measures.**
+- Primary: success per grasp in B, overall and on the hand-sized objects, with Wilson 95%
+  intervals.
+- Secondary:
+  - own lifts per episode, distinct objects lifted per episode, per-object lift and grasp counts,
+    and the failure causes, in A and B;
+  - the event rate of B (`sensorium.event_rate`, from 10 recorded episodes);
+  - the lift share per object in C.
+- Figures: the frame strips (successes and each failure cause per object) and a bar chart of
+  per-object success in A and B.
+
+**Decision, fixed now.**
+- Keep the objects in generation if B's success per grasp has a lower Wilson bound above 20%, and
+  B's own lifts per episode exceed A's.
+- If not, revert the config change; the prop stays available.
+
+About 300 grasps per run give intervals of about ±5 points. A 10-point difference is about 2.8
+standard errors.
+
+**Cost.** The Mac ran about 3.4 min per episode per process (hand, no rendering). Allowing 30%
+slower cores on the cloud:
+- 120 table episodes and 400 isolated trials are about 10 core-hours;
+- on a 32-vCPU machine with 30 processes, about 25 minutes of runs plus about 15 of set-up: under
+  1 hour.
+
+## Pilot of a learned grasp
+
+**Method.** As above:
+- the planner brings the hand over the object;
+- a PPO policy (MuJoCo Playground's Brax trainer) drives the 5 arm joints as residuals and the hand
+  actuators, from privileged state;
+- training runs in an MJX scene of one arm, the hand, the table and one object, with hidden
+  properties randomised.
+
+**Steps.**
+1. Throughput benchmark, 1 GPU-hour. It fixes the step budget, and stops the pilot if the scene
+   runs under 3k steps/s.
+2. Pilot on one object, the hand-sized can (the claw's best case, so the comparison is fair):
+   2e8 steps, at most 2 reward iterations.
+3. Check in the full scene: the trained policy runs 100 isolated grasps of the can in the MuJoCo C
+   scene (as `scripts/grasp_library.py`, honest physics, the same lift criterion), with frame
+   strips.
+
+**Budget.** At most 15 GPU-hours on one L4 (about $13 on demand, $5-11 Spot), plus under 1 CPU-hour
+for the check.
+
+**Success criterion.** In the C scene the policy lifts at least 60% of the 100 can grasps, and at
+least 20 points more than the scripted claw's isolated rate on the can (run C above).
+
+**Go / no-go for the full programme** (8 objects, 80-400 GPU-hours):
+- Go if the criterion is met within the budget.
+- No-go if the C-scene rate is under 30% after the two reward iterations, or if MJX-to-C transfer
+  loses more than half of the MJX success. The hands then stay with the scripted claw on hand-sized
+  objects.
+- In between, report and decide.
+
 ## Sources
 
 1. MuJoCo Playground, Zakka et al., 2025. https://arxiv.org/abs/2502.08844, Sec. IV-C, App. C,

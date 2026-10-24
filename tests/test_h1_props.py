@@ -9,9 +9,11 @@ pytest.importorskip("mujoco", reason="needs the simulator extra: make setup")
 
 import mujoco  # noqa: E402
 
+from sensorium.bodies.h1_babble import BabblePolicy  # noqa: E402
 from sensorium.bodies.h1_props import (  # noqa: E402
     EXCLUSION,
     FRICTION,
+    HAND_SIZED_OBJECTS,
     HIDDEN_COLUMNS,
     MASS_KG,
     SOLREF_S,
@@ -20,7 +22,7 @@ from sensorium.bodies.h1_props import (  # noqa: E402
     prop_xml,
 )
 from sensorium.bodies.h1_scene import assets_available  # noqa: E402
-from sensorium.bodies.humanoid import HumanoidRecorder  # noqa: E402
+from sensorium.bodies.humanoid import HumanoidRecorder, object_half_height  # noqa: E402
 from sensorium.episode import Episode  # noqa: E402
 
 needs_assets = pytest.mark.skipif(not assets_available(), reason="run `make h1-assets`")
@@ -177,3 +179,37 @@ def test_default_scene_is_unchanged_by_the_new_settings() -> None:
         assert "props" not in plain.settings and "effort" not in plain.settings
         assert not any(name.startswith("eff_") for name in episode.proprio_names)
         assert "prop_state" not in episode.privileged and not episode.meta["prop_names"]
+
+
+@needs_assets
+def test_hand_sized_objects_spawn_settle_and_are_within_the_hands_reach() -> None:
+    settings: dict[str, object] = {"effector": "hand", "posture": "seated", "props": ["hand_sized"]}
+    with HumanoidRecorder(settings) as rec:
+        model, names = rec.model, [rec.model.body(b).name for b in rec.objects]
+        for name, _, _, _, mass in HAND_SIZED_OBJECTS:
+            assert name in names
+            assert model.body_mass[model.body(name).id] == pytest.approx(mass)
+        # spawn and settle: one short episode standing still; every object rests on the table
+        pose = rec.record(3, "hold", 25).privileged["object_pose"]
+        for k, name in enumerate(names):
+            half = object_half_height(model, int(model.body_geomadr[rec.objects[k]]))
+            assert np.linalg.norm(pose[-1, k, :3] - pose[-5, k, :3]) < 0.005, name  # at rest
+            assert pose[-1, k, 2] == pytest.approx(rec.table_top + half, abs=0.02), name
+        # reachable: alone in front of the right arm, the planner finds a claw pinch of each
+        policy = rec.make_policy("seated_babble", np.random.default_rng(0))
+        assert isinstance(policy, BabblePolicy)
+        rec.reset(policy, np.random.default_rng(0))
+        data = rec.data
+        policy.clearance, policy.axis_weight = policy.GRASP_CLEARANCE, 0.3
+        for name, *_ in HAND_SIZED_OBJECTS:
+            index = names.index(name)
+            for k, body in enumerate(rec.objects):  # the others off the table
+                adr = model.jnt_qposadr[model.body_jntadr[body]]
+                data.qpos[adr : adr + 3] = (-1.0, -1.0 + 0.3 * k, 0.1)
+            body = rec.objects[index]
+            half = object_half_height(model, int(model.body_geomadr[body]))
+            adr = model.jnt_qposadr[model.body_jntadr[body]]
+            data.qpos[adr : adr + 7] = (0.45, -0.18, rec.table_top + half, 1, 0, 0, 0)
+            mujoco.mj_forward(model, data)
+            found = any(policy.grasp_candidate(data, "right", index) for _ in range(10))
+            assert found, name

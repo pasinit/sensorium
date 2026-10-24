@@ -102,3 +102,27 @@ Caveats:
   them apart or weight them.
 - The A1 force lines were set for babbling, not for this data: drops onto a body are meant to
   exceed them.
+
+## Hand-sized objects (2026-10-24)
+
+The six table objects are 3-10 cm across, small for a Shadow hand: its claw pinch lifts 28% of its
+isolated grasps of them, and 45% [31, 60] of grasps of hand-sized props (`docs/touch.md`). The
+`hand_sized` prop (`h1_props.HAND_SIZED_OBJECTS`) adds four free objects, and the hand blocks of
+`configs/event_dense.toml` now have it (pincer blocks unchanged):
+
+| object | shape | size | nominal mass |
+|---|---|---|---|
+| `obj_metal_can` | cylinder | 7 cm across, 16 cm tall | 0.35 kg |
+| `obj_plastic_bottle` | cylinder | 6 cm across, 18 cm tall | 0.30 kg |
+| `obj_wood_handbox` | box | 11 x 7 x 6 cm | 0.25 kg |
+| `obj_rubber_ball` | sphere | 8 cm across | 0.15 kg |
+
+- The nominal masses replace the material density, which would make a metal can 4.8 kg.
+- With `hidden_properties` the mass, friction and softness are drawn per episode, as for every
+  object (0.1-1.5 kg).
+- A hand block now has 12 free objects; the placement relaxes its spacing on a crowded table, as
+  with the other props.
+- `tests/test_h1_props.py` checks that each object spawns, settles on the table within a short
+  episode, and is reachable by the planner's claw pinch.
+- The event rate and the grasp success with these objects are measured on the cloud, not on the
+  Mac (`docs/learned-grasp.md`, pre-registration).
