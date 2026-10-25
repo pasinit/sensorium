@@ -54,6 +54,18 @@ def test_states_and_chunks_match_the_encoder_and_the_loader(tiny_layer: SensoryL
     assert q.shape == (2, 8) and np.allclose(q, ep.proprio[[3, 7]][:, cols])
 
 
+def test_encode_at_returns_the_state_and_the_summary_it_projects(tiny_layer: SensoryLayer) -> None:
+    ep = arm_episode(0)
+    _, ends = tiny_layer.encode(ep, stride=4)
+    s, z = planning.encode_at(tiny_layer, ep, ends[:5])
+    assert np.array_equal(s, planning.states_at(tiny_layer, ep, ends[:5]))
+    model = tiny_layer.model.eval()
+    with torch.no_grad():
+        projected = model.encoder.project(torch.as_tensor(z, dtype=torch.float32)[:, None])
+    assert np.allclose(projected[:, 0].numpy(), s, atol=1e-5)
+    assert not model.encoder.projector._forward_pre_hooks  # the hook is removed
+
+
 def test_own_rollout_feeds_its_predictions_back(tiny_layer: SensoryLayer) -> None:
     ep = arm_episode(0)
     ends = np.array([3, 7, 11, 15, 19])
@@ -252,6 +264,15 @@ def test_plan_script_fit_openloop_rank_and_report(
     monkeypatch.setattr(plan, "CANDIDATES", 4)
     plan.fit()
     assert (tmp_path / "plan/fit/action_stats.json").exists()
+    plan.decoder("0/1")
+    raw_check = json.loads((tmp_path / "plan/decoder/raw-s0.json").read_text())
+    assert raw_check["raw"]["pooled"]["train"] > 0.99  # the window holds the arm joints
+    check = json.loads((tmp_path / "plan/decoder/fix1-s2.json").read_text())
+    assert set(check) == {"z", "s"} and set(check["s"]) == {"pooled", "per effector"}
+    assert {"train", "cv", "babble", "variety", "alpha"} <= set(check["z"]["pooled"])
+    capsys.readouterr()
+    plan.decoder_report()
+    assert "| raw proprio window | raw | pooled |" in capsys.readouterr().out
     plan.openloop("0/1")
     raw = np.load(tmp_path / "plan/openloop/own-fix1-s0.npz")
     assert raw["latent"].shape == (8 * 8, 8) and raw["decoded"].shape == (64, 8)
