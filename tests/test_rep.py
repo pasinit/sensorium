@@ -42,6 +42,8 @@ def test_configure_points_both_studies_at_the_rep_runs(rep: Any) -> None:
     assert rep.plan.OWN == ("A0", rep.FIX1, *rep.ARMS) and rep.plan.RIDGE == ()
     assert rep.plan.ENCODERS["recon-s"] == (rep.ROOT / "runs", "recon-s")
     assert rep.ARMS["recon-s-multi-z"]["summary_tokens"] == 4
+    assert rep.ARMS["recon-s-allprop"] == rep.ARMS["recon-s"] | {"recon_proprio": "all"}
+    assert len(rep.ARMS) == 4
     assert all(v["recon_weight"] == 0.5 for v in rep.ARMS.values())
 
 

@@ -89,6 +89,9 @@ class ModelConfig:
             drop; the projector and the next-state loss are unchanged.
         recon_source: ``z`` (the default: the decoder reads the pre-projector summary) or ``s``
             (B-rep-0: it reads the projector output, the state itself).
+        recon_proprio: ``hidden`` (the default: the proprio reconstruction is scored on the
+            channels the mask hid) or ``all`` (B-rep-0 arm 1b: on every proprio channel, hidden
+            and visible, against the clean input).
         summary_tokens: Summary tokens ``K`` of the fusion (default 1). With ``K > 1`` every
             token is projected by the shared projector and the state is their concatenation
             (``K * dim``); the predictor maps it to ``dim`` and back, SIGReg is applied per token
@@ -153,6 +156,7 @@ class ModelConfig:
     recon_weight: float | None = None
     recon_input: str = "masked"
     recon_source: str = "z"
+    recon_proprio: str = "hidden"
     summary_tokens: int = 1
 
     def __post_init__(self) -> None:
@@ -186,6 +190,8 @@ class ModelConfig:
             raise ValueError(f"recon_input must be separate or masked, got {self.recon_input!r}")
         if self.recon_source not in ("z", "s"):
             raise ValueError(f"recon_source must be z or s, got {self.recon_source!r}")
+        if self.recon_proprio not in ("hidden", "all"):
+            raise ValueError(f"recon_proprio must be hidden or all, got {self.recon_proprio!r}")
         if self.summary_tokens < 1:
             raise ValueError(f"summary_tokens must be >= 1, got {self.summary_tokens}")
         if self.summary_tokens > 1 and (self.objective != "sigreg" or self.teacher != "none"):
@@ -545,6 +551,8 @@ class SensoryModel(nn.Module):
         err = (vis - pixels).pow(2).mean(-1)
         pix = (err * hidden).sum() / hidden.sum().clamp_min(1)
         prop_err = (prop - proprio).pow(2)
+        if c.recon_proprio == "all":  # every channel, hidden or not
+            channels = torch.ones_like(channels)
         prop_loss = (prop_err * channels).sum() / channels.sum().clamp_min(1)
         return pix, prop_loss
 

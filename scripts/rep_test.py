@@ -1,9 +1,11 @@
 """B-rep-0: can the state s carry the arm? (reconstruction on s, several summary tokens)
 
-Pre-registration and outcome rules: ``docs/model.md``, "B-rep-0". Three arms on B-fix-1's recipe
+Pre-registration and outcome rules: ``docs/model.md``, "B-rep-0". Four arms on B-fix-1's recipe
 (fix1: one masked pass, reconstruction weight 0.5), 10,000 steps, seeds 0 to 2:
 
 * ``recon-s``: the reconstruction decoder reads the state s instead of the summary z;
+* ``recon-s-allprop`` (1b): as ``recon-s``, and the proprio reconstruction is scored on every
+  channel against the clean input (two changes against fix1);
 * ``multi-z``: four summary tokens, s their projected concatenation (512-d);
 * ``recon-s-multi-z``: both.
 
@@ -46,6 +48,7 @@ FIX1 = "fix1-recon05"
 FIX1_OPTIONS: dict[str, object] = {"recon_weight": 0.5, "recon_input": "masked"}
 ARMS: dict[str, dict[str, object]] = {
     "recon-s": FIX1_OPTIONS | {"recon_source": "s"},
+    "recon-s-allprop": FIX1_OPTIONS | {"recon_source": "s", "recon_proprio": "all"},
     "multi-z": FIX1_OPTIONS | {"summary_tokens": 4},
     "recon-s-multi-z": FIX1_OPTIONS | {"recon_source": "s", "summary_tokens": 4},
 }

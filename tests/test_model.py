@@ -2006,3 +2006,32 @@ def test_a_layer_with_several_summary_tokens_encodes_and_rolls_out(
     assert states.shape == (len(ends), cfg.state_dim)
     chunks = np.zeros((2, 3, cfg.substeps, space.size("action")), dtype=np.float32)
     assert own_rollout(layer, states[:2], chunks).shape == (2, 3, cfg.state_dim)
+
+
+def test_recon_proprio_all_scores_every_channel_against_the_clean_input(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    from sensorium.model import reference  # noqa: PLC0415
+
+    batch = batch_of(episodes, space, check_senses(V_P))
+    losses = {}
+    for targets in ("hidden", "all"):
+        torch.manual_seed(0)
+        cfg = replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s", recon_proprio=targets)
+        model = SensoryModel(cfg, space)
+        assert model.recon is not None
+        states = torch.randn(*batch["action"].shape[:2], cfg.dim)
+        hidden = torch.ones(*states.shape[:2], 16)
+        assert model.recon.proprio is not None
+        channels = torch.zeros(*states.shape[:2], model.recon.proprio[-1].out_features)
+        channels[..., 0] = 1.0  # only the first channel was hidden
+        _, prop = model.recon(states)
+        err = (prop - reference.proprio_last(batch, model.senses)).pow(2)
+        losses[targets] = model._recon_loss(batch, model.recon, states, hidden, channels)[
+            1
+        ].detach()
+        want = (err.mean() if targets == "all" else err[..., 0].mean()).detach()
+        assert float(losses[targets]) == pytest.approx(float(want), rel=1e-5)
+    assert not torch.equal(losses["hidden"], losses["all"])
+    with pytest.raises(ValueError, match="recon_proprio"):
+        replace(TINY, recon_proprio="visible")
