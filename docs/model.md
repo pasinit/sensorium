@@ -2467,8 +2467,8 @@ it has no trained predictor.
 > RMS cannot rank predictors or planners near a useful accuracy.
 >
 > Within that, fix1 beats A0 on both halves of the pre-registered contrast (-0.256 rad):
-> * -0.124 rad is the floor: A0's states carry less linearly readable arm position (the B-fix-0
->   finding);
+> * -0.124 rad is the floor: A0's states carry less arm position readable by *one pooled* linear
+>   map. The decoder check below finds this is mostly A0 needing a per-effector readout;
 > * -0.132 rad is the excess over the floor, the only part about prediction.
 >
 > The primary is reported as computed and pre-registered.
@@ -2547,14 +2547,173 @@ The floor's sd over seeds is 0.009 to 0.029. Paired contrasts fix1 - A0 (by seed
   variety.
 * **Plausibly part of why the planner had nothing to grip.** The goal is a latent state, and the
   arm position is a small, weakly readable part of it.
-* **Not yet ruled out: the decoder's fit.** It is one ridge map from the post-projector state s to
-  the eight arm joints, pooled over effectors, on the 100 babble_v2 pretraining episodes, with
-  its strength chosen by episode-grouped inner folds on the same standardised features. Train R²
-  against held-out R² decides between the representation and the fit. It needs the states re-encoded, so it is not in this report.
+* **The decoder's fit is ruled out** by the decoder check below: the loss is in the
+  representation.
 
 Figures, not committed: `runs/plan/figures/plan_openloop.png` (decoded RMS per horizon) and
 `runs/plan/figures/plan_floor.png` (prediction and floor per arm, with the copy and constant
 baselines).
+
+### B-plan-0, decoder check: is the weak arm readout the representation or the fit? (post hoc)
+
+**The question.** The open-loop arm readout is far worse than copy. That could be the
+representation, or the decoder's fit. The decoder used above is one ridge map from the state s to
+the eight arm joints, pooled over effectors.
+
+**The rule, stated before the run:**
+
+* low train R² on both z and s means the representation;
+* train R² fine but CV or held-out R² low means the fit;
+* z clearly above s means the projector drops arm information.
+
+**The check.** Ridge decoders are fitted on every model step of the same 100 babble_v2
+pretraining episodes, for each encoder and seed (10,000-step checkpoints, 3 seeds).
+
+* Features:
+  * the summary token z (the projector's input);
+  * the state s (its output);
+  * as an upper bar, the raw proprio window (the window's 4 sub-steps, on the channels every
+    episode has).
+* Decoders: one pooled map, or one per effector (hand, pincer).
+* Scores: R² over the eight joints together, on four sets:
+  * train (the fit episodes themselves);
+  * episode-grouped 5-fold CV;
+  * held-out babble_v2;
+  * held-out variety.
+* The ridge strength is chosen by inner folds. Command: `plan_test.py decoder`, then
+  `decoder-report`.
+
+| encoder | feature | decoder | train | CV | held-out babble | held-out variety |
+|---|---|---|---|---|---|---|
+| raw proprio window | raw | pooled / per effector | 1.000 | 1.000 | 1.000 | 1.000 |
+| A0 | z | pooled | 0.700 +- 0.013 | 0.671 +- 0.016 | 0.672 +- 0.017 | 0.588 +- 0.018 |
+| A0 | z | per effector | 0.793 +- 0.014 | 0.746 +- 0.017 | 0.764 +- 0.017 | 0.663 +- 0.019 |
+| A0 | s | pooled | 0.419 +- 0.047 | 0.381 +- 0.050 | 0.384 +- 0.044 | 0.283 +- 0.032 |
+| A0 | s | per effector | 0.658 +- 0.021 | 0.613 +- 0.019 | 0.622 +- 0.012 | 0.433 +- 0.015 |
+| recon05 | z | pooled | 0.747 +- 0.010 | 0.714 +- 0.010 | 0.723 +- 0.008 | 0.641 +- 0.010 |
+| recon05 | z | per effector | 0.807 +- 0.008 | 0.754 +- 0.008 | 0.773 +- 0.005 | 0.693 +- 0.010 |
+| recon05 | s | pooled | 0.590 +- 0.021 | 0.554 +- 0.021 | 0.561 +- 0.019 | 0.420 +- 0.028 |
+| recon05 | s | per effector | 0.681 +- 0.014 | 0.633 +- 0.020 | 0.648 +- 0.013 | 0.523 +- 0.021 |
+| fix1 | z | pooled | 0.639 +- 0.008 | 0.595 +- 0.010 | 0.613 +- 0.012 | 0.436 +- 0.028 |
+| fix1 | z | per effector | 0.688 +- 0.007 | 0.625 +- 0.010 | 0.651 +- 0.011 | 0.507 +- 0.027 |
+| fix1 | s | pooled | 0.596 +- 0.006 | 0.554 +- 0.007 | 0.566 +- 0.008 | 0.341 +- 0.012 |
+| fix1 | s | per effector | 0.623 +- 0.006 | 0.578 +- 0.008 | 0.594 +- 0.008 | 0.370 +- 0.020 |
+| MAE | z | pooled | 0.668 +- 0.003 | 0.603 +- 0.004 | 0.634 +- 0.005 | 0.474 +- 0.020 |
+| MAE | z | per effector | 0.741 +- 0.001 | 0.642 +- 0.012 | 0.690 +- 0.002 | 0.548 +- 0.011 |
+| MAE | s | pooled | 0.539 +- 0.015 | 0.472 +- 0.018 | 0.498 +- 0.012 | 0.319 +- 0.006 |
+| MAE | s | per effector | 0.633 +- 0.013 | 0.574 +- 0.003 | 0.595 +- 0.006 | 0.392 +- 0.012 |
+
+![Arm-joint R² of ridge decoders on z and s, pooled and per effector](figures/plan_decoder_r2.png)
+
+**Reading, by the rule.**
+
+* **The representation, not the fit.**
+  * The raw proprio window decodes the arm perfectly (R² 1.00 everywhere).
+  * Every encoder is already low on its own fit episodes: train R² 0.62 to 0.68 on s and 0.69
+    to 0.81 on z (per effector).
+  * Train, CV and held-out babble_v2 agree within 0.03 to 0.10. The decoder generalises; there is
+    little to recover in the fit.
+* **The projector drops arm information.**
+  * z is above s for every encoder, decoder and set.
+  * The gap is largest for A0: per effector, 0.79 against 0.66 on train and 0.66 against 0.43
+    on variety; pooled, 0.70 against 0.42 on train.
+  * It is smallest for fix1: 0.69 against 0.62 per effector.
+* **The open-loop floor contrast is mostly an effector effect.**
+  * Pooled, A0's s is far below fix1's (0.38 against 0.57, held-out babble_v2), as the B-plan-0
+    floor showed.
+  * Per effector, the order flips: A0 is at 0.62 against fix1's 0.59 on held-out babble_v2, and
+    0.43 against 0.37 on variety.
+  * So A0's s encodes the arm about as well as fix1's, but in a way that differs by effector. One
+    pooled map cannot read it, and the -0.124 rad floor half of the primary comes from that.
+* **The reconstruction default does not help the arm readout of z.** fix1's z is the lowest of
+  all encoders (0.69 per effector on train, against 0.74 to 0.81). Its gain over A0 is only in s,
+  and only with a pooled decoder.
+* **Variety is lower than babble_v2 for every encoder (by 0.08 to 0.23), but not for raw
+  proprio.** The shift is in the representation: these encoders were pretrained on babble only.
+* **Not tested here: a nonlinear readout.** The rule above is about linear decoders. A small MLP
+  could read more from s, but the planner's latent cost is a plain squared distance in s, so the
+  linear readout is the relevant one for it.
+
+### B-plan-0, gallery: predictions against the ground truth (illustrative)
+
+**Illustrations, not tests.** Seed 0 only, 4 episodes and 3 goals, chosen by fixed rules:
+* the first two held-out episodes of each set in split order;
+* the first goal of babble_v2 episodes 0 and 1 and of variety episode 0.
+
+Command: `plan_test.py gallery`. Nothing here is a contrast.
+
+**Open loop.** Rows are episodes. Columns are the four arm joints with the largest variance. Each
+panel shows:
+* the true angle (black);
+* the decoded true state of A0 and fix1 (dashed: the readout ceiling);
+* the decoded rollouts of their own predictors, started every 8 model steps and drawn as
+  segments;
+* copy (grey).
+
+The legends give each line's RMS. The decoder is the pooled one of the open-loop part.
+
+![Open-loop gallery](figures/plan_gallery_openloop.jpg)
+
+**Scatter.** Decoded against true joint angle at h1 and h8, all joints, the 1,600 open-loop starts
+of the 200 held-out episodes, with y = x. The slope is the least-squares slope of decoded on true:
+1 means no shrinkage, 0 means the mean only.
+
+![Decoded against true joint angle](figures/plan_gallery_scatter.png)
+
+| seed 0, pooled decoder | RMS h1 (rad) | RMS h8 | slope h1 | slope h8 |
+|---|---|---|---|---|
+| A0 own predictor | 1.10 | 1.11 | 0.44 | 0.41 |
+| A0 true state (ceiling) | 0.94 | 0.96 | 0.55 | 0.55 |
+| fix1 own predictor | 0.86 | 0.89 | 0.61 | 0.65 |
+| fix1 true state (ceiling) | 0.82 | 0.83 | 0.71 | 0.70 |
+
+**Goals.** Each block is one goal:
+* the first row is the recorded episode, whose last frame is the goal;
+* then hold, random, own fix1 CEM (the first-run planner, not amendment 1) and replay, re-run in
+  the restored scene;
+* frames are one per model step (0.2 s), from the head camera.
+
+![Goal frame strips](figures/plan_gallery_goals.jpg)
+
+| goal | hold | random | own fix1 CEM | replay |
+|---|---|---|---|---|
+| 0 (babble_v2 episode 0) | 0.23 | 0.84 | 1.13 | 0.00 |
+| 2 (babble_v2 episode 1) | 1.40 | 1.23 | 1.97 | 0.00 |
+| 200 (variety episode 0) | 0.29 | 0.75 | 0.70 | 0.00 |
+
+Final arm RMS to the goal, rad.
+
+**What the gallery shows (illustrative, consistent with the tables above).**
+
+* **The readout from s is the bottleneck, not the dynamics.**
+  * fix1's own predictor adds little over its ceiling: 0.86 against 0.82 at h1, and 0.89
+    against 0.83 at h8.
+  * A0's adds more, 1.10 against 0.94: the excess of the open-loop table.
+  * Both ceilings are far from the truth. In the time series, the decoded true state jitters
+    from one model step to the next while the true angle is smooth or flat.
+* **Shrinkage toward the mean.** Every slope is below 1, from 0.41 (A0 predicted, h8) to 0.71
+  (fix1 ceiling). The ceilings already shrink (0.55 for A0, 0.70 for fix1), and A0's predictor
+  shrinks further (0.44 and 0.41).
+* **Large poses are missed.** In variety episode 0, both shoulder pitches sit near +2 rad for
+  most of the episode, and both encoders' ceilings stay near 0 (RMS 1.8 to 2.4 rad). Plausibly
+  these poses are rare or absent in babble_v2, the encoders' only pretraining data, which matches
+  the variety drop in the decoder check. The babble_v2 joint range was not checked here.
+* **Random and CEM rows tilt the camera, but not because the planner moves the body.**
+  * The planner acts on the eight arm targets only. Every other joint, the torso and legs
+    included, holds its target from before t0.
+  * Both random and CEM draw new arm targets around the held ones with the data's full
+    per-joint std, clipped to the data's range. They jump to them as steps, every model step
+    (0.2 s).
+  * The swings jolt the seated body through its held joints, so the head camera moves.
+  * Replay makes similarly large but smooth arm motions (goal 2) and the camera stays steady.
+  * So this follows from the sampling (large target jumps), not from the action space. The
+    trust region of amendment 1 bounds exactly these jumps.
+* **When the goal needs a large motion, CEM moves away from it.**
+  * Goal 2 is far from the start: hold ends 1.40 rad away. CEM ends further away (1.97) than
+    random (1.23).
+  * On goal 0, CEM (1.13) is also worse than random (0.84).
+  * On goal 200 it is about level with random (0.70 against 0.75), and all three are far
+    behind hold (0.29).
 
 ### B-plan-0: first closed-loop run, a planner failure (post hoc, not the primary)
 
