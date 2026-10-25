@@ -271,9 +271,16 @@ def test_plan_script_fit_openloop_rank_and_report(
     plan.report()
     out = capsys.readouterr().out
     assert "Primary (a)" in out and "proxy" in out
+    assert "| copy (true arm at the start) |" in out and "| excess, horizon 8 |" in out
+    copy, mean = plan.copy_arm()
+    assert copy.shape == mean.shape == (64, 8) and np.all(copy >= 0)
+    assert "| constant mean arm |" in out
+    floor = raw["decoded_true"]  # the floor is the decoder on the true state, not the prediction
+    assert floor.shape == raw["decoded"].shape and not np.allclose(floor, raw["decoded"])
     assert "Post hoc planner-failure diagnosis on the 3 goals" in out
     assert "Primary (b)" not in out  # never a primary on incomplete goals
     assert (tmp_path / "plan/figures/plan_openloop.png").exists()
+    assert (tmp_path / "plan/figures/plan_floor.png").exists()
     layer = plan.layer("A0", 0)
     assert isinstance(layer, SensoryLayer)
     plan.layer.cache_clear()
