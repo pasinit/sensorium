@@ -337,6 +337,7 @@ class HumanoidRecorder:
             else None
         )
         self.director_rng = np.random.default_rng(0)  # replaced per episode by ``record``
+        self.render_right = True  # the privileged second eye; ``RestoredScene`` turns it off
         self.not_foot = np.array(["ankle" not in n for n in self.force_names])
         self.leg_actuators = [
             self.space.index[f"{side}_{joint}"] for side in SIDES for joint in LEG_ACTUATORS
@@ -659,7 +660,8 @@ class HumanoidRecorder:
         self.dynamics.clear()
         log.touch_xyz.append(self.skin.force_xyz(sensordata))
         log.rgb.append(self.render(self.camera))
-        log.rgb_right.append(self.render(RIGHT_CAMERA))
+        if self.render_right:
+            log.rgb_right.append(self.render(RIGHT_CAMERA))
         qpos = [data.qpos[model.jnt_qposadr[j]] for j in self.joints]
         qvel = [data.qvel[model.jnt_dofadr[j]] for j in self.joints]
         log.proprio.append(
@@ -741,7 +743,6 @@ class HumanoidRecorder:
         steps = len(log.rgb)
         privileged = {
             "touch_xyz": np.stack(log.touch_xyz),
-            "rgb_right": np.stack(log.rgb_right).astype(np.uint8),
             "qpos": np.stack(log.qpos),
             "qvel": np.stack(log.qvel),
             "contacts": np.stack(log.contacts),
@@ -752,6 +753,8 @@ class HumanoidRecorder:
             "object_pose": np.stack(log.objects),
             "tip_position": np.stack(log.tips),
         }
+        if log.rgb_right:  # the second eye (privileged); not rendered when ``render_right`` is off
+            privileged["rgb_right"] = np.stack(log.rgb_right).astype(np.uint8)
         if log.prop_state:
             privileged["prop_state"] = np.stack(log.prop_state)
         if log.phase:
