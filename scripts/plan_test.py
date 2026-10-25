@@ -13,6 +13,7 @@ MAE) and with a ridge dynamics head fitted on 100 babble_v2 pretraining episodes
     uv run python scripts/plan_test.py report
     uv run python scripts/plan_test.py decoder --shard 0/13 # post hoc: arm decoder R2 (z, s, raw)
     uv run python scripts/plan_test.py decoder-report
+    uv run python scripts/plan_test.py gallery --part openloop  # post hoc figures vs ground truth
 
 Every stage skips work already saved, so a preempted VM resumes where it stopped.
 """
@@ -214,6 +215,21 @@ def copy_arm() -> tuple[np.ndarray, np.ndarray]:
     return np.concatenate(rows), rms(q.reshape(-1, q.shape[-1]).mean(0), q)
 
 
+def rollout_windows(
+    predictor: str, arm: str, seed: int, ep: Episode, ends: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Open-loop rollouts from the windows ``ends [S, HORIZON + 1]`` (column 0 the start) with
+    the true action chunks: the true states ``[S, HORIZON + 1, D]``, the predictions
+    ``[S, HORIZON, D]`` and the arm joints at the predicted steps ``[S, HORIZON, 8]``."""
+    lay = layer(arm, seed)
+    states = states_at(lay, ep, ends.ravel()).reshape(len(ends), HORIZON + 1, -1)
+    flat = chunks_at(lay, ep, ends[:, :-1].ravel())
+    chunks = flat.reshape(len(ends), HORIZON, *flat.shape[1:])
+    pred = rollout(predictor, arm, seed, states[:, 0], chunks)
+    q = arm_q(ep, ends[:, 1:].ravel()).reshape(len(ends), HORIZON, -1)
+    return states, pred, q
+
+
 def openloop(shard: str) -> None:
     """Per encoder and predictor: latent squared error, copy baseline and decoded arm RMS at
     every horizon, on ``STARTS`` starts of every held-out episode of both sets."""
@@ -226,19 +242,15 @@ def openloop(shard: str) -> None:
         path = out / f"{predictor}-{arm}-s{seed}.npz"
         if path.exists():
             continue
-        lay, dec = layer(arm, seed), heads(arm, seed)[1]
+        dec = heads(arm, seed)[1]
         rows: dict[str, list[np.ndarray]] = defaultdict(list)
         for k, test in enumerate(TEST_SETS):
             for e, p in enumerate(variety.files(test, "heldout")):
                 ep = Episode.load(p, privileged=False)
                 ends = openloop_ends(ep, k, e)
                 starts = ends[:, 0]
-                states = states_at(lay, ep, ends.ravel()).reshape(len(starts), HORIZON + 1, -1)
-                flat = chunks_at(lay, ep, ends[:, :-1].ravel())
-                chunks = flat.reshape(len(starts), HORIZON, *flat.shape[1:])
-                pred = rollout(predictor, arm, seed, states[:, 0], chunks)
+                states, pred, q = rollout_windows(predictor, arm, seed, ep, ends)
                 true = states[:, 1:]
-                q = arm_q(ep, ends[:, 1:].ravel()).reshape(len(starts), HORIZON, -1)
                 rows["latent"].append(((pred - true) ** 2).mean(-1))
                 rows["copy"].append(((states[:, :1] - true) ** 2).mean(-1))
                 rows["decoded"].append(
@@ -313,9 +325,11 @@ def run_goal(
     t0: int,
     config: tuple[str, str, int],
     stats: dict[str, dict[str, list[float]]],
+    frames: list[np.ndarray] | None = None,
 ) -> float:
     """Restore the scene at ``t0``, act for ``HORIZON`` model steps (MPC: plan, execute one
-    chunk, re-encode), return the final arm RMS (radians) to the goal's arm-joint positions."""
+    chunk, re-encode), return the final arm RMS (radians) to the goal's arm-joint positions.
+    ``frames``, if given, receives the camera frame after every chunk."""
     predictor, arm, seed = config
     stride, cols = model_stride(ep), arm_action_cols(ep)
     eff = stats[str(ep.meta.get("effector", "hand"))]
@@ -348,6 +362,8 @@ def run_goal(
         for a in actions:
             scene.step(a)
         observed = scene.observed()
+        if frames is not None:
+            frames.append(np.asarray(observed.rgb[-1]))
         if planner is not None:
             state = states_at(layer(arm, seed), observed, np.array([observed.length - 1]))
     return float(rms(scene.arm_q(), goal_q))
@@ -950,6 +966,208 @@ def decoder_report() -> None:
                 variety.say(f"| {label} | {feature} | {name} | " + " | ".join(cells) + " |")
 
 
+# ---------------------------------------------------------------------------------------------
+# post hoc: a gallery of predictions against the ground truth (illustrations, not tests)
+
+GALLERY_ARMS = ("A0", "fix1")
+GALLERY_SEED = 0
+GALLERY_EPISODES = 2  # the first held-out episodes of each test set in split.json
+GALLERY_JOINTS = 4
+GALLERY_CONFIGS = (
+    ("bar", "hold", 0),
+    ("bar", "random", 0),
+    ("own", "fix1", 0),
+    ("bar", "replay", 0),
+)
+GALLERY_PARTS = ("openloop", "scatter", "goals")
+
+
+def gallery_episodes() -> list[tuple[int, int, Path]]:
+    """``(test set index, episode index, path)`` of the first ``GALLERY_EPISODES`` held-out
+    episodes of each test set (a fixed rule, not a pick)."""
+    return [
+        (k, e, p)
+        for k, test in enumerate(TEST_SETS)
+        for e, p in enumerate(variety.files(test, "heldout")[:GALLERY_EPISODES])
+    ]
+
+
+def tiled_ends(ep: Episode) -> np.ndarray:
+    """``[S, HORIZON + 1]`` windows of rollouts started every ``HORIZON`` model steps, so their
+    predicted segments tile the episode."""
+    stride = model_stride(ep)
+    last = ep.length - 1 - HORIZON * stride
+    starts = np.arange(first_end(ep), last + 1, HORIZON * stride)
+    return sliding_ends(ep.length, first_end(ep), starts, stride, HORIZON)
+
+
+def top_variance_joints(qs: list[np.ndarray], n: int = GALLERY_JOINTS) -> np.ndarray:
+    """Indices (into ``ARM_JOINTS``) of the ``n`` joints with the largest pooled variance,
+    in joint order."""
+    return np.sort(np.argsort(np.concatenate(qs).var(0))[::-1][:n])
+
+
+def gallery_goal_ids() -> list[int]:
+    """Goal ids (into ``goal_list``) of the first goal of the first two held-out babble_v2
+    episodes and of the first variety episode (a fixed rule)."""
+    goals_ = goal_list()
+    wanted = [("babble", 0), ("babble", 1), ("variety", 0)]
+    return [next(i for i, g in enumerate(goals_) if g[:2] == w) for w in wanted]
+
+
+def slope(pred: np.ndarray, true: np.ndarray) -> float:
+    """Least-squares slope of ``pred`` on ``true`` (1: no shrinkage; 0: the mean only)."""
+    t = true - true.mean()
+    return float((t * (pred - pred.mean())).sum() / (t**2).sum())
+
+
+def gallery_openloop() -> None:
+    """``plan_gallery_openloop.png``: per gallery episode (rows) and high-variance arm joint
+    (columns), the true joint angle, the decoded true state of each encoder (the readout
+    ceiling), the decoded own-predictor rollouts (segments of ``HORIZON`` steps) and copy."""
+    eps = [(k, e, Episode.load(p, privileged=False)) for k, e, p in gallery_episodes()]
+    joints = top_variance_joints([arm_q(ep, np.arange(ep.length)) for _, _, ep in eps])
+    fig, axes = plt.subplots(len(eps), len(joints), figsize=(4 * len(joints), 2.6 * len(eps)))
+    for row, (k, e, ep) in enumerate(eps):
+        dt = ep.dt
+        steps = np.arange(first_end(ep), ep.length, model_stride(ep))
+        gold = arm_q(ep, np.arange(ep.length))
+        ends = tiled_ends(ep)
+        lines: dict[str, tuple[np.ndarray, np.ndarray]] = {}  # label -> (steps, values [n, 8])
+        for arm in GALLERY_ARMS:
+            dec = heads(arm, GALLERY_SEED)[1]
+            lines[f"{arm} true state (ceiling)"] = (
+                steps,
+                dec(states_at(layer(arm, GALLERY_SEED), ep, steps)),
+            )
+            _, pred, _ = rollout_windows("own", arm, GALLERY_SEED, ep, ends)
+            lines[f"{arm} own, open loop"] = (
+                ends[:, 1:],
+                dec(pred.reshape(-1, pred.shape[-1])).reshape(*pred.shape[:2], -1),
+            )
+        lines["copy"] = (
+            ends[:, 1:],
+            np.broadcast_to(gold[ends[:, :1]], (*ends[:, 1:].shape, gold.shape[1])),
+        )
+        for col, j in enumerate(joints):
+            ax = axes[row, col]
+            ax.plot(np.arange(ep.length) * dt, gold[:, j], color="black", lw=1.2, label="true")
+            for label, (at, val) in lines.items():
+                err = float(np.sqrt(((val[..., j] - gold[at, j]) ** 2).mean()))
+                color = "0.55" if label == "copy" else f"C{GALLERY_ARMS.index(label.split()[0])}"
+                ls = "--" if "ceiling" in label else "-"
+                segments = at[None] if at.ndim == 1 else at  # one segment per rollout
+                values = val[None] if at.ndim == 1 else val
+                for i, (seg, v) in enumerate(zip(segments, values, strict=True)):
+                    name = f"{label}: {err:.2f}" if i == 0 else None
+                    ax.plot(seg * dt, v[:, j], color=color, ls=ls, lw=1, label=name)
+            ax.set_title(f"{TEST_SETS[k]} {e}: {ARM_JOINTS[j].removeprefix('q_')}", fontsize=8)
+            ax.legend(fontsize=5, frameon=False, title="RMS (rad)", title_fontsize=5)
+            ax.grid(alpha=0.2)
+        axes[row, 0].set_ylabel("joint angle (rad)")
+    for ax in axes[-1]:
+        ax.set_xlabel("time (s)")
+    fig.tight_layout()
+    save_figure(fig, "plan_gallery_openloop.png")
+
+
+def save_figure(fig: plt.Figure, name: str) -> None:
+    """Save under ``runs/plan/figures`` and close."""
+    (ROOT / "figures").mkdir(parents=True, exist_ok=True)
+    fig.savefig(ROOT / "figures" / name, dpi=130)
+    plt.close(fig)
+
+
+def gallery_scatter() -> None:
+    """``plan_gallery_scatter.png``: decoded own-predictor rollouts and decoded true states
+    against the true joint angles at horizons 1 and ``HORIZON`` (all joints, all open-loop
+    starts of every held-out episode), with y = x; the slope shows shrinkage to the mean."""
+    data: dict[str, dict[int, tuple[np.ndarray, np.ndarray]]] = defaultdict(dict)
+    for arm in GALLERY_ARMS:
+        dec = heads(arm, GALLERY_SEED)[1]
+        pred_q, true_dec, gold = [], [], []
+        for k, test in enumerate(TEST_SETS):
+            for e, p in enumerate(variety.files(test, "heldout")):
+                ep = Episode.load(p, privileged=False)
+                states, pred, q = rollout_windows(
+                    "own", arm, GALLERY_SEED, ep, openloop_ends(ep, k, e)
+                )
+                pred_q.append(dec(pred.reshape(-1, pred.shape[-1])).reshape(q.shape))
+                true_dec.append(dec(states[:, 1:].reshape(-1, states.shape[-1])).reshape(q.shape))
+                gold.append(q)
+        pq, td, g = (np.concatenate(x) for x in (pred_q, true_dec, gold))
+        for h in (1, HORIZON):
+            data[f"{arm} own, open loop"][h] = (pq[:, h - 1].ravel(), g[:, h - 1].ravel())
+            data[f"{arm} true state (ceiling)"][h] = (td[:, h - 1].ravel(), g[:, h - 1].ravel())
+    fig, axes = plt.subplots(2, len(data), figsize=(3.2 * len(data), 6.4), sharex=True, sharey=True)
+    for col, (label, by_h) in enumerate(data.items()):
+        for row, (h, (pred, true)) in enumerate(by_h.items()):
+            ax = axes[row, col]
+            ax.scatter(
+                true,
+                pred,
+                s=1,
+                alpha=0.08,
+                color=f"C{GALLERY_ARMS.index(label.split()[0])}",
+                rasterized=True,
+            )
+            lim = np.percentile(true, [0.5, 99.5])
+            ax.plot(lim, lim, color="black", lw=0.8)
+            err = float(np.sqrt(((pred - true) ** 2).mean()))
+            ax.set_title(
+                f"{label}, h{h}\nRMS {err:.2f} rad, slope {slope(pred, true):.2f}", fontsize=8
+            )
+            ax.grid(alpha=0.2)
+    for ax in axes[-1]:
+        ax.set_xlabel("true joint angle (rad)")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("decoded (rad)")
+    fig.tight_layout()
+    save_figure(fig, "plan_gallery_scatter.png")
+
+
+def gallery_goals() -> None:
+    """``plan_gallery_goals.png``: for the gallery goals, frame strips (one frame per model
+    step) of the recorded episode (ending at the goal), then hold, random, own fix1 CEM and
+    replay, each with its final arm RMS to the goal. Runs these goals again in the simulator."""
+    stats = json.loads((ROOT / "fit" / "action_stats.json").read_text())
+    goals_ = goal_list()
+    rows: list[tuple[str, list[np.ndarray]]] = []
+    for gid in gallery_goal_ids():
+        test, e, p, t0 = goals_[gid]
+        ep = Episode.load(p)
+        stride = model_stride(ep)
+        recorded = [np.asarray(ep.rgb[t0 + i * stride]) for i in range(HORIZON + 1)]
+        rows.append((f"goal {gid} ({test} {e}): recorded, last = goal", recorded))
+        scene = RestoredScene(block_settings(CONFIGS[test], block_of(goals_[gid])[1]))
+        for config in GALLERY_CONFIGS:
+            frames = [recorded[0]]
+            final = run_goal(scene, ep, t0, config, stats, frames)
+            name = config[1] if config[0] == "bar" else f"{config[0]} {config[1]} CEM"
+            rows.append((f"{name}: final arm RMS {final:.2f} rad", frames))
+            logging.info("gallery goal %d %s: %.3f", gid, name, final)
+        scene.close()
+    cols = HORIZON + 1
+    fig, axes = plt.subplots(len(rows), cols, figsize=(1.3 * cols, 1.45 * len(rows)))
+    for r, (label, frames) in enumerate(rows):
+        for c in range(cols):
+            ax = axes[r, c]
+            ax.imshow(frames[c])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if r == len(rows) - 1:
+                ax.set_xlabel(f"{c * 0.2:.1f} s", fontsize=6)
+        axes[r, 0].set_title(label, fontsize=6, loc="left")
+    fig.tight_layout()
+    save_figure(fig, "plan_gallery_goals.png")
+
+
+def gallery(part: str) -> None:
+    """One part of the gallery (``GALLERY_PARTS``), or ``all``."""
+    for name in GALLERY_PARTS if part == "all" else (part,):
+        {"openloop": gallery_openloop, "scatter": gallery_scatter, "goals": gallery_goals}[name]()
+
+
 def report() -> None:
     """Every table and figure."""
     variety.say("B-plan-0 (pre-registered in docs/model.md).")
@@ -969,9 +1187,10 @@ def main() -> None:
         "command",
         choices=(
             *("fit", "fidelity", "openloop", "goals", "rank", "report"),
-            *("decoder", "decoder-report"),
+            *("decoder", "decoder-report", "gallery"),
         ),
     )
+    parser.add_argument("--part", default="all", choices=("all", *GALLERY_PARTS))
     parser.add_argument("--shard", default="0/1")
     parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args()
@@ -991,6 +1210,8 @@ def main() -> None:
         decoder(args.shard)
     elif args.command == "decoder-report":
         decoder_report()
+    elif args.command == "gallery":
+        gallery(args.part)
     else:
         report()
 
