@@ -258,10 +258,21 @@ def test_plan_script_fit_openloop_rank_and_report(
     assert len(plan.goal_list()) == 2 * 8  # two goals per held-out episode, both sets
     plan.rank("0/1")
     assert np.load(tmp_path / "plan/rank/ridge-MAE-s2.npz")["ranks"].max() <= 4
+    goals_dir = tmp_path / "plan/goals"  # an incomplete goal stage: a few goals, every config
+    goals_dir.mkdir(parents=True)
+    lines = [
+        json.dumps({"config": "/".join(map(str, c)), "goal": g, "set": "babble", "rms": 0.5})
+        for c in plan.configs()
+        for g in range(3)
+    ]
+    lines.append(json.dumps({"config": "bar/hold/0", "goal": 5, "set": "babble", "rms": 0.05}))
+    (goals_dir / "0-30.jsonl").write_text("\n".join(lines) + "\n")
     capsys.readouterr()
     plan.report()
     out = capsys.readouterr().out
     assert "Primary (a)" in out and "proxy" in out
+    assert "Post hoc planner-failure diagnosis on the 3 goals" in out
+    assert "Primary (b)" not in out  # never a primary on incomplete goals
     assert (tmp_path / "plan/figures/plan_openloop.png").exists()
     layer = plan.layer("A0", 0)
     assert isinstance(layer, SensoryLayer)
