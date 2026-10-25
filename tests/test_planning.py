@@ -66,6 +66,45 @@ def test_encode_at_returns_the_state_and_the_summary_it_projects(tiny_layer: Sen
     assert not model.encoder.projector._forward_pre_hooks  # the hook is removed
 
 
+def test_encode_parts_returns_every_stage_of_a_sense(tiny_layer: SensoryLayer) -> None:
+    ep = arm_episode(0)
+    _, ends = tiny_layer.encode(ep, stride=4)
+    parts = planning.encode_parts(tiny_layer, ep, ends[:5])
+    s, z = planning.encode_at(tiny_layer, ep, ends[:5])
+    assert np.array_equal(parts["s"], s) and np.array_equal(parts["z"], z)
+    model, enc = tiny_layer.model, tiny_layer.model.encoder
+    loaded = load_episode(ep, tiny_layer.space, model.senses)
+    arrays = build(loaded, tiny_layer.space, model.senses, ends[:5], 4)
+    x = arrays["proprio_body"]
+    assert np.allclose(parts["input_last"], x[:, -1]) and parts["input_window"].shape == (
+        5,
+        x[0].size,
+    )
+    with torch.no_grad():
+        stem = enc.stems["proprio_body"](torch.as_tensor(x)).numpy()
+    assert np.allclose(parts["stem"], stem, atol=1e-5)  # the stem of the model input
+    fused: list[Any] = []
+    hook = enc.fusion.register_forward_hook(lambda m, a, o: fused.append(o.detach()))
+    planning.encode_parts(tiny_layer, ep, ends[:5])
+    hook.remove()
+    slot = 1 + sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index("proprio_body")])
+    assert np.allclose(parts["fused"], fused[0][:, slot].numpy(), atol=1e-6)
+    assert not enc.stems["proprio_body"]._forward_hooks  # every hook is removed
+    with pytest.raises(ValueError, match="one-token"):
+        planning.encode_parts(tiny_layer, ep, ends[:5], sense="vision")
+
+
+def test_token_cosine_is_one_for_copies_and_zero_for_orthogonal_tokens() -> None:
+    plan = load_plan_script()
+    rng = np.random.default_rng(0)
+    t = rng.standard_normal((10, 1, 6))
+    assert plan.token_cosine(np.concatenate([t, 2 * t, t], 1).reshape(10, -1), 3) == pytest.approx(
+        1
+    )
+    eye = np.tile(np.eye(3)[None], (4, 1, 1)).reshape(4, -1)  # three orthogonal tokens per row
+    assert plan.token_cosine(eye, 3) == pytest.approx(0)
+
+
 def test_own_rollout_feeds_its_predictions_back(tiny_layer: SensoryLayer) -> None:
     ep = arm_episode(0)
     ends = np.array([3, 7, 11, 15, 19])

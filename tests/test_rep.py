@@ -1,6 +1,7 @@
 """``scripts/rep_test.py`` (B-rep-0): tiny end-to-end runs on synthetic episodes."""
 
 import importlib.util
+import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -78,6 +79,16 @@ def test_rep_decoder_check_open_loop_and_primary(
     assert any(r in out for r in ("improved", "no difference", "worse"))
     for name in ("rep_r2.png", "rep_openloop.png"):
         assert (tmp_path / "rep/figures" / name).exists()
+    assert plan.LOCATE_ARMS == ("A0", rep.FIX1, "multi-z")
+    plan.locate("0/1")
+    found = json.loads((tmp_path / "plan/locate/multi-z-s2.json").read_text())
+    assert set(found) == {*plan.LOCATE_FEATURES, "cosine"}
+    assert found["input_window"]["per effector"]["train"] > 0.99  # the input holds the arm
+    assert "cosine" not in json.loads((tmp_path / "plan/locate/A0-s0.json").read_text())
+    capsys.readouterr()
+    plan.locate_report()
+    out = capsys.readouterr().out
+    assert "| multi-z | stem |" in out and "token cosine of z" in out
 
 
 def test_rep_trains_and_probes_the_new_arms(

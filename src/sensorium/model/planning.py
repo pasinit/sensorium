@@ -6,7 +6,8 @@ arm-joint positions of the proprio input.
 
 * ``states_at`` / ``chunks_at``: the states of windows ending at given steps of an episode, and the
   action chunks that follow them (the predictor's conditioning), in the layer's channel space;
-  ``encode_at`` also returns the pre-projector summary tokens;
+  ``encode_at`` also returns the pre-projector summary tokens, and ``encode_parts`` every stage
+  of one sense (normalised input, stem token, fused token, summary, state);
 * ``own_rollout``: open-loop rollout of the layer's own action-conditioned predictor (its context is
   the last ``steps`` positions, observed then predicted);
 * ``RidgeDynamics``: a ridge model ``s_{t+1} = W [s_t, chunk_t, 1]`` fitted on encoded episodes, for
@@ -63,7 +64,6 @@ def states_at(layer: SensoryLayer, episode: Episode, ends: np.ndarray) -> np.nda
     return encode_at(layer, episode, ends)[0]
 
 
-@torch.no_grad()
 def encode_at(
     layer: SensoryLayer, episode: Episode, ends: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -74,12 +74,39 @@ def encode_at(
     Raises:
         ValueError: if a window starts before the episode.
     """
+    parts = encode_parts(layer, episode, ends)
+    return parts["s"], parts["z"]
+
+
+@torch.no_grad()
+def encode_parts(
+    layer: SensoryLayer, episode: Episode, ends: np.ndarray, sense: str = "proprio_body"
+) -> dict[str, np.ndarray]:
+    """Every stage of one sense on its way to the state, for the windows ending at ``ends``,
+    from one forward pass (eval mode, centre crop):
+
+    * ``input_last`` ``[n, U]`` and ``input_window`` ``[n, K * U]``: the sense's normalised
+      model input (the window's last observation, and all ``K``);
+    * ``stem`` ``[n, dim]``: its stem token, before the fusion;
+    * ``fused`` ``[n, dim]``: the same token after the fusion;
+    * ``z`` ``[n, K_s * dim]``: the summary tokens; ``s`` ``[n, K_s * dim]``: the state.
+
+    Raises:
+        ValueError: if a window starts before the episode, or the sense is not configured or
+            has more than one token.
+    """
     model = layer.model
-    summaries: list[torch.Tensor] = []
+    enc = model.encoder
+    if sense not in enc.n_tokens or enc.n_tokens[sense] != 1:
+        raise ValueError(f"{sense!r} is not a configured one-token sense")
+    seen: dict[str, list[torch.Tensor]] = {"z": [], "stem": [], "fused": []}
 
-    def record(module: torch.nn.Module, args: tuple[torch.Tensor, ...]) -> None:
-        summaries.append(args[0].detach())
+    def keep(name: str, value: torch.Tensor) -> None:
+        seen[name].append(value.detach())
 
+    slot = model.cfg.summary_tokens + sum(
+        enc.n_tokens[x] for x in enc.senses[: enc.senses.index(sense)]
+    )
     k = model.cfg.substeps
     loaded = load_episode(episode, layer.space, model.senses)
     if np.min(ends) < (k - 1) * spacing(loaded.header.dt):
@@ -92,14 +119,22 @@ def encode_at(
         else None
     )
     arrays = build(loaded, layer.space, model.senses, np.asarray(ends), k, rgb=rgb)
-    hook = model.encoder.projector.register_forward_pre_hook(record)
+    hooks = [
+        enc.projector.register_forward_pre_hook(lambda m, a: keep("z", a[0])),
+        enc.stems[sense].register_forward_hook(lambda m, a, o: keep("stem", o)),
+        enc.fusion.register_forward_hook(lambda m, a, o: keep("fused", o[:, slot])),
+    ]
     try:
         states = model.embed(_as_batch(arrays, len(ends))).squeeze(1).cpu().numpy()
     finally:
-        hook.remove()
+        for hook in hooks:
+            hook.remove()
         model.train(was)
-    z = torch.cat(summaries).reshape(len(states), -1).cpu().numpy()  # K tokens per window
-    return np.asarray(states, dtype=np.float64), np.asarray(z, dtype=np.float64)
+    n = len(states)
+    x = np.asarray(arrays[sense], dtype=np.float64)  # [n, K, U], normalised
+    out = {name: torch.cat(v).reshape(n, -1).cpu().numpy() for name, v in seen.items()}
+    out |= {"s": states, "input_last": x[:, -1], "input_window": x.reshape(n, -1)}
+    return {name: np.asarray(v, dtype=np.float64) for name, v in out.items()}
 
 
 def union_actions(layer: SensoryLayer, header: Header, actions: np.ndarray) -> np.ndarray:
