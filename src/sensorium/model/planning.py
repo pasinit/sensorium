@@ -98,7 +98,7 @@ def encode_at(
     finally:
         hook.remove()
         model.train(was)
-    z = torch.cat(summaries).cpu().numpy()
+    z = torch.cat(summaries).reshape(len(states), -1).cpu().numpy()  # K tokens per window
     return np.asarray(states, dtype=np.float64), np.asarray(z, dtype=np.float64)
 
 

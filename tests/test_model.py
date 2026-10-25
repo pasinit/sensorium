@@ -1896,3 +1896,142 @@ def test_the_default_sigreg_model_reconstructs_in_one_masked_pass(
     torch.save(raw, path)
     layer = load_layer(path)
     assert layer.model.cfg.recon == 0.0 and layer.model.recon is None
+
+
+V_P = ("vision", "proprio_body", "vestibular", "proprio_effector")
+
+
+def test_one_summary_token_is_the_model_before_the_option(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    cfg = replace(TINY, senses=V_P, recon_weight=0.5)
+    assert cfg.summary_tokens == 1 and cfg.recon_source == "z" and cfg.state_dim == cfg.dim
+    torch.manual_seed(0)
+    model = SensoryModel(cfg, space)
+    keys = model.state_dict().keys()
+    assert not any(k.startswith(("state_in", "state_out")) for k in keys)  # no new parameters
+    n = sum(model.encoder.n_tokens.values())
+    assert model.encoder.summary.shape == (1, 1, cfg.dim)
+    assert model.encoder.slot.shape == (1, 1 + n, cfg.dim)
+    batch = batch_of(episodes, space, check_senses(V_P))
+    model.eval()
+    fused: list[Tensor] = []
+    model.encoder.fusion.register_forward_hook(lambda m, a, o: fused.append(o.detach()))
+    with torch.no_grad():
+        z = model.encoder.summary_token(batch)
+        b, t = batch["action"].shape[:2]
+        assert torch.equal(z, fused[0][:, 0].view(b, t, -1))  # the formula before the option
+        s = model.encoder.project(z)
+        assert torch.equal(s, model.encoder.projector(z.flatten(0, 1)).view(b, t, -1))
+        cond = model.action(batch["action"].flatten(0, 1)).view_as(s)
+        assert torch.equal(model.predict(s, cond), model.pred_proj(model.trunk(s, cond)))
+        torch.manual_seed(3)
+        reg = model.regulariser(s)
+        torch.manual_seed(3)
+        assert torch.equal(reg, model.sigreg(s, pool_time=cfg.sigreg_pool_time))
+        assert torch.equal(model.decoder_input(s), s)
+
+
+def test_recon_from_s_decodes_the_projected_state_and_trains_the_projector(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    batch = batch_of(episodes, space, check_senses(V_P))
+    torch.manual_seed(0)
+    model = SensoryModel(replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s"), space)
+    states: list[Tensor] = []
+    decoded: list[Tensor] = []
+    model.encoder.projector.register_forward_hook(lambda m, a, o: states.append(o.detach()))
+    assert model.recon is not None
+    model.recon.register_forward_pre_hook(lambda m, a: decoded.append(a[0].detach()))
+    assert float(model(batch)["recon"]) > 0
+    assert len(states) == 1 and len(decoded) == 1  # one masked pass, decoded after the projector
+    assert torch.equal(decoded[0].flatten(0, 1), states[0])
+    model.zero_grad()
+    _, pix, prop = model._masked_recon(batch, model.recon, pre=False)
+    (pix + prop).backward()  # type: ignore[no-untyped-call]
+    assert model.encoder.projector[0].weight.grad is not None  # the projector is trained by it
+    with pytest.raises(ValueError, match="recon_source"):
+        replace(TINY, recon_source="y")
+
+
+def test_several_summary_tokens_concatenate_their_projected_states(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    k = 4
+    batch = batch_of(episodes, space, check_senses(V_P))
+    base = replace(TINY, senses=V_P, recon_weight=0.5)
+    cfg = replace(base, summary_tokens=k)
+    d = cfg.dim
+    assert cfg.state_dim == k * d
+    model = SensoryModel(cfg, space)
+    extra = count_parameters(model)["total"] - count_parameters(SensoryModel(base, space))["total"]
+    assert extra == 2 * (k - 1) * d + (k * d * d + d) + (d * k * d + k * d)  # tokens, slots, maps
+    out = model(batch)
+    b, t = batch["action"].shape[:2]
+    assert out["states"].shape == (b, t, k * d) and torch.isfinite(out["loss"])
+    out["loss"].backward()
+    assert model.state_in.weight.grad is not None and model.state_out.weight.grad is not None
+    model.eval()
+    with torch.no_grad():
+        s = model.embed(batch)
+        z = model.encoder.summary_token(batch)
+        assert z.shape == s.shape == (b, t, k * d)
+        tokens = z.reshape(b, t, k, d)
+        for i in range(k):  # the shared projector, token by token
+            one = model.encoder.projector(tokens[:, :, i].flatten(0, 1)).view(b, t, d)
+            assert torch.allclose(s[..., i * d : (i + 1) * d], one, atol=1e-6)
+        cond = model.action(batch["action"].flatten(0, 1)).view(b, t, -1)
+        assert model.predict(s, cond).shape == (b, t, k * d)
+        parts = s.reshape(b, t, k, d).unbind(-2)
+        torch.manual_seed(5)
+        reg = model.regulariser(s)
+        torch.manual_seed(5)
+        per = torch.stack([model.sigreg(p, pool_time=cfg.sigreg_pool_time) for p in parts])
+        assert torch.equal(reg, per.mean())  # SIGReg per token, averaged
+        assert torch.allclose(model.decoder_input(s), torch.stack(parts).sum(0), atol=1e-6)
+    with pytest.raises(ValueError, match="summary_tokens"):
+        replace(TINY, summary_tokens=0)
+    with pytest.raises(ValueError, match="summary_tokens"):
+        replace(TINY, senses=V_P, summary_tokens=2, objective="mae", recon_weight=0.0)
+
+
+def test_a_layer_with_several_summary_tokens_encodes_and_rolls_out(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    from sensorium.model.planning import own_rollout  # noqa: PLC0415
+
+    cfg = replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s", summary_tokens=4)
+    layer = SensoryLayer(SensoryModel(cfg, space), space, LOADER)
+    states, ends = layer.encode(episodes["hand"], stride=4)
+    assert states.shape == (len(ends), cfg.state_dim)
+    chunks = np.zeros((2, 3, cfg.substeps, space.size("action")), dtype=np.float32)
+    assert own_rollout(layer, states[:2], chunks).shape == (2, 3, cfg.state_dim)
+
+
+def test_recon_proprio_all_scores_every_channel_against_the_clean_input(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    from sensorium.model import reference  # noqa: PLC0415
+
+    batch = batch_of(episodes, space, check_senses(V_P))
+    losses = {}
+    for targets in ("hidden", "all"):
+        torch.manual_seed(0)
+        cfg = replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s", recon_proprio=targets)
+        model = SensoryModel(cfg, space)
+        assert model.recon is not None
+        states = torch.randn(*batch["action"].shape[:2], cfg.dim)
+        hidden = torch.ones(*states.shape[:2], 16)
+        assert model.recon.proprio is not None
+        channels = torch.zeros(*states.shape[:2], model.recon.proprio[-1].out_features)
+        channels[..., 0] = 1.0  # only the first channel was hidden
+        _, prop = model.recon(states)
+        err = (prop - reference.proprio_last(batch, model.senses)).pow(2)
+        losses[targets] = model._recon_loss(batch, model.recon, states, hidden, channels)[
+            1
+        ].detach()
+        want = (err.mean() if targets == "all" else err[..., 0].mean()).detach()
+        assert float(losses[targets]) == pytest.approx(float(want), rel=1e-5)
+    assert not torch.equal(losses["hidden"], losses["all"])
+    with pytest.raises(ValueError, match="recon_proprio"):
+        replace(TINY, recon_proprio="visible")

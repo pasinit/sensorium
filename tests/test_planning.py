@@ -207,6 +207,20 @@ def test_goals_are_sharded_by_block_and_resume_from_any_shard_file(tmp_path: Pat
     assert plan.peak_rss_mb() > 0
 
 
+def test_r2_contrast_is_the_paired_difference_of_r2() -> None:
+    plan = load_plan_script()
+    rng = np.random.default_rng(0)
+    q = rng.standard_normal((60, 8))
+    groups = np.repeat(np.arange(12), 5)
+    a = [q + 0.3 * rng.standard_normal(q.shape) for _ in range(3)]
+    b = [q + 0.6 * rng.standard_normal(q.shape) for _ in range(3)]
+    c = plan.r2_contrast_values(a, b, q, groups)
+    want = np.mean([plan.r2(x, q) - plan.r2(y, q) for x, y in zip(a, b, strict=True)])
+    assert c.point == pytest.approx(want) and c.point > 0
+    assert plan.r2_contrast_values(a, a, q, groups).point == 0.0
+    assert plan.token_features({"s": q, "s10": q, "s2": q, "z": q, "q": q}) == ["s2", "s10"]
+
+
 def test_gallery_helpers_tile_rank_and_measure_shrinkage() -> None:
     plan = load_plan_script()
     ep = arm_episode(0, steps=200)
@@ -219,14 +233,20 @@ def test_gallery_helpers_tile_rank_and_measure_shrinkage() -> None:
     assert plan.slope(0.25 * true + 3, true) == pytest.approx(0.25)
 
 
-def test_plan_script_fit_openloop_rank_and_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def synthetic_plan(
+    plan: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arms: dict[str, dict[str, Any]],
 ) -> None:
+    """Point ``plan`` (``scripts/plan_test.py``) at synthetic data under ``tmp_path``: 6 babble_v2
+    and 6 variety episodes with the arm joints (effectors alternate hand and pincer), a split
+    with 4 held out per set, and an untrained 10,000-step checkpoint per seed of every arm
+    (``ModelConfig`` options on ``TINY``)."""
     from test_model import privileged_episode  # noqa: PLC0415
 
     from sensorium.model.pretrain import RunConfig, save_checkpoint  # noqa: PLC0415
 
-    plan = load_plan_script()
     names: dict[str, list[str]] = {}
     for test, d in (("babble", "babble_v2"), ("variety", "variety")):
         root = tmp_path / "data" / d / "humanoid"
@@ -234,16 +254,17 @@ def test_plan_script_fit_openloop_rank_and_report(
         names[test] = []
         for i in range(6):
             ep = privileged_episode(i + (0 if test == "babble" else 10), steps=96)
-            arms = np.sin(np.linspace(0, 4, 96)[:, None] + i + np.arange(8)[None] / 8)
+            arms_q = np.sin(np.linspace(0, 4, 96)[:, None] + i + np.arange(8)[None] / 8)
             base = [f"{n}_synthetic" if n in planning.ARM_JOINTS else n for n in ep.proprio_names]
             ep.proprio_names = [*base, *planning.ARM_JOINTS]  # each arm joint once
-            ep.proprio = np.concatenate([ep.proprio, arms], 1).astype(np.float32)
+            ep.proprio = np.concatenate([ep.proprio, arms_q], 1).astype(np.float32)
             ep.action_names = [
                 *ep.action_names,
                 *(n.removeprefix("q_") for n in planning.ARM_JOINTS),
             ]
-            ep.action = np.concatenate([ep.action, 0.9 * arms], 1).astype(np.float32)
-            ep.meta |= {"effector": "hand", "seed": i, "policy": "seated_babble"}
+            ep.action = np.concatenate([ep.action, 0.9 * arms_q], 1).astype(np.float32)
+            effector = ("hand", "pincer")[i % 2]
+            ep.meta |= {"effector": effector, "seed": i, "policy": "seated_babble"}
             name = f"humanoid-hand_seated_0{i % 2}-seated_babble-00{i}.npz"
             ep.save(root / name)
             names[test].append(name)
@@ -256,15 +277,10 @@ def test_plan_script_fit_openloop_rank_and_report(
     eps = [Episode.load(tmp_path / "data/babble_v2/humanoid" / n) for n in names["babble"]]
     space = ChannelSpace.from_headers(header_of(e) for e in eps)
     encoders = {}
-    for arm, objective in (
-        ("A0", "sigreg"),
-        ("recon05", "sigreg"),
-        ("fix1", "sigreg"),
-        ("MAE", "mae"),
-    ):
+    for arm, options in arms.items():
         for seed in plan.SEEDS:
             torch.manual_seed(seed)
-            cfg = replace(TINY, senses=SENSES, objective=objective)
+            cfg = replace(TINY, senses=SENSES, **options)
             run = tmp_path / "ck" / f"{arm}-s{seed}"
             run.mkdir(parents=True)
             save_checkpoint(
@@ -273,6 +289,15 @@ def test_plan_script_fit_openloop_rank_and_report(
         encoders[arm] = (tmp_path / "ck", arm)
     monkeypatch.setattr(plan, "ENCODERS", encoders)
     monkeypatch.setattr(plan, "ROOT", tmp_path / "plan")
+
+
+def test_plan_script_fit_openloop_rank_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = load_plan_script()
+    sigreg = {"objective": "sigreg"}
+    arms = {"A0": sigreg, "recon05": sigreg, "fix1": sigreg, "MAE": {"objective": "mae"}}
+    synthetic_plan(plan, tmp_path, monkeypatch, arms)
     monkeypatch.setattr(plan, "CANDIDATES", 4)
     plan.fit()
     assert (tmp_path / "plan/fit/action_stats.json").exists()
