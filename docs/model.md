@@ -3071,6 +3071,75 @@ to 0.50 for the s-decoded ones: reading s is harder for the decoder.
   give the arm joints stds of 0.5 to 1.8 rad, and the input clip is +-10 std, far outside the joint
   range.
 
+### B-rep-0, locate check: where is the arm lost? (post hoc; GCP e2-standard-8 spot)
+
+**Question.** Every encoder reads the arm from s at R² about 0.6, while the raw proprio window reads
+it at 1.00. Where along the path from input to state is the arm lost?
+
+**Check.** For A0, fix1 and multi-z (10,000 steps, 3 seeds), the same ridge arm decoders as the
+decoder check were applied at every stage of the proprio_body sense, from one forward pass
+(`planning.encode_parts`; command `rep_test.py locate`):
+
+* the normalised model input (last step, and the 4-step window);
+* the stem token, before the fusion;
+* the same token after the fusion ("fused");
+* the summary z;
+* the state s.
+
+Each stage was decoded pooled and per effector, and scored on train, 5-fold episode CV, held-out
+babble_v2 and held-out variety. For multi-z the mean pairwise cosine between its 4 tokens is also
+given.
+
+| encoder | stage | per effector: train | held-out babble_v2 | held-out variety | pooled: held-out babble_v2 |
+|---|---|---|---|---|---|
+| all | normalised input (last step or window) | 1.000 | 1.000 | 1.000 | 1.000 |
+| A0 | stem | 0.975 +- 0.003 | 0.966 +- 0.005 | 0.943 +- 0.004 | 0.952 +- 0.005 |
+| A0 | fused | 0.935 +- 0.009 | **0.920 +- 0.012** | 0.874 +- 0.017 | 0.880 +- 0.014 |
+| A0 | z | 0.793 +- 0.014 | 0.764 +- 0.017 | 0.663 +- 0.019 | 0.672 +- 0.017 |
+| A0 | s | 0.658 +- 0.021 | 0.622 +- 0.012 | 0.433 +- 0.015 | 0.384 +- 0.044 |
+| fix1 | stem | 0.927 +- 0.004 | 0.912 +- 0.004 | 0.873 +- 0.007 | 0.874 +- 0.006 |
+| fix1 | fused | 0.818 +- 0.012 | 0.789 +- 0.010 | 0.700 +- 0.020 | 0.718 +- 0.014 |
+| fix1 | z | 0.688 +- 0.007 | 0.651 +- 0.011 | 0.507 +- 0.027 | 0.613 +- 0.012 |
+| fix1 | s | 0.623 +- 0.006 | 0.594 +- 0.008 | 0.370 +- 0.020 | 0.566 +- 0.008 |
+| multi-z | stem | 0.921 +- 0.003 | 0.904 +- 0.003 | 0.855 +- 0.013 | 0.866 +- 0.004 |
+| multi-z | fused | 0.810 +- 0.001 | 0.780 +- 0.004 | 0.692 +- 0.006 | 0.707 +- 0.005 |
+| multi-z | z | 0.696 +- 0.002 | 0.654 +- 0.001 | 0.494 +- 0.014 | 0.621 +- 0.001 |
+| multi-z | s | 0.618 +- 0.002 | 0.588 +- 0.003 | 0.340 +- 0.006 | 0.562 +- 0.004 |
+
+multi-z's token cosine is 0.999 +- 0.000 for z and 1.000 +- 0.000 for s: its four tokens are
+copies. This confirms the B-rep-0 inference from the decoder predictions.
+
+![Arm readout at each stage](figures/locate_stages.png)
+
+**Reading** (per effector, held-out babble_v2).
+
+* **The arm leaks at every stage; there is no single bottleneck.**
+  * A0: 1.00, then 0.97, 0.92, 0.76 and 0.62.
+  * fix1: 1.00, then 0.91, 0.79, 0.65 and 0.59.
+  * multi-z is within 0.01 of fix1 at every stage.
+* **The largest single step is the summary pooling (fused -> z)**, but not by much:
+  * A0: fused -> z -0.156, z -> s -0.142, stem -> fused -0.046;
+  * fix1: fused -> z -0.138, stem -> fused -0.123, z -> s -0.057.
+  * The projector costs A0 almost as much as the pooling, and costs fix1 little, as in B-fix-0/1.
+* **fix1 and multi-z lose more already at the stem (0.91 against 0.97) and in the fusion.** Their
+  stem and fusion are trained on inputs with half the proprio channels hidden
+  (`mae_proprio_ratio` 0.5). That is a plausible cause, but untested here: the reconstruction
+  objective is the other difference from A0.
+* **The fused body token holds more of the arm than z or s, in every encoder.** A0's (0.92
+  held-out, 0.935 train) clears the B-rep-0 "fixed" bar of 0.85, which no z or s reached.
+* **The effector dependence and the variety drop both grow along the path.**
+  * A0's pooled-decoder loss against per-effector is 0.01 at the stem, 0.04 fused, 0.09 at z and
+    0.24 at s.
+  * Its held-out variety loss against babble_v2 is 0.02 at the stem, 0.05 fused, 0.10 at z and
+    0.19 at s.
+  * The later stages mix in what differs between effectors and between data sets.
+
+**Run note.** The VM ran all 9 jobs at once on 8 vCPUs, not the planned 7. The script's process
+count came out 0, and GNU `xargs -P 0` means unlimited. The cause is GNU `nproc`, which honours
+`OMP_NUM_THREADS`: the script exported it as 1, so `nproc` returned 1, and `nproc - 1` = 0. The
+earlier decoder-check VM had the same bug ("decoder processes: 0"). Results are unaffected; later
+scripts count CPUs with `nproc --all`.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
