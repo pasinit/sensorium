@@ -1086,6 +1086,9 @@ TOKENS_ARMS: tuple[str, ...] = ("A0", "fix1")
 TOKENS_FEATURES = ("s", "fused", "fused_all")
 """The state s (the baseline), the fused proprio_body token, and every fused sense token."""
 TOKENS_FOLDS = 5
+TOKENS_BASELINES = ("action copy", "arm ridge")
+"""Model-free baselines that see the actions (``tokens_base``): the commanded arm targets of
+the last chunk, and a ridge dynamics head on the true arm and the arm targets."""
 
 
 def fit_transitions(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndarray]:
@@ -1182,6 +1185,80 @@ def tokens_dyn(shard: str) -> None:
         logging.info("tokens-dyn: %s-s%d done, peak RSS %.0f MB", arm, seed, peak_rss_mb())
 
 
+def arm_ctrl_range() -> tuple[np.ndarray, np.ndarray]:
+    """``(low, high)`` ``[8]``: the control range (radians) of each arm joint's position
+    actuator in the H1 model (``ARM_JOINTS`` order), from the HumanoidBench XML.
+
+    Raises:
+        FileNotFoundError: if ``make h1-assets`` has not been run.
+        ValueError: if an arm actuator is missing.
+    """
+    import xml.etree.ElementTree as ET  # noqa: PLC0415, N817
+
+    from sensorium.bodies.h1_scene import asset_paths  # noqa: PLC0415
+
+    root = ET.parse(asset_paths()[0] / "robots" / "h1touch_pos.xml").getroot()
+    ranges = {a.get("name"): a.get("ctrlrange") for a in root.iter("position")}
+    try:
+        values = [ranges[j.removeprefix("q_")] for j in ARM_JOINTS]
+    except KeyError as missing:
+        raise ValueError(f"no position actuator {missing} in the H1 model") from None
+    low, high = np.array([[float(x) for x in str(v).split()] for v in values]).T
+    return low, high
+
+
+def arm_targets(
+    ep: Episode, steps: np.ndarray, ranges: tuple[np.ndarray, np.ndarray]
+) -> np.ndarray:
+    """``[..., 8]`` the commanded arm-joint positions (radians) at ``steps``: the recorded
+    normalised actions (``[-1, 1]`` over each actuator's control range, without the gravity
+    feed-forward) mapped back through ``ranges``."""
+    a = np.asarray(ep.action)[steps][..., arm_action_cols(ep)]
+    low, high = ranges
+    return low + (np.clip(a, -1.0, 1.0) + 1) * 0.5 * (high - low)
+
+
+def tokens_base() -> None:
+    """Model-free baselines that see the actions, on tokens-dyn's starts (no encoder):
+
+    * ``action copy``: the arm at ``t + h`` is the last commanded arm target of chunk ``h``;
+    * ``arm ridge``: a ridge dynamics head ``q_{t+1} = W [q_t, targets of the chunk, 1]`` on the
+      true arm, fitted on the ``fit`` episodes (strength by ``TOKENS_FOLDS`` episode folds)
+      and rolled out open loop.
+
+    Saved as ``runs/plan/tokens/base.npz`` with the true arm and the starts' groups."""
+    out = ROOT / "tokens"
+    out.mkdir(parents=True, exist_ok=True)
+    logging.info("tokens-base started")
+    ranges = arm_ctrl_range()
+    fit_rows: dict[str, list[np.ndarray]] = defaultdict(list)
+    for i, p in enumerate(fit_paths()):
+        ep = Episode.load(p, privileged=False)
+        stride, sub = model_stride(ep), spacing(ep.dt) * np.arange(4)
+        ends = np.arange(first_end(ep), ep.length - stride, stride)
+        fit_rows["q"].append(arm_q(ep, ends))
+        fit_rows["next"].append(arm_q(ep, ends + stride))
+        fit_rows["chunks"].append(arm_targets(ep, ends[:, None] + sub[None], ranges))
+        fit_rows["groups"].append(np.full(len(ends), i))
+    fit_ = {k: np.concatenate(v) for k, v in fit_rows.items()}
+    dyn = RidgeDynamics.fit(fit_["q"], fit_["chunks"], fit_["next"], fit_["groups"], TOKENS_FOLDS)
+    rows: dict[str, list[np.ndarray]] = defaultdict(list)
+    for k, test in enumerate(TEST_SETS):
+        for j, p in enumerate(variety.files(test, "heldout")):
+            ep = Episode.load(p, privileged=False)
+            ends = openloop_ends(ep, k, j)
+            sub = spacing(ep.dt) * np.arange(4)
+            chunks = arm_targets(ep, ends[:, :-1, None] + sub, ranges)  # [S, H, 4, 8]
+            q = arm_q(ep, ends.ravel()).reshape(*ends.shape, -1)
+            rows["action copy"].append(chunks[:, :, -1])
+            rows["arm ridge"].append(dyn.rollout(q[:, 0], chunks))
+            rows["q"].append(q)
+            rows["groups"].append(np.full(len(ends), k * 1000 + j))
+            rows["set"].append(np.full(len(ends), k))
+    np.savez(out / "base.npz", **{key: np.concatenate(v) for key, v in rows.items()})
+    logging.info("tokens-base done, peak RSS %.0f MB", peak_rss_mb())
+
+
 def horizon_r2(pred: np.ndarray, q: np.ndarray) -> np.ndarray:
     """``[H]`` R2 of ``pred [n, H, 8]`` (or ``[n, 8]``, held for every horizon) against the
     arm at each horizon, ``q [n, H, 8]``."""
@@ -1192,10 +1269,14 @@ def horizon_r2(pred: np.ndarray, q: np.ndarray) -> np.ndarray:
 
 def tokens_lines(run: dict[str, np.ndarray], test: int) -> dict[str, np.ndarray]:
     """Per-horizon R2 on one held-out set of every line of a run: per feature set the
-    rollout, the ceiling and the feature copy, and the model-free arm copy."""
+    rollout, the ceiling and the feature copy; the model-free arm copy; and, if merged in
+    (``tokens_results``), the action copy and the arm+action ridge."""
     rows = run["set"] == test
     q = run["q"][rows]
     lines = {"arm copy": horizon_r2(q[:, 0], q[:, 1:])}
+    for b in TOKENS_BASELINES:  # model-free baselines that see the actions (tokens-base)
+        if f"base/{b}" in run:
+            lines[b] = horizon_r2(run[f"base/{b}"][rows], q[:, 1:])
     for f in TOKENS_FEATURES:
         for kind in ("pred", "ceiling", "copy"):
             lines[f"{f}/{kind}"] = horizon_r2(run[f"{f}/{kind}"][rows], q[:, 1:])
@@ -1204,11 +1285,17 @@ def tokens_lines(run: dict[str, np.ndarray], test: int) -> dict[str, np.ndarray]
 
 def tokens_contrast(runs: list[dict[str, np.ndarray]], f: str, other: str, h: int) -> Contrast:
     """``R2(f rollout) - R2(other)`` at horizon ``h`` on held-out babble_v2, paired by seed with
-    an episode bootstrap; ``other`` is ``copy`` (the same features held) or ``arm copy``."""
+    an episode bootstrap; ``other`` is ``copy`` (the same features held), ``arm copy``, or a
+    baseline of ``TOKENS_BASELINES`` (the same for every seed)."""
     rows = runs[0]["set"] == 0
     q = runs[0]["q"][rows]
     a = [r[f"{f}/pred"][rows][:, h - 1] for r in runs]
-    b = [r["q"][rows][:, 0] if other == "arm copy" else r[f"{f}/copy"][rows] for r in runs]
+    if other == "arm copy":
+        b = [r["q"][rows][:, 0] for r in runs]
+    elif other in TOKENS_BASELINES:
+        b = [r[f"base/{other}"][rows][:, h - 1] for r in runs]
+    else:
+        b = [r[f"{f}/copy"][rows] for r in runs]
     return r2_contrast_values(a, b, q[:, h], runs[0]["groups"][rows])
 
 
@@ -1225,11 +1312,23 @@ def tokens_passes(runs: list[dict[str, np.ndarray]], f: str) -> tuple[Contrast, 
 
 
 def tokens_results() -> dict[str, list[dict[str, np.ndarray]]]:
-    """The saved runs of every encoder of ``TOKENS_ARMS`` (seed order; missing seeds left out)."""
+    """The saved runs of every encoder of ``TOKENS_ARMS`` (seed order; missing seeds left out),
+    with the model-free baselines of ``tokens_base`` merged in as ``base/<name>`` if saved.
+
+    Raises:
+        ValueError: if the baselines' true arm differs from a run's on the same starts.
+    """
+    base_path = ROOT / "tokens" / "base.npz"
+    base = dict(np.load(base_path)) if base_path.exists() else {}
     results = {}
     for arm in TOKENS_ARMS:
         paths = [ROOT / "tokens" / f"{arm}-s{s}.npz" for s in SEEDS]
         runs = [dict(np.load(p)) for p in paths if p.exists()]
+        for r in runs:
+            if base and np.array_equal(base["groups"], r["groups"]):  # the same starts
+                if not np.allclose(base["q"], r["q"]):
+                    raise ValueError("tokens-base and tokens-dyn disagree on the true arm")
+                r |= {f"base/{b}": base[b] for b in TOKENS_BASELINES}
         if runs:
             results[arm] = runs
     return results
@@ -1284,6 +1383,17 @@ def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
         for f in TOKENS_FEATURES:
             cells = [describe(tokens_contrast(runs, f, "copy", h)) for h in (1, HORIZON)]
             variety.say(f"| {arm} | {f} | " + " | ".join(cells) + " |")
+    if not any("base/arm ridge" in runs[0] for runs in paired.values()):
+        return
+    variety.say(
+        "\nAdded after the results, not pre-registered: rollout - model-free baselines that see "
+        "the actions, h8, held-out babble_v2\n"
+    )
+    variety.say("| encoder | features | - action copy | - arm+action ridge |\n|---|---|---|---|")
+    for arm, runs in paired.items():
+        for f in ("fused", "fused_all"):
+            cells = [describe(tokens_contrast(runs, f, b, HORIZON)) for b in TOKENS_BASELINES]
+            variety.say(f"| {arm} | {f} | " + " | ".join(cells) + " |")
 
 
 def tokens_report() -> None:
@@ -1333,6 +1443,11 @@ def tokens_figure(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
                     )
             v = np.array([ln["arm copy"] for ln in lines])
             ax.plot(hs, v.mean(0), color="0.4", lw=2, label="arm copy (model-free)")
+            for b, ls in zip(TOKENS_BASELINES, ("--", "-"), strict=True):
+                if b in lines[0]:
+                    ax.plot(
+                        hs, lines[0][b], color="black", lw=1.2, ls=ls, label=f"{b} (model-free)"
+                    )
             ax.set(title=f"{arm}, held-out {test}", xlabel="horizon (model steps of 0.2 s)")
             ax.grid(alpha=0.25)
     for ax in axes[:, 0]:

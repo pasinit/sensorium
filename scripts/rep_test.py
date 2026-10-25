@@ -27,6 +27,7 @@ and B-fix-0/1's probe battery (``fix_test.py``) at every checkpoint.
     uv run python scripts/rep_test.py locate --shard 0/9     # post hoc: where is the arm lost?
     uv run python scripts/rep_test.py locate-report
     uv run python scripts/rep_test.py tokens-dyn --shard 0/6 # design step (a): fused-token dynamics
+    uv run python scripts/rep_test.py tokens-base            # model-free baselines with actions
     uv run python scripts/rep_test.py tokens-dyn-report
 """
 
@@ -311,6 +312,7 @@ WHOLE = {
     "report": lambda: report(),
     "locate-report": lambda: plan.locate_report(),
     "tokens-dyn-report": lambda: plan.tokens_report(),
+    "tokens-base": lambda: plan.tokens_base(),
 }
 """The commands that run whole."""
 

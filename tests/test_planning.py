@@ -143,6 +143,21 @@ def test_the_tokens_bar_is_the_model_free_arm_copy() -> None:
     assert c.point == pytest.approx(0.0) and not every and not ok  # judged by the arm copy only
 
 
+def test_arm_targets_map_normalised_actions_back_to_radians() -> None:
+    plan = load_plan_script()
+    ep = arm_episode(0)
+    targets = np.tile(np.array([-1.0, 0.0, 1.0, 0.5, -0.5, 1.5, -2.0, 0.25]), (ep.length, 1))
+    ep.action_names = [*ep.action_names, *(n.removeprefix("q_") for n in planning.ARM_JOINTS)]
+    action = np.concatenate([ep.action, np.zeros_like(targets)], 1)
+    action[:, plan.arm_action_cols(ep)] = targets  # wherever the arm actuators' columns are
+    ep.action = action.astype(np.float32)
+    low, high = -np.arange(1, 9, dtype=float), np.arange(1, 9, dtype=float) * 2
+    got = plan.arm_targets(ep, np.array([[3, 4], [5, 6]]), (low, high))
+    assert got.shape == (2, 2, 8)
+    want = low + (np.clip(targets[0], -1, 1) + 1) / 2 * (high - low)  # clipped to the range
+    assert np.allclose(got[0, 0], want) and np.allclose(got[1, 1], want)
+
+
 def test_choose_alpha_takes_the_number_of_inner_folds() -> None:
     from sensorium.model import probes  # noqa: PLC0415
 
@@ -476,3 +491,24 @@ def test_rewind_and_the_skipped_right_eye_change_no_result(recorded: Episode) ->
     assert ep_both.privileged["rgb_right"].shape == ep_both.rgb.shape
     assert np.abs(ep_both.rgb.astype(int) - ep_full.rgb.astype(int)).max() <= 1
     both.close()
+
+
+@needs_assets
+def test_arm_control_ranges_come_from_the_h1_model() -> None:
+    low, high = load_plan_script().arm_ctrl_range()
+    joints = [j.removeprefix("q_") for j in planning.ARM_JOINTS]
+    assert (
+        low[joints.index("left_shoulder_pitch")],
+        high[joints.index("left_shoulder_pitch")],
+    ) == (
+        -2.87,
+        2.87,
+    )
+    assert (
+        low[joints.index("right_shoulder_roll")],
+        high[joints.index("right_shoulder_roll")],
+    ) == (
+        -3.11,
+        0.34,
+    )
+    assert np.all(low < high)
