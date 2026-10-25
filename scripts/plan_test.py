@@ -18,6 +18,8 @@ Every stage skips work already saved, so a preempted VM resumes where it stopped
 import argparse
 import json
 import logging
+import resource
+import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -323,42 +325,84 @@ def run_goal(
     return float(rms(scene.arm_q(), goal_q))
 
 
+Goal = tuple[str, int, Path, int]
+
+
+def block_of(goal: Goal) -> tuple[str, str]:
+    """The (test set, generator block) of a goal: the scene it needs."""
+    return goal[0], goal[2].name.split("-")[1]
+
+
+def shard_goals(goals_: list[Goal], shard: str) -> list[tuple[int, Goal]]:
+    """This shard's goals, with their ids (the index in ``goals_``), grouped by block: whole
+    blocks are dealt to shards in turn, so a process builds one scene per block it owns, and
+    its goals are ordered by block, episode and ``t0``."""
+    i, n = (int(x) for x in shard.split("/"))
+    blocks = sorted({block_of(g) for g in goals_})
+    mine = set(blocks[i::n])
+    picked = [(gid, g) for gid, g in enumerate(goals_) if block_of(g) in mine]
+    return sorted(picked, key=lambda item: (block_of(item[1]), item[1][2].name, item[1][3]))
+
+
+def done_keys(folder: Path) -> set[tuple[str, int]]:
+    """``(config, goal)`` of every result in any shard file of ``folder`` (so a change of
+    sharding resumes correctly); a line cut short by a crash is ignored."""
+    keys = set()
+    for path in sorted(folder.glob("*.jsonl")):
+        for line in path.read_text().splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            keys.add((row["config"], row["goal"]))
+    return keys
+
+
+def peak_rss_mb() -> float:
+    """This process's peak resident memory (MB)."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak / 2**20 if sys.platform == "darwin" else peak / 2**10  # bytes on macOS, KB on Linux
+
+
 def goals(shard: str, limit: int | None = None, only: tuple[str, ...] = ()) -> Path:
-    """Run this shard's goals for every config (or ``only`` these bars); results are appended
-    to ``runs/plan/goals/<shard>.jsonl``, done ones skipped."""
+    """Run this shard's goals for every config (or ``only`` these bars; ``limit``: only the
+    first goals by id); results are appended to ``runs/plan/goals/<shard>.jsonl``, and every
+    result already in any shard file is skipped. One scene is alive at a time: it is closed
+    when the next goal needs another block."""
     out = ROOT / "goals"
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{shard.replace('/', '-')}{'-' + '-'.join(only) if only else ''}.jsonl"
-    done = (
-        {
-            (r["config"], r["goal"])
-            for r in (json.loads(line) for line in path.read_text().splitlines())
-        }
-        if path.exists()
-        else set()
-    )
+    done = done_keys(out)
     stats = json.loads((ROOT / "fit" / "action_stats.json").read_text())
     all_goals = goal_list()
-    i, n = (int(x) for x in shard.split("/"))
-    mine = list(enumerate(all_goals))[i::n][:limit]
+    mine = shard_goals(all_goals[:limit] if limit else all_goals, shard)
     chosen = [c for c in configs() if not only or (c[0] == "bar" and c[1] in only)]
-    scenes: dict[str, RestoredScene] = {}
+    scene: RestoredScene | None = None
+    current: tuple[str, str] | None = None
     with path.open("a") as log:
-        for gid, (test, _, p, t0) in mine:
+        for gid, goal in mine:
+            todo = [c for c in chosen if ("/".join(map(str, c)), gid) not in done]
+            if not todo:
+                continue
+            test, _, p, t0 = goal
+            if block_of(goal) != current:
+                if scene is not None:
+                    scene.close()
+                current = block_of(goal)
+                scene = RestoredScene(block_settings(CONFIGS[test], current[1]))
+            assert scene is not None
             ep = Episode.load(p)
-            block = p.name.split("-")[1]
-            if block not in scenes:
-                scenes[block] = RestoredScene(block_settings(CONFIGS[test], block))
-            for config in chosen:
-                key = "/".join(map(str, config))
-                if (key, gid) in done:
-                    continue
+            for config in todo:
                 began = time.time()
-                final = run_goal(scenes[block], ep, t0, config, stats)
-                row = {"config": key, "goal": gid, "set": test, "rms": final}
+                final = run_goal(scene, ep, t0, config, stats)
+                row = {"config": "/".join(map(str, config)), "goal": gid, "set": test, "rms": final}
                 log.write(json.dumps(row | {"seconds": round(time.time() - began, 2)}) + "\n")
                 log.flush()
-            logging.info("goal %d done (%s t0 %d)", gid, p.name, t0)
+            logging.info(
+                "goal %d done (%s t0 %d), peak RSS %.0f MB", gid, p.name, t0, peak_rss_mb()
+            )
+    if scene is not None:
+        scene.close()
     return path
 
 
@@ -373,6 +417,7 @@ def fidelity() -> bool:
         "replay_success": rate,
         "median_rms": float(np.median([r["rms"] for r in rows])),
         "seconds_per_goal": float(np.mean([r["seconds"] for r in rows])),
+        "peak_rss_mb": round(peak_rss_mb()),
         "pass": rate >= FIDELITY_BAR,
     }
     (ROOT / "fidelity.json").write_text(json.dumps(result, indent=1))

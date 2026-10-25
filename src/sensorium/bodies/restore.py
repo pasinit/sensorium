@@ -43,6 +43,10 @@ class RestoredScene:
         self.hold = np.zeros(0)
         self.t = 0
 
+    def close(self) -> None:
+        """Release the simulator and its renderer."""
+        self.recorder.close()
+
     def restore(self, episode: Episode, t0: int) -> None:
         """Rebuild ``episode``'s scene and put the simulator in its recorded state at ``t0``.
 
