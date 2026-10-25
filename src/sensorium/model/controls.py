@@ -245,7 +245,7 @@ def train_supervised(
             k.removeprefix("encoder."): v for k, v in saved.items() if k.startswith("encoder.")
         }
         model.encoder.load_state_dict(encoder)
-    head = nn.Linear(cfg.model.dim, len(BINARY) + 1 + 6 + (len(HIDDEN) if cfg.hidden else 0))
+    head = nn.Linear(cfg.model.state_dim, len(BINARY) + 1 + 6 + (len(HIDDEN) if cfg.hidden else 0))
     mean, std = label_scale(paths)
     if cfg.hidden:
         h_mean, h_std = hidden_scale(paths)

@@ -147,7 +147,7 @@ def fit() -> None:
             if path.exists():
                 continue
             lay = layer(arm, seed)
-            s, c, n, q, g = [], [], [], [], []
+            s, c, n, q, g, e = [], [], [], [], [], []
             for i, ep in enumerate(episodes):
                 ends = np.arange(first_end(ep), ep.length - model_stride(ep), model_stride(ep))
                 st = states_at(lay, ep, np.append(ends, ends[-1] + model_stride(ep)))
@@ -156,15 +156,38 @@ def fit() -> None:
                 c.append(chunks_at(lay, ep, ends))
                 q.append(arm_q(ep, np.append(ends, ends[-1] + model_stride(ep)))[:-1])
                 g.append(np.full(len(ends), i))
-            states, groups = np.concatenate(s), np.concatenate(g)
+                e.append(np.full(len(ends), effector_of(ep)))
+            states, groups, effs = np.concatenate(s), np.concatenate(g), np.concatenate(e)
+            qs = np.concatenate(q)
             dyn = RidgeDynamics.fit(states, np.concatenate(c), np.concatenate(n), groups)
-            dec = Ridge.fit(states, np.concatenate(q), groups)
+            dec = Ridge.fit(states, qs, groups)
+            per = {
+                f: Ridge.fit(states[effs == f], qs[effs == f], groups[effs == f])
+                for f in np.unique(effs)
+            }
             np.savez(
                 path,
-                **{f"dyn_{k}": getattr(dyn.ridge, k) for k in ("mean", "scale", "w", "bias")},
-                **{f"dec_{k}": getattr(dec, k) for k in ("mean", "scale", "w", "bias")},
+                **{f"dyn_{k}": getattr(dyn.ridge, k) for k in RIDGE_KEYS},
+                **{f"dec_{k}": getattr(dec, k) for k in RIDGE_KEYS},
+                **{f"dec@{f}_{k}": getattr(r, k) for f, r in per.items() for k in RIDGE_KEYS},
             )
             logging.info("fitted the ridge head and decoder of %s-s%d", arm, seed)
+
+
+RIDGE_KEYS = ("mean", "scale", "w", "bias")
+
+
+def effector_of(ep: Episode) -> str:
+    """The episode's effector (``hand`` if not recorded)."""
+    return str(ep.meta.get("effector", "hand"))
+
+
+@cache
+def effector_decoders(arm: str, seed: int) -> dict[str, Ridge]:
+    """The arm decoders fitted per effector (empty for a fit saved before they existed)."""
+    raw = np.load(ROOT / "fit" / f"{arm}-s{seed}.npz")
+    effs = {k.split("@")[1].rsplit("_", 1)[0] for k in raw.files if k.startswith("dec@")}
+    return {f: Ridge(*(raw[f"dec@{f}_{k}"] for k in RIDGE_KEYS)) for f in sorted(effs)}
 
 
 @cache
@@ -259,6 +282,10 @@ def openloop(shard: str) -> None:
                 rows["decoded_true"].append(
                     rms(dec(true.reshape(-1, true.shape[-1])).reshape(q.shape), q)
                 )
+                if effector_decoders(arm, seed):  # per effector (B-rep-0); else the pooled one
+                    per = effector_decoders(arm, seed).get(effector_of(ep), dec)
+                    for key, x in (("decoded_eff", pred), ("decoded_true_eff", true)):
+                        rows[key].append(rms(per(x.reshape(-1, x.shape[-1])).reshape(q.shape), q))
                 rows["true"].append(true.reshape(-1, true.shape[-1]))
                 rows["groups"].append(np.full(len(starts), k * 1000 + e))
                 rows["set"].append(np.full(len(starts), k))
@@ -846,7 +873,8 @@ DECODER_FEATURES = ("z", "s")
 
 def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndarray]:
     """Every model step of the episodes at ``paths``: the arm's features (summary token ``z``
-    and state ``s``, or for ``arm == "raw"`` the proprio of the window's ``substeps`` steps on
+    and state ``s``, with several summary tokens also each projected token ``s0, s1, ...``,
+    or for ``arm == "raw"`` the proprio of the window's ``substeps`` steps on
     the channels every episode has), the arm-joint targets, episode groups and effectors."""
     feats: dict[str, list[np.ndarray]] = defaultdict(list)
     raw: list[dict[str, np.ndarray]] = []
@@ -862,6 +890,9 @@ def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndar
             s, z = encode_at(layer(arm, seed), ep, ends)
             feats["s"].append(s)
             feats["z"].append(z)
+            k = layer(arm, seed).model.cfg.summary_tokens
+            for j, token in enumerate(np.split(s, k, axis=1) if k > 1 else []):
+                feats[f"s{j}"].append(token)  # each projected summary token alone
         q.append(arm_q(ep, ends))
         groups.append(np.full(len(ends), i))
         effector.append(np.full(len(ends), str(ep.meta.get("effector", "hand"))))
@@ -874,6 +905,26 @@ def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndar
         "groups": np.concatenate(groups),
         "effector": np.concatenate(effector),
     }
+
+
+def token_features(samples: dict[str, np.ndarray]) -> list[str]:
+    """The per-token features ``s0, s1, ...`` of a sample dict (none with one summary token)."""
+    return sorted((k for k in samples if k[1:].isdigit() and k[0] == "s"), key=lambda k: int(k[1:]))
+
+
+def r2_contrast_values(
+    a: list[np.ndarray], b: list[np.ndarray], q: np.ndarray, groups: np.ndarray
+) -> Contrast:
+    """``R2(a) - R2(b)`` of held-out predictions (lists over seeds, same rows and targets ``q``),
+    paired by seed with an episode bootstrap (``contrast_values``): each row's value is
+    ``-SSE_row * n / SST``, whose mean is ``-SSE / SST``, so the paired mean difference is the
+    R2 difference."""
+    sst = ((q - q.mean(0)) ** 2).sum()
+
+    def values(preds: list[np.ndarray]) -> np.ndarray:
+        return np.stack([-((p - q) ** 2).sum(1) * len(q) / sst for p in preds])
+
+    return contrast_values(values(a), values(b), groups)
 
 
 def r2(pred: np.ndarray, y: np.ndarray) -> float:
@@ -901,10 +952,14 @@ def fit_decoder(
 
 
 def decoder_scores(
-    fit_: dict[str, np.ndarray], held: dict[str, dict[str, np.ndarray]], feature: str
+    fit_: dict[str, np.ndarray],
+    held: dict[str, dict[str, np.ndarray]],
+    feature: str,
+    preds: dict[str, np.ndarray] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Per decoder (pooled, per effector): train R2, episode-grouped CV R2 on the fit episodes,
-    held-out R2 per test set and the strength (ALPHA_GRID x d)."""
+    held-out R2 per test set and the strength (ALPHA_GRID x d). ``preds``, if given, receives
+    the held-out predictions as ``<feature>/<decoder>/<set>``."""
     x, y, g, e = fit_[feature], fit_["q"], fit_["groups"], fit_["effector"]
     out = {}
     for name, per in (("pooled", False), ("per effector", True)):
@@ -915,7 +970,10 @@ def decoder_scores(
             cv[te] = fold(x[te], e[te])
         row = {"train": r2(predict(x, e), y), "cv": r2(cv, y), "alpha": float(np.mean(alphas))}
         for test, h in held.items():
-            row[test] = r2(predict(h[feature], h["effector"]), h["q"])
+            pred = predict(h[feature], h["effector"])
+            row[test] = r2(pred, h["q"])
+            if preds is not None:
+                preds[f"{feature}/{name}/{test}"] = pred.astype(np.float32)
         out[name] = row
     return out
 
@@ -933,8 +991,12 @@ def decoder(shard: str) -> None:
             continue
         fit_ = decoder_samples(arm, seed, fit_paths())
         held = {t: decoder_samples(arm, seed, variety.files(t, "heldout")) for t in TEST_SETS}
-        features = ("raw",) if arm == "raw" else DECODER_FEATURES
-        result = {f: decoder_scores(fit_, held, f) for f in features}
+        features = ("raw",) if arm == "raw" else (*DECODER_FEATURES, *token_features(fit_))
+        preds: dict[str, np.ndarray] = {}
+        result = {f: decoder_scores(fit_, held, f, preds) for f in features}
+        for test, h in held.items():  # the targets and episodes the predictions pair on
+            preds[f"q/{test}"], preds[f"groups/{test}"] = h["q"], h["groups"]
+        np.savez(path.with_suffix(".npz"), **preds)
         path.write_text(json.dumps(result, indent=1))
         logging.info("decoder check: %s-s%d, peak RSS %.0f MB", arm, seed, peak_rss_mb())
 

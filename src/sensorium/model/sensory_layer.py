@@ -87,6 +87,14 @@ class ModelConfig:
             the masked patches and proprio channels (``mae_ratio``, ``mae_proprio_ratio``; the
             ``mae`` objective's targets), so the encoder must keep what next-state prediction can
             drop; the projector and the next-state loss are unchanged.
+        recon_source: ``z`` (the default: the decoder reads the pre-projector summary) or ``s``
+            (B-rep-0: it reads the projector output, the state itself).
+        summary_tokens: Summary tokens ``K`` of the fusion (default 1). With ``K > 1`` every
+            token is projected by the shared projector and the state is their concatenation
+            (``K * dim``); the predictor maps it to ``dim`` and back, SIGReg is applied per token
+            and averaged, and the reconstruction decoder reads the sum of the tokens (a linear map
+            on the concatenation with weights tied across tokens). ``sigreg`` without a teacher
+            only.
         recon_input: ``masked`` (the default, B-fix-1: one pass; the batch is masked once and
             the encoder runs once on it; the next-state loss and SIGReg use its projected
             states, the decoder reads its pre-projector states, scored on the hidden entries) or
@@ -144,6 +152,8 @@ class ModelConfig:
     target_grad: bool = True
     recon_weight: float | None = None
     recon_input: str = "masked"
+    recon_source: str = "z"
+    summary_tokens: int = 1
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -174,6 +184,17 @@ class ModelConfig:
             raise ValueError("recon_weight > 0 needs the sigreg objective and the vision sense")
         if self.recon_input not in ("separate", "masked"):
             raise ValueError(f"recon_input must be separate or masked, got {self.recon_input!r}")
+        if self.recon_source not in ("z", "s"):
+            raise ValueError(f"recon_source must be z or s, got {self.recon_source!r}")
+        if self.summary_tokens < 1:
+            raise ValueError(f"summary_tokens must be >= 1, got {self.summary_tokens}")
+        if self.summary_tokens > 1 and (self.objective != "sigreg" or self.teacher != "none"):
+            raise ValueError("summary_tokens > 1 needs the sigreg objective without a teacher")
+
+    @property
+    def state_dim(self) -> int:
+        """Width of the state ``s``: ``summary_tokens * dim``."""
+        return self.summary_tokens * self.dim
 
     @property
     def recon(self) -> float:
@@ -209,8 +230,9 @@ class StateEncoder(nn.Module):
         d = cfg.dim
         self.n_tokens = {s: self._tokens(s) for s in self.senses}
         self.stems = nn.ModuleDict({s: self._stem(s, space) for s in self.senses})
-        self.summary = nn.Parameter(torch.randn(1, 1, d) * 0.02)
-        self.slot = nn.Parameter(torch.randn(1, 1 + sum(self.n_tokens.values()), d) * 0.02)
+        k = cfg.summary_tokens
+        self.summary = nn.Parameter(torch.randn(1, k, d) * 0.02)
+        self.slot = nn.Parameter(torch.randn(1, k + sum(self.n_tokens.values()), d) * 0.02)
         self.fusion = Encoder(d, cfg.fusion_depth, cfg.heads)
         self.projector = nn.Sequential(
             nn.Linear(d, d), nn.BatchNorm1d(d), nn.GELU(), nn.Linear(d, d)
@@ -295,20 +317,23 @@ class StateEncoder(nn.Module):
         return self.project(self.summary_token(batch, drop))
 
     def summary_token(self, batch: Mapping[str, Tensor], drop: bool = False) -> Tensor:
-        """The fusion's summary token ``[B, T, dim]``: the state before the projector."""
+        """The fusion's summary tokens, concatenated ``[B, T, K * dim]``: the state before the
+        projector."""
         b, t = batch["action"].shape[:2]
+        k = self.cfg.summary_tokens
         keep = self.keep_mask(batch["present"], drop).repeat_interleave(t, 0)  # [N, S]
         tokens = [self.summary.expand(b * t, -1, -1), *self.sense_tokens(batch)]
-        valid = [torch.ones(b * t, 1, dtype=torch.bool, device=keep.device)]
+        valid = [torch.ones(b * t, k, dtype=torch.bool, device=keep.device)]
         valid += [keep[:, i : i + 1].expand(-1, n) for i, n in enumerate(self.n_tokens.values())]
         x = torch.cat(tokens, 1) + self.slot
         mask = torch.cat(valid, 1)[:, None, None, :]
-        return self.fusion(x, mask=mask)[:, 0].view(b, t, -1)
+        return self.fusion(x, mask=mask)[:, :k].reshape(b, t, -1)
 
     def project(self, summary: Tensor) -> Tensor:
-        """Projector output ``[B, T, dim]`` of summary tokens ``[B, T, dim]`` (the state)."""
+        """Projector output ``[B, T, K * dim]`` of summary tokens ``[B, T, K * dim]`` (the
+        state): the shared projector applied to every token."""
         b, t = summary.shape[:2]
-        return self.projector(summary.flatten(0, 1)).view(b, t, -1)
+        return self.projector(summary.reshape(-1, self.cfg.dim)).view(b, t, -1)
 
 
 def surprise_weights(kind: str, err: Tensor, batch: Mapping[str, Tensor]) -> Tensor:
@@ -407,6 +432,11 @@ class SensoryModel(nn.Module):
             self.recon = reference.InputDecoder(
                 d, 4 * d, side * side, cfg.vision_patch**2 * 3, proprio
             )
+        self.state_in: nn.Module = nn.Identity()  # K > 1: the state (K * dim) to dim and back
+        self.state_out: nn.Module = nn.Identity()
+        if cfg.summary_tokens > 1:  # created after everything else, as ``recon``
+            self.state_in = nn.Linear(cfg.state_dim, d)
+            self.state_out = nn.Linear(d, cfg.state_dim)
 
     def _view(self, batch: Mapping[str, Tensor]) -> Mapping[str, Tensor]:
         """The batch as the state encoder sees it: ``present`` restricted to its own senses."""
@@ -434,11 +464,26 @@ class SensoryModel(nn.Module):
     def trunk(self, states: Tensor, actions: Tensor) -> Tensor:
         """The predictor's output ``[B, T, dim]`` (causal, action-conditioned), pre-projection."""
         t = states.size(1)
-        return self.predictor(states + self.pos[:, :t], cond=actions, causal=True)
+        return self.predictor(self.state_in(states) + self.pos[:, :t], cond=actions, causal=True)
 
     def predict(self, states: Tensor, actions: Tensor) -> Tensor:
-        """Next states ``[B, T, dim]`` from states and action conditioning (causal)."""
-        return self.pred_proj(self.trunk(states, actions))
+        """Next states ``[B, T, state_dim]`` from states and action conditioning (causal)."""
+        return self.state_out(self.pred_proj(self.trunk(states, actions)))
+
+    def regulariser(self, states: Tensor) -> Tensor:
+        """SIGReg of the states: on the whole state, or with several summary tokens the mean of
+        its value on each token's ``dim`` columns."""
+        c = self.cfg
+        if c.summary_tokens == 1:
+            return self.sigreg(states, pool_time=c.sigreg_pool_time)
+        parts = states.reshape(*states.shape[:-1], c.summary_tokens, c.dim).unbind(-2)
+        return torch.stack([self.sigreg(p, pool_time=c.sigreg_pool_time) for p in parts]).mean()
+
+    def decoder_input(self, states: Tensor) -> Tensor:
+        """What the reconstruction decoder reads of ``[..., K * dim]`` states: the sum of the
+        tokens (a linear map on the concatenation, tied across tokens; the identity for K = 1)."""
+        k = self.cfg.summary_tokens
+        return states if k == 1 else states.reshape(*states.shape[:-1], k, self.cfg.dim).sum(-2)
 
     def _reference_loss(
         self, batch: Mapping[str, Tensor], decoder: "reference.InputDecoder"
@@ -478,7 +523,9 @@ class SensoryModel(nn.Module):
         )
         view = self._view(masked)
         states = self.encoder.summary_token(view, drop=self.training) if pre else self.embed(masked)
-        pix, prop_loss = self._recon_loss(batch, decoder, states, hidden, channels)
+        pix, prop_loss = self._recon_loss(
+            batch, decoder, self.decoder_input(states), hidden, channels
+        )
         return states, pix, prop_loss
 
     def _recon_loss(
@@ -520,12 +567,13 @@ class SensoryModel(nn.Module):
             )
             summary = self.encoder.summary_token(self._view(masked), drop=self.training)
             states = self.encoder.project(summary)
-            single = (summary, hidden, channels)
+            read = states if c.recon_source == "s" else summary
+            single = (self.decoder_input(read), hidden, channels)
         else:
             states = self.embed(batch)
-        cond = self.action(batch["action"].flatten(0, 1)).view_as(states)
+        cond = self.action(batch["action"].flatten(0, 1)).view(*states.shape[:2], -1)
         trunk = self.trunk(states[:, :-1], cond[:, :-1])
-        pred = self.pred_proj(trunk)
+        pred = self.state_out(self.pred_proj(trunk))
         extra: dict[str, Tensor] = {}
         if self.teacher is not None:
             has = batch["present"][:, self.data_senses.index("touch")].float()
@@ -540,12 +588,13 @@ class SensoryModel(nn.Module):
             err = (pred - nxt).pow(2).mean(-1)  # [B, T-1]
             mse = err.mean()
             weighted = (surprise_weights(c.surprise, err, batch) * err).mean()
-            reg = self.sigreg(states, pool_time=c.sigreg_pool_time)
+            reg = self.regulariser(states)
             if self.recon is not None:
                 if single is not None:
                     pix, prop_loss = self._recon_loss(batch, self.recon, *single)
                 else:
-                    _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=True)
+                    pre = c.recon_source == "z"
+                    _, pix, prop_loss = self._masked_recon(batch, self.recon, pre=pre)
                 recon = pix + prop_loss
                 extra = {**extra, "recon": recon.detach()}
                 extra_loss = extra_loss + c.recon * recon

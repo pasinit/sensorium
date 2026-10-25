@@ -145,11 +145,13 @@ def encoders() -> dict[str, SensoryLayer]:
 
 
 def summaries(layer: SensoryLayer) -> list[np.ndarray]:
-    """A forward hook that records the fusion summary token (the projector's input)."""
+    """A forward hook that records the fusion summary token (the projector's input; several
+    summary tokens are concatenated per window)."""
     store: list[np.ndarray] = []
+    width = layer.model.cfg.state_dim
 
     def hook(module: torch.nn.Module, args: tuple[torch.Tensor, ...]) -> None:
-        store.append(args[0].detach().cpu().numpy())
+        store.append(args[0].detach().reshape(-1, width).cpu().numpy())
 
     layer.model.encoder.projector.register_forward_pre_hook(hook)
     return store
