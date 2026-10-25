@@ -96,10 +96,17 @@ def test_rep_decoder_check_open_loop_and_primary(
     assert run["fused/copy"].shape == (64, 8) and run["q"].shape == (64, 9, 8)
     lines = plan.tokens_lines(dict(run), 0)
     assert lines["arm copy"][0] > lines["arm copy"][-1]  # the arm moves: copy decays
+    monkeypatch.setattr(plan, "arm_ctrl_range", lambda: (-np.ones(8), np.ones(8)))
+    plan.tokens_base()
+    base = np.load(tmp_path / "plan/tokens/base.npz")
+    assert base["action copy"].shape == base["arm ridge"].shape == (64, 8, 8)
+    assert np.array_equal(base["q"], run["q"])  # the same starts and true arm
+    assert "arm ridge" in plan.tokens_lines(plan.tokens_results()["A0"][0], 0)
     capsys.readouterr()
     plan.tokens_report()
     out = capsys.readouterr().out
     assert "Pre-registered bar" in out and "| A0 | fused_all |" in out
+    assert "Added after the results, not pre-registered" in out
     assert "Reproduction check" in out and "| A0 | s/ceiling |" in out
     assert (tmp_path / "plan/figures/tokens_dyn.png").exists()
 
