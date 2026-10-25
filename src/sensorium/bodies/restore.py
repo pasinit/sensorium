@@ -84,6 +84,7 @@ class RestoredScene:
         actor = rec.make_policy(self.policy, policy_rng)
         rec.reset(actor, layout_rng)
         rec.peaks.clear()
+        sound_start = sound_rng.bit_generator.state  # before ContactSound draws its timbre
         self.sound = ContactSound(sound_rng, round(DT * SAMPLE_RATE))
         data = rec.data
         data.qpos[:] = episode.privileged["qpos"][t0]
@@ -102,7 +103,7 @@ class RestoredScene:
             "props": rec.props_rng.bit_generator.state,
             "effort": rec.effort_rng.bit_generator.state,
             "director": rec.director_rng.bit_generator.state,
-            "sound": sound_rng.bit_generator.state,
+            "sound": sound_start,  # ContactSound is rebuilt from it: same timbre, same noise
         }
 
     def _rewind(self) -> None:
