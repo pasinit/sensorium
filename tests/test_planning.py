@@ -267,3 +267,33 @@ def test_plan_script_fit_openloop_rank_and_report(
     assert isinstance(layer, SensoryLayer)
     plan.layer.cache_clear()
     plan.heads.cache_clear()
+
+
+@needs_assets
+def test_rewind_and_the_skipped_right_eye_change_no_result(recorded: Episode) -> None:
+    from sensorium.bodies.restore import RestoredScene  # noqa: PLC0415
+
+    def replay(scene: RestoredScene, reuse: bool) -> tuple[np.ndarray, Episode]:
+        scene.restore(recorded, 20, reuse=reuse)
+        for t in range(20, 28):
+            scene.step(np.asarray(recorded.action[t]))
+        return scene.recorder.data.qpos.copy(), scene.observed()
+
+    scene = RestoredScene(SETTINGS)
+    q_full, ep_full = replay(scene, reuse=False)
+    q_rewound, ep_rewound = replay(scene, reuse=True)  # the snapshot of the restore above
+    q_again, ep_again = replay(scene, reuse=False)
+    assert np.array_equal(q_full, q_rewound) and np.array_equal(q_full, q_again)
+    for other in (ep_rewound, ep_again):
+        assert np.array_equal(ep_full.rgb, other.rgb)
+        assert np.array_equal(ep_full.proprio, other.proprio)
+        assert np.array_equal(ep_full.audio, other.audio)
+    assert "rgb_right" not in ep_full.privileged  # the second eye is not rendered
+    scene.close()
+    both = RestoredScene(SETTINGS)
+    both.recorder.render_right = True
+    q_both, ep_both = replay(both, reuse=False)
+    assert np.array_equal(q_full, q_both)  # rendering never touches the physics
+    assert ep_both.privileged["rgb_right"].shape == ep_both.rgb.shape
+    assert np.abs(ep_both.rgb.astype(int) - ep_full.rgb.astype(int)).max() <= 1
+    both.close()

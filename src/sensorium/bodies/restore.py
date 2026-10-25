@@ -14,7 +14,9 @@ validity gate of B-plan-0).
 """
 
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -36,19 +38,28 @@ class RestoredScene:
 
     def __init__(self, settings: dict[str, object]) -> None:
         self.recorder = HumanoidRecorder(settings)
+        self.recorder.render_right = False  # the privileged second eye: never a model input
         self.log = Log()
         self.sound: ContactSound | None = None
         self.policy = ""
         self.seed = 0
         self.hold = np.zeros(0)
         self.t = 0
+        self.key: tuple[int, int] | None = None
+        self.saved: mujoco.MjData | None = None
+        self.saved_rngs: dict[str, Mapping[str, Any]] = {}
+        self.restored_t = 0
 
     def close(self) -> None:
         """Release the simulator and its renderer."""
         self.recorder.close()
 
-    def restore(self, episode: Episode, t0: int) -> None:
+    def restore(self, episode: Episode, t0: int, reuse: bool = True) -> None:
         """Rebuild ``episode``'s scene and put the simulator in its recorded state at ``t0``.
+
+        With ``reuse`` and the same episode and ``t0`` as the last full restore, the simulator is
+        rewound to the state that restore produced (``MjData`` and every random stream), which
+        gives the same steps as restoring again at a fraction of the cost.
 
         Raises:
             KeyError: if the episode lacks ``meta["seed"]`` or ``privileged/qpos`` / ``qvel``.
@@ -57,6 +68,10 @@ class RestoredScene:
         if not 0 < t0 < episode.length:
             raise ValueError(f"t0 must be in [1, {episode.length - 1}], got {t0}")
         rec = self.recorder
+        key = (int(episode.meta["seed"]), t0)  # type: ignore[call-overload]
+        if reuse and key == self.key and self.saved is not None and rec.director is None:
+            self._rewind()
+            return
         self.seed = int(episode.meta["seed"])  # type: ignore[call-overload]
         self.policy = str(episode.meta["policy"])
         streams = np.random.SeedSequence(self.seed).spawn(7)  # as HumanoidRecorder.record
@@ -80,6 +95,35 @@ class RestoredScene:
         rec.monitor.reset(data)
         rec.dynamics.reset(data)
         self.log = Log()
+        self.key, self.restored_t = key, t0
+        self.saved = mujoco.MjData(rec.model)
+        mujoco.mj_copyData(self.saved, rec.model, data)
+        self.saved_rngs = {
+            "props": rec.props_rng.bit_generator.state,
+            "effort": rec.effort_rng.bit_generator.state,
+            "director": rec.director_rng.bit_generator.state,
+            "sound": sound_rng.bit_generator.state,
+        }
+
+    def _rewind(self) -> None:
+        """Back to the state of the last full ``restore`` (simulator, random streams, logs)."""
+        rec = self.recorder
+        assert self.saved is not None
+        mujoco.mj_copyData(rec.data, rec.model, self.saved)
+        for name, attr in (
+            ("props", "props_rng"),
+            ("effort", "effort_rng"),
+            ("director", "director_rng"),
+        ):
+            getattr(rec, attr).bit_generator.state = self.saved_rngs[name]
+        sound_rng = np.random.default_rng()
+        sound_rng.bit_generator.state = self.saved_rngs["sound"]
+        self.sound = ContactSound(sound_rng, round(DT * SAMPLE_RATE))
+        rec.peaks.clear()
+        rec.monitor.reset(rec.data)
+        rec.dynamics.reset(rec.data)
+        self.log = Log()
+        self.t = self.restored_t
 
     def _set_targets(self, action: np.ndarray) -> None:
         rec = self.recorder
