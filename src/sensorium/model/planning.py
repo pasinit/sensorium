@@ -6,6 +6,7 @@ arm-joint positions of the proprio input.
 
 * ``states_at`` / ``chunks_at``: the states of windows ending at given steps of an episode, and the
   action chunks that follow them (the predictor's conditioning), in the layer's channel space;
+  ``encode_at`` also returns the pre-projector summary tokens;
 * ``own_rollout``: open-loop rollout of the layer's own action-conditioned predictor (its context is
   the last ``steps`` positions, observed then predicted);
 * ``RidgeDynamics``: a ridge model ``s_{t+1} = W [s_t, chunk_t, 1]`` fitted on encoded episodes, for
@@ -52,7 +53,6 @@ def arm_q(episode: Episode, steps: np.ndarray) -> np.ndarray:
     return np.asarray(episode.proprio[steps][:, cols], dtype=np.float64)
 
 
-@torch.no_grad()
 def states_at(layer: SensoryLayer, episode: Episode, ends: np.ndarray) -> np.ndarray:
     """``[n, dim]`` states of the windows whose last observation is at ``ends`` (eval mode,
     centre crop, as ``SensoryLayer.encode``).
@@ -60,7 +60,26 @@ def states_at(layer: SensoryLayer, episode: Episode, ends: np.ndarray) -> np.nda
     Raises:
         ValueError: if a window starts before the episode.
     """
+    return encode_at(layer, episode, ends)[0]
+
+
+@torch.no_grad()
+def encode_at(
+    layer: SensoryLayer, episode: Episode, ends: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """``[n, dim]`` states s (projector output) and summary tokens z (the projector's input) of
+    the windows whose last observation is at ``ends``, from one forward pass (see
+    ``states_at``).
+
+    Raises:
+        ValueError: if a window starts before the episode.
+    """
     model = layer.model
+    summaries: list[torch.Tensor] = []
+
+    def record(module: torch.nn.Module, args: tuple[torch.Tensor, ...]) -> None:
+        summaries.append(args[0].detach())
+
     k = model.cfg.substeps
     loaded = load_episode(episode, layer.space, model.senses)
     if np.min(ends) < (k - 1) * spacing(loaded.header.dt):
@@ -73,9 +92,14 @@ def states_at(layer: SensoryLayer, episode: Episode, ends: np.ndarray) -> np.nda
         else None
     )
     arrays = build(loaded, layer.space, model.senses, np.asarray(ends), k, rgb=rgb)
-    states = model.embed(_as_batch(arrays, len(ends))).squeeze(1).cpu().numpy()
-    model.train(was)
-    return np.asarray(states, dtype=np.float64)
+    hook = model.encoder.projector.register_forward_pre_hook(record)
+    try:
+        states = model.embed(_as_batch(arrays, len(ends))).squeeze(1).cpu().numpy()
+    finally:
+        hook.remove()
+        model.train(was)
+    z = torch.cat(summaries).cpu().numpy()
+    return np.asarray(states, dtype=np.float64), np.asarray(z, dtype=np.float64)
 
 
 def union_actions(layer: SensoryLayer, header: Header, actions: np.ndarray) -> np.ndarray:
@@ -133,6 +157,7 @@ class Ridge:
     scale: np.ndarray
     w: np.ndarray
     bias: np.ndarray
+    alpha: float = float("nan")  # the chosen strength (not saved with the weights)
 
     @classmethod
     def fit(cls, x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> "Ridge":
@@ -142,7 +167,7 @@ class Ridge:
         alpha = choose_alpha(z, y, groups)
         bias = y.mean(0)
         w = np.linalg.solve(z.T @ z + alpha * np.eye(z.shape[1]), z.T @ (y - bias))
-        return cls(mean, scale, w, bias)
+        return cls(mean, scale, w, bias, alpha)
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
         """Predictions for the rows of ``x``."""

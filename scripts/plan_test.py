@@ -11,6 +11,8 @@ MAE) and with a ridge dynamics head fitted on 100 babble_v2 pretraining episodes
     uv run python scripts/plan_test.py goals --shard 0/30   # (b) closed-loop goal reaching
     uv run python scripts/plan_test.py rank --shard 0/30    # (b) proxy, if the gate fails
     uv run python scripts/plan_test.py report
+    uv run python scripts/plan_test.py decoder --shard 0/13 # post hoc: arm decoder R2 (z, s, raw)
+    uv run python scripts/plan_test.py decoder-report
 
 Every stage skips work already saved, so a preempted VM resumes where it stopped.
 """
@@ -22,6 +24,7 @@ import resource
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
@@ -43,6 +46,7 @@ from sensorium.model.planning import (
     arm_q,
     cem,
     chunks_at,
+    encode_at,
     own_rollout,
     rms,
     sliding_ends,
@@ -50,6 +54,7 @@ from sensorium.model.planning import (
     union_actions,
 )
 from sensorium.model.pretrain import load_layer
+from sensorium.model.probes import episode_folds
 from sensorium.model.sensory_layer import SensoryLayer
 
 matplotlib.use("Agg")
@@ -816,6 +821,135 @@ def report_rank() -> None:
         variety.say(f"| {predictor} {arm} | {top1:.3f} | {mean_rank:.1f} |")
 
 
+# ---------------------------------------------------------------------------------------------
+# post hoc: is the weak arm readout the representation or the decoder's fit?
+
+DECODER_FOLDS = 5
+DECODER_FEATURES = ("z", "s")
+
+
+def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndarray]:
+    """Every model step of the episodes at ``paths``: the arm's features (summary token ``z``
+    and state ``s``, or for ``arm == "raw"`` the proprio of the window's ``substeps`` steps on
+    the channels every episode has), the arm-joint targets, episode groups and effectors."""
+    feats: dict[str, list[np.ndarray]] = defaultdict(list)
+    raw: list[dict[str, np.ndarray]] = []
+    q, groups, effector = [], [], []
+    for i, p in enumerate(paths):
+        ep = Episode.load(p, privileged=False)
+        ends = np.arange(first_end(ep), ep.length, model_stride(ep))
+        if arm == "raw":
+            back = spacing(ep.dt) * np.arange(4)  # the window's substeps, newest first
+            window = np.asarray(ep.proprio)[ends[:, None] - back[None]]  # [n, 4, channels]
+            raw.append(dict(zip(ep.proprio_names, np.moveaxis(window, 2, 0), strict=True)))
+        else:
+            s, z = encode_at(layer(arm, seed), ep, ends)
+            feats["s"].append(s)
+            feats["z"].append(z)
+        q.append(arm_q(ep, ends))
+        groups.append(np.full(len(ends), i))
+        effector.append(np.full(len(ends), str(ep.meta.get("effector", "hand"))))
+    if arm == "raw":
+        names = sorted(set.intersection(*(set(r) for r in raw)))
+        feats["raw"] = [np.concatenate([r[n] for n in names], 1) for r in raw]
+    return {
+        **{k: np.concatenate(v) for k, v in feats.items()},
+        "q": np.concatenate(q),
+        "groups": np.concatenate(groups),
+        "effector": np.concatenate(effector),
+    }
+
+
+def r2(pred: np.ndarray, y: np.ndarray) -> float:
+    """1 - SSE / SST over all joints together (SST around ``y``'s own mean)."""
+    return float(1 - ((pred - y) ** 2).sum() / ((y - y.mean(0)) ** 2).sum())
+
+
+def fit_decoder(
+    x: np.ndarray, y: np.ndarray, groups: np.ndarray, eff: np.ndarray, per: bool
+) -> tuple[Callable[[np.ndarray, np.ndarray], np.ndarray], list[float]]:
+    """A predict function: one ridge map (pooled), or one per effector (``per``; an effector
+    not seen in fitting falls back to the pooled map). Also returns the strengths over d."""
+    pooled = Ridge.fit(x, y, groups)
+    maps = {e: Ridge.fit(x[eff == e], y[eff == e], groups[eff == e]) for e in np.unique(eff)}
+    alphas = [m.alpha / x.shape[1] for m in (maps.values() if per else [pooled])]
+
+    def predict(xs: np.ndarray, es: np.ndarray) -> np.ndarray:
+        out = pooled(xs)
+        if per:
+            for e, m in maps.items():
+                out[es == e] = m(xs[es == e])
+        return out
+
+    return predict, alphas
+
+
+def decoder_scores(
+    fit_: dict[str, np.ndarray], held: dict[str, dict[str, np.ndarray]], feature: str
+) -> dict[str, dict[str, float]]:
+    """Per decoder (pooled, per effector): train R2, episode-grouped CV R2 on the fit episodes,
+    held-out R2 per test set and the strength (ALPHA_GRID x d)."""
+    x, y, g, e = fit_[feature], fit_["q"], fit_["groups"], fit_["effector"]
+    out = {}
+    for name, per in (("pooled", False), ("per effector", True)):
+        predict, alphas = fit_decoder(x, y, g, e, per)
+        cv = np.zeros_like(y)
+        for tr, te in episode_folds(g, DECODER_FOLDS):
+            fold, _ = fit_decoder(x[tr], y[tr], g[tr], e[tr], per)
+            cv[te] = fold(x[te], e[te])
+        row = {"train": r2(predict(x, e), y), "cv": r2(cv, y), "alpha": float(np.mean(alphas))}
+        for test, h in held.items():
+            row[test] = r2(predict(h[feature], h["effector"]), h["q"])
+        out[name] = row
+    return out
+
+
+def decoder(shard: str) -> None:
+    """Post hoc decoder check: R2 of ridge arm decoders on z, s and the raw proprio window, fitted
+    on the ``fit`` episodes, scored on them (train, CV) and on both held-out sets."""
+    out = ROOT / "decoder"
+    out.mkdir(parents=True, exist_ok=True)
+    jobs = [("raw", 0), *((a, s) for a in ENCODERS for s in SEEDS)]
+    i, n = (int(x) for x in shard.split("/"))
+    for arm, seed in jobs[i::n]:
+        path = out / f"{arm}-s{seed}.json"
+        if path.exists():
+            continue
+        fit_ = decoder_samples(arm, seed, fit_paths())
+        held = {t: decoder_samples(arm, seed, variety.files(t, "heldout")) for t in TEST_SETS}
+        features = ("raw",) if arm == "raw" else DECODER_FEATURES
+        result = {f: decoder_scores(fit_, held, f) for f in features}
+        path.write_text(json.dumps(result, indent=1))
+        logging.info("decoder check: %s-s%d, peak RSS %.0f MB", arm, seed, peak_rss_mb())
+
+
+def decoder_report() -> None:
+    """The decoder check's table: R2 per encoder, feature and decoder (mean +- sd over seeds)."""
+    variety.say("\n## Post hoc: arm decoder R2 (fit on 100 babble_v2 pretraining episodes)\n")
+    cols = ("train", "cv", *TEST_SETS)
+    variety.say(
+        "| encoder | feature | decoder | train | CV (5 episode folds) | held-out babble "
+        "| held-out variety | strength / d |"
+    )
+    variety.say("|---|---|---|---|---|---|---|---|")
+    for arm in ("raw", *ENCODERS):
+        seeds = (0,) if arm == "raw" else SEEDS
+        paths = [ROOT / "decoder" / f"{arm}-s{s}.json" for s in seeds]
+        runs = [json.loads(p.read_text()) for p in paths if p.exists()]
+        if not runs:
+            continue
+        for feature in runs[0]:
+            for name in runs[0][feature]:
+                v = {c: np.array([r[feature][name][c] for r in runs]) for c in (*cols, "alpha")}
+                cells = [
+                    f"{v[c].mean():.3f}" + (f" +- {v[c].std():.3f}" if len(runs) > 1 else "")
+                    for c in cols
+                ]
+                cells.append(f"{v['alpha'].mean():.2g}")
+                label = "raw proprio window" if arm == "raw" else arm
+                variety.say(f"| {label} | {feature} | {name} | " + " | ".join(cells) + " |")
+
+
 def report() -> None:
     """Every table and figure."""
     variety.say("B-plan-0 (pre-registered in docs/model.md).")
@@ -832,7 +966,11 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
-        "command", choices=("fit", "fidelity", "openloop", "goals", "rank", "report")
+        "command",
+        choices=(
+            *("fit", "fidelity", "openloop", "goals", "rank", "report"),
+            *("decoder", "decoder-report"),
+        ),
     )
     parser.add_argument("--shard", default="0/1")
     parser.add_argument("--threads", type=int, default=1)
@@ -849,6 +987,10 @@ def main() -> None:
         goals(args.shard)
     elif args.command == "rank":
         rank(args.shard)
+    elif args.command == "decoder":
+        decoder(args.shard)
+    elif args.command == "decoder-report":
+        decoder_report()
     else:
         report()
 
