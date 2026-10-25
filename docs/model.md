@@ -2548,10 +2548,9 @@ The floor's sd over seeds is 0.009 to 0.029. Paired contrasts fix1 - A0 (by seed
 * **Plausibly part of why the planner had nothing to grip.** The goal is a latent state, and the
   arm position is a small, weakly readable part of it.
 * **Not yet ruled out: the decoder's fit.** It is one ridge map from the post-projector state s to
-  the eight arm joints, pooled over effectors, on the 100 babble_v2 pretraining episodes. Its
-  strength is chosen by the probes' inner folds on globally scaled features, then applied to
-  per-column standardised ones. Train R² against held-out R² decides between the representation
-  and the fit. It needs the states re-encoded, so it is not in this report.
+  the eight arm joints, pooled over effectors, on the 100 babble_v2 pretraining episodes, with
+  its strength chosen by episode-grouped inner folds on the same standardised features. Train R²
+  against held-out R² decides between the representation and the fit. It needs the states re-encoded, so it is not in this report.
 
 Figures, not committed: `runs/plan/figures/plan_openloop.png` (decoded RMS per horizon) and
 `runs/plan/figures/plan_floor.png` (prediction and floor per arm, with the copy and constant
