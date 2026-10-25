@@ -183,6 +183,32 @@ def rollout(
 # (a) open-loop prediction
 
 
+def openloop_ends(ep: Episode, k: int, e: int) -> np.ndarray:
+    """``[STARTS, HORIZON + 1]`` window ends of the open-loop starts of episode ``e`` of test
+    set ``k``, drawn with ``rng([k, e])``; column 0 is the start."""
+    stride = model_stride(ep)
+    last = ep.length - 1 - HORIZON * stride
+    rng = np.random.default_rng([k, e])
+    starts = rng.choice(np.arange(first_end(ep), last + 1), STARTS, replace=False)
+    return sliding_ends(ep.length, first_end(ep), starts, stride, HORIZON)
+
+
+def copy_arm() -> tuple[np.ndarray, np.ndarray]:
+    """``[n, HORIZON]`` arm RMS on the open-loop starts of two model-free baselines, read from
+    the episodes' proprio: copy (the start's arm held for every horizon) and the constant mean
+    arm of these targets (what a decoder that reads nothing from the state would score)."""
+    targets, rows = [], []
+    for k, test in enumerate(TEST_SETS):
+        for e, p in enumerate(variety.files(test, "heldout")):
+            ep = Episode.load(p, privileged=False)
+            ends = openloop_ends(ep, k, e)
+            q = arm_q(ep, ends.ravel()).reshape(*ends.shape, -1)
+            rows.append(rms(np.broadcast_to(q[:, :1], q[:, 1:].shape), q[:, 1:]))
+            targets.append(q[:, 1:])
+    q = np.concatenate(targets)
+    return np.concatenate(rows), rms(q.reshape(-1, q.shape[-1]).mean(0), q)
+
+
 def openloop(shard: str) -> None:
     """Per encoder and predictor: latent squared error, copy baseline and decoded arm RMS at
     every horizon, on ``STARTS`` starts of every held-out episode of both sets."""
@@ -200,11 +226,8 @@ def openloop(shard: str) -> None:
         for k, test in enumerate(TEST_SETS):
             for e, p in enumerate(variety.files(test, "heldout")):
                 ep = Episode.load(p, privileged=False)
-                stride = model_stride(ep)
-                last = ep.length - 1 - HORIZON * stride
-                rng = np.random.default_rng([k, e])
-                starts = rng.choice(np.arange(first_end(ep), last + 1), STARTS, replace=False)
-                ends = sliding_ends(ep.length, first_end(ep), starts, stride, HORIZON)
+                ends = openloop_ends(ep, k, e)
+                starts = ends[:, 0]
                 states = states_at(lay, ep, ends.ravel()).reshape(len(starts), HORIZON + 1, -1)
                 flat = chunks_at(lay, ep, ends[:, :-1].ravel())
                 chunks = flat.reshape(len(starts), HORIZON, *flat.shape[1:])
@@ -529,6 +552,7 @@ def report_openloop() -> None:
         variety.say(
             f"\n**Primary (a):** fix1 - A0 decoded arm RMS, horizon 8: {describe(c)}: {verdict}"
         )
+    decoder_floor()
     fig, ax = plt.subplots(figsize=(6, 4))
     for (predictor, arm), dec in curves.items():
         ax.errorbar(
@@ -542,11 +566,113 @@ def report_openloop() -> None:
         )
     ax.set(xscale="log", xlabel="horizon (model steps of 0.2 s)", ylabel="decoded arm RMS (rad)")
     ax.set_xticks(HORIZONS, [str(h) for h in HORIZONS])
+    ax.minorticks_off()
     ax.grid(alpha=0.25)
     ax.legend(fontsize=7, frameon=False)
     fig.tight_layout()
     (ROOT / "figures").mkdir(parents=True, exist_ok=True)
     fig.savefig(ROOT / "figures" / "plan_openloop.png", dpi=130)
+    plt.close(fig)
+
+
+def decoder_floor() -> None:
+    """The decoded arm RMS of the TRUE encoded state at each horizon (the decoder's floor: how
+    well a state reads the arm at all), and the excess of the prediction over it, with the paired
+    contrast fix1 - A0 of the excess (own predictors). The decoded RMS of the primary mixes the
+    two; the excess is the part a predictor adds."""
+    cols = [h - 1 for h in HORIZONS]
+    curves = {}
+    variety.say(
+        "\nDecoder floor (decoded RMS of the true state) and excess (prediction - floor), rad\n"
+    )
+    head = (
+        " | ".join(f"floor h{h}" for h in HORIZONS)
+        + " | "
+        + " | ".join(f"excess h{h}" for h in HORIZONS)
+    )
+    variety.say(f"| predictor | arm | {head} |")
+    variety.say("|---|---|" + "---|" * (2 * len(HORIZONS)))
+    for predictor, arms in (("own", OWN), ("ridge", RIDGE)):
+        for arm in arms:
+            runs = load_openloop(predictor, arm)
+            if not runs:
+                continue
+            floor = np.array([r["decoded_true"].mean(0) for r in runs])
+            excess = np.array([(r["decoded"] - r["decoded_true"]).mean(0) for r in runs])
+            curves[(predictor, arm)] = (floor, floor + excess)
+            cells = [f"{floor[:, c].mean():.3f}" for c in cols]
+            cells += [f"{excess[:, c].mean():+.3f} +- {excess[:, c].std():.3f}" for c in cols]
+            variety.say(f"| {predictor} | {arm} | " + " | ".join(cells) + " |")
+    copy, mean = (b.mean(0) for b in copy_arm())
+    for name, base in (("copy (true arm at the start)", copy), ("constant mean arm", mean)):
+        cells = [f"{base[c]:.3f}" for c in cols] + ["" for _ in cols]
+        variety.say(f"| {name} | - | " + " | ".join(cells) + " |")
+    floor_figure(curves, copy[cols], mean[cols])
+    a, b = load_openloop("own", "fix1"), load_openloop("own", "A0")
+    if len(a) == len(b) == len(SEEDS):
+        groups = a[0]["groups"]
+        variety.say(
+            "\n| fix1 - A0, own predictors (paired by seed and episode) | contrast |\n|---|---|"
+        )
+        for h in HORIZONS:
+            c = contrast_values(
+                np.stack([r["decoded"][:, h - 1] - r["decoded_true"][:, h - 1] for r in a]),
+                np.stack([r["decoded"][:, h - 1] - r["decoded_true"][:, h - 1] for r in b]),
+                groups,
+            )
+            variety.say(f"| excess, horizon {h} | {describe(c)} |")
+        c = contrast_values(
+            np.stack([r["decoded_true"][:, -1] for r in a]),
+            np.stack([r["decoded_true"][:, -1] for r in b]),
+            groups,
+        )
+        variety.say(f"| floor (true state), horizon 8 | {describe(c)} |")
+
+
+def floor_figure(
+    curves: dict[tuple[str, str], tuple[np.ndarray, np.ndarray]],
+    copy: np.ndarray,
+    mean: np.ndarray,
+) -> None:
+    """``figures/plan_floor.png``: per predictor, each arm's decoded RMS of the prediction (solid)
+    and of the true state (dashed, the floor), with the model-free copy and constant baselines."""
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
+    cols = [h - 1 for h in HORIZONS]
+    for ax, predictor in zip(axes, ("own", "ridge"), strict=True):
+        for (p, arm), (floor, pred) in curves.items():
+            if p != predictor:
+                continue
+            color = f"C{list(ENCODERS).index(arm)}"  # one colour per encoder in both panels
+            ax.errorbar(
+                HORIZONS,
+                pred[:, cols].mean(0),
+                pred[:, cols].std(0),
+                color=color,
+                marker="o",
+                capsize=2,
+                label=f"{arm}: prediction",
+            )
+            ax.plot(
+                HORIZONS,
+                floor[:, cols].mean(0),
+                color=color,
+                ls="--",
+                marker="x",
+                label=f"{arm}: true state (floor)",
+            )
+        ax.plot(HORIZONS, copy, color="0.3", ls=":", label="copy the start's arm")
+        ax.plot(HORIZONS, mean, color="0.6", ls="-.", label="constant mean arm")
+        ax.set(
+            xscale="log", xlabel="horizon (model steps of 0.2 s)", title=f"{predictor} predictor"
+        )
+        ax.set_xticks(HORIZONS, [str(h) for h in HORIZONS])
+        ax.minorticks_off()
+        ax.grid(alpha=0.25)
+        ax.legend(fontsize=7, frameon=False)
+    axes[0].set_ylabel("decoded arm RMS (rad)")
+    fig.tight_layout()
+    (ROOT / "figures").mkdir(parents=True, exist_ok=True)
+    fig.savefig(ROOT / "figures" / "plan_floor.png", dpi=130)
     plt.close(fig)
 
 

@@ -2458,6 +2458,105 @@ it has no trained predictor.
 
 **Compute.** CPU only, spot. The cost and plan are in the brief to the lead, not in the repo.
 
+### B-plan-0 results, (a) open-loop prediction
+
+> **Caveat: no encoder's state supports an arm readout better than "the arm does not move".**
+> The ridge decoder reads the arm badly from *any* state. Decoding the **true** future state misses
+> by 0.73 to 0.86 rad, flat from horizon 1 to 8. Copying the start's arm misses by 0.07 rad at
+> horizon 1 and 0.38 rad at horizon 8, and the constant mean arm by 1.11 rad. So the decoded arm
+> RMS cannot rank predictors or planners near a useful accuracy.
+>
+> Within that, fix1 beats A0 on both halves of the pre-registered contrast (-0.256 rad):
+> * -0.124 rad is the floor: A0's states carry less linearly readable arm position (the B-fix-0
+>   finding);
+> * -0.132 rad is the excess over the floor, the only part about prediction.
+>
+> The primary is reported as computed and pre-registered.
+
+All numbers are mean +- sd over 3 seeds on the 1,600 starts (8 per held-out episode, 100 babble_v2
+and 100 variety). Arm RMS is over the eight arm joints, in radians. Latent errors are divided by the
+per-dimension variance of each arm's own target states, so they compare horizons, not arms.
+
+**Pre-registered primary (a):** fix1 - A0 decoded arm RMS at horizon 8, own predictors:
+**-0.256 rad** (seed SE 0.017, episode SE 0.018, combined SE 0.025, MDD 0.070), **resolved: fix1
+better.** The expectation (within the MDD) was wrong in direction and size. See the caveat above.
+
+| predictor | arm | latent/var h1 | h2 | h4 | h8 | copy/var h8 | arm RMS h1 | h2 | h4 | h8 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| own | A0 | 0.083 +- 0.003 | 0.332 | 0.459 | 0.538 +- 0.030 | 1.675 | 1.006 +- 0.025 | 1.002 | 1.020 | 1.056 +- 0.013 |
+| own | recon05 | 0.084 +- 0.003 | 0.287 | 0.408 | 0.492 +- 0.019 | 1.632 | 0.833 +- 0.043 | 0.822 | 0.836 | 0.877 +- 0.051 |
+| own | fix1 | 0.192 +- 0.004 | 0.305 | 0.369 | 0.403 +- 0.008 | 1.423 | 0.772 +- 0.007 | 0.773 | 0.784 | 0.800 +- 0.012 |
+| ridge | A0 | 0.227 +- 0.022 | 0.502 | 0.621 | 0.665 +- 0.023 | 1.675 | 0.770 +- 0.027 | 0.759 | 0.757 | 0.761 +- 0.030 |
+| ridge | fix1 | 0.239 +- 0.005 | 0.378 | 0.464 | 0.509 +- 0.005 | 1.423 | 0.679 +- 0.009 | 0.665 | 0.657 | 0.655 +- 0.008 |
+| ridge | MAE | 0.377 +- 0.006 | 0.440 | 0.479 | 0.509 +- 0.005 | 1.480 | 0.683 +- 0.004 | 0.664 | 0.655 | 0.654 +- 0.001 |
+
+**The decoder floor and the excess (added after the result, from the saved per-start errors; no
+new encoding).**
+
+* **Floor:** the decoded arm RMS of the *true* encoded state at the same horizon. It is flat in
+  the horizon (the true state at t+h is as readable as at t+1), so it also stands for h=0.
+* **Excess:** prediction minus floor, per start. It is a difference of two RMS values against the
+  true arm, not the distance between the two decoded arms (that was not saved and would need the
+  rollouts again), so it can be negative.
+* **Model-free baselines on the same starts**, from the episodes' proprio: copy (the start's arm,
+  held) and the constant mean arm of the targets (fitted on these targets, so slightly
+  optimistic).
+
+| predictor | arm | floor h1 | h2 | h4 | h8 | excess h1 | h2 | h4 | h8 |
+|---|---|---|---|---|---|---|---|---|---|
+| own | A0 | 0.844 | 0.851 | 0.856 | 0.863 | +0.161 +- 0.003 | +0.152 +- 0.007 | +0.164 +- 0.012 | +0.193 +- 0.028 |
+| own | recon05 | 0.727 | 0.735 | 0.737 | 0.743 | +0.106 +- 0.017 | +0.088 +- 0.025 | +0.099 +- 0.031 | +0.134 +- 0.033 |
+| own | fix1 | 0.728 | 0.730 | 0.738 | 0.739 | +0.044 +- 0.013 | +0.043 +- 0.015 | +0.046 +- 0.017 | +0.061 +- 0.017 |
+| ridge | A0 | 0.844 | 0.851 | 0.856 | 0.863 | -0.074 +- 0.003 | -0.092 +- 0.004 | -0.099 +- 0.008 | -0.102 +- 0.002 |
+| ridge | fix1 | 0.728 | 0.730 | 0.738 | 0.739 | -0.049 +- 0.004 | -0.065 +- 0.006 | -0.081 +- 0.007 | -0.084 +- 0.006 |
+| ridge | MAE | 0.776 | 0.779 | 0.780 | 0.785 | -0.093 +- 0.007 | -0.115 +- 0.008 | -0.124 +- 0.006 | -0.130 +- 0.008 |
+| copy (true arm at the start) | - | 0.074 | 0.133 | 0.233 | 0.375 | | | | |
+| constant mean arm | - | 1.107 | 1.109 | 1.113 | 1.119 | | | | |
+
+The floor's sd over seeds is 0.009 to 0.029. Paired contrasts fix1 - A0 (by seed and episode, MDD =
+2.8 x combined SE; post hoc):
+
+| contrast | own predictors | ridge heads |
+|---|---|---|
+| excess, h1 | -0.117 (MDD 0.028, resolved) | +0.026 (MDD 0.011, resolved) |
+| excess, h2 | -0.109 (MDD 0.030, resolved) | +0.027 (MDD 0.013, resolved) |
+| excess, h4 | -0.118 (MDD 0.048, resolved) | +0.018 (MDD 0.020, not resolved) |
+| excess, h8 | **-0.132** (MDD 0.081, resolved) | +0.018 (MDD 0.018, resolved) |
+| floor (true state), h8 | **-0.124** (MDD 0.079, resolved) | the same states: -0.124 |
+
+**Reading.**
+
+* **The primary splits in two equal halves.** -0.256 = -0.124 (floor: A0's states read the arm
+  worse) + -0.132 (excess: A0's own predictor loses more of the readable arm than fix1's).
+* **The prediction part favours fix1 and is already there at horizon 1** (-0.117), barely growing
+  to horizon 8. A0's own predictor adds 0.16 to 0.19 rad over its floor, fix1's only 0.04 to 0.06.
+  fix1's latent error is higher than A0's at h1 (0.19 against 0.08 of the variance) but lower from
+  h4, and less of it reaches the decoded arm. The B-fix-1 fear (fix1's higher
+  next-state MSE costs it as a world model) is not borne out on the arm.
+* **The ridge heads' excess is negative:** their predictions decode closer to the true arm than
+  the true state does. A linear rollout shrinks the state toward the training mean, inside the
+  span the linear decoder was fitted on, so the excess there is not a measure of prediction. The
+  small +0.02 rad ridge contrast is not read as fix1 worse.
+* **No encoder's state supports an arm readout better than copy, at any horizon up to 8.** Even
+  the floor (0.73 to 0.86 rad) is about twice copy's error at horizon 8 (0.38) and ten times it at
+  horizon 1 (0.07). Against the constant mean arm (1.11 rad), the floor removes 24 to 34% of the
+  RMS, that is 42 to 57% of the variance (A0 the least, recon05 and fix1 the most). The arm joints
+  are a model input (proprio), so this is a weak linear readout of an input from the 128-d state.
+* **The readout is poor on both held-out sets**, not only on the new one: horizon-1 floor 0.69
+  (fix1) to 0.84 (A0) rad on babble_v2, the decoder's own distribution, and 0.76 to 0.85 on
+  variety.
+* **Plausibly part of why the planner had nothing to grip.** The goal is a latent state, and the
+  arm position is a small, weakly readable part of it.
+* **Not yet ruled out: the decoder's fit.** It is one ridge map from the post-projector state s to
+  the eight arm joints, pooled over effectors, on the 100 babble_v2 pretraining episodes. Its
+  strength is chosen by the probes' inner folds on globally scaled features, then applied to
+  per-column standardised ones. Train R² against held-out R² decides between the representation
+  and the fit. It needs the states re-encoded, so it is not in this report.
+
+Figures, not committed: `runs/plan/figures/plan_openloop.png` (decoded RMS per horizon) and
+`runs/plan/figures/plan_floor.png` (prediction and floor per arm, with the copy and constant
+baselines).
+
 ### B-plan-0: first closed-loop run, a planner failure (post hoc, not the primary)
 
 The first run reached 3,224 goal-configs before a spot preemption (GCP, n2-standard-32). The open-loop
@@ -2466,11 +2565,18 @@ post hoc. **No pre-registered contrast is computed on it.**
 
 | planner | success < 0.10 rad | < 0.30 | < 0.50 | median final arm RMS (rad) |
 |---|---|---|---|---|
-| replay the true actions (ceiling) | 1.00 | 1.00 | 1.00 | 0.000 |
-| hold the current targets | 0.045 | 0.50 | 0.65 | 0.30 |
-| random actions (floor) | 0 | 0.02 | 0.13 | 0.71 |
-| own predictors: A0, recon05, fix1 (3 seeds each) | 0 | about 0.01 | about 0.04 | 1.08 to 1.17 |
-| ridge heads: A0, fix1, MAE (3 seeds each) | 0 | 0 to 0.01 | about 0.04 | 1.02 to 1.14 |
+| replay the true actions (ceiling) | 1.000 | 1.000 | 1.000 | 0.00 |
+| hold the current targets | 0.045 | 0.504 | 0.654 | 0.30 |
+| random actions (floor) | 0.000 | 0.023 | 0.128 | 0.70 |
+| own A0 | 0.000 | 0.010 +- 0.004 | 0.048 +- 0.007 | 1.11 (1.09 to 1.13) |
+| own recon05 | 0.000 | 0.000 | 0.038 +- 0.006 | 1.12 (1.08 to 1.15) |
+| own fix1 | 0.000 | 0.003 +- 0.004 | 0.028 +- 0.007 | 1.15 (1.13 to 1.19) |
+| ridge A0 | 0.000 | 0.000 | 0.043 +- 0.013 | 1.07 (1.02 to 1.10) |
+| ridge fix1 | 0.000 | 0.003 +- 0.004 | 0.033 +- 0.004 | 1.11 (1.07 to 1.14) |
+| ridge MAE | 0.000 | 0.003 +- 0.004 | 0.033 +- 0.004 | 1.07 (1.05 to 1.09) |
+
+Planner rows: mean +- sd over 3 seeds; the median is the mean of the seeds' medians, with their
+range. Bars have one run. From the final report (`scripts/plan_test.py report`).
 
 **Reading.**
 
