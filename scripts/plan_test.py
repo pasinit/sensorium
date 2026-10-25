@@ -48,6 +48,7 @@ from sensorium.model.planning import (
     cem,
     chunks_at,
     encode_at,
+    encode_parts,
     own_rollout,
     rms,
     sliding_ends,
@@ -871,11 +872,14 @@ DECODER_FOLDS = 5
 DECODER_FEATURES = ("z", "s")
 
 
-def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndarray]:
+def decoder_samples(
+    arm: str, seed: int, paths: list[Path], parts: bool = False
+) -> dict[str, np.ndarray]:
     """Every model step of the episodes at ``paths``: the arm's features (summary token ``z``
     and state ``s``, with several summary tokens also each projected token ``s0, s1, ...``,
     or for ``arm == "raw"`` the proprio of the window's ``substeps`` steps on
-    the channels every episode has), the arm-joint targets, episode groups and effectors."""
+    the channels every episode has; with ``parts``, every stage of ``encode_parts`` too), the
+    arm-joint targets, episode groups and effectors."""
     feats: dict[str, list[np.ndarray]] = defaultdict(list)
     raw: list[dict[str, np.ndarray]] = []
     q, groups, effector = [], [], []
@@ -886,6 +890,9 @@ def decoder_samples(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndar
             back = spacing(ep.dt) * np.arange(4)  # the window's substeps, newest first
             window = np.asarray(ep.proprio)[ends[:, None] - back[None]]  # [n, 4, channels]
             raw.append(dict(zip(ep.proprio_names, np.moveaxis(window, 2, 0), strict=True)))
+        elif parts:
+            for name, x in encode_parts(layer(arm, seed), ep, ends).items():
+                feats[name].append(x)
         else:
             s, z = encode_at(layer(arm, seed), ep, ends)
             feats["s"].append(s)
@@ -999,6 +1006,77 @@ def decoder(shard: str) -> None:
         np.savez(path.with_suffix(".npz"), **preds)
         path.write_text(json.dumps(result, indent=1))
         logging.info("decoder check: %s-s%d, peak RSS %.0f MB", arm, seed, peak_rss_mb())
+
+
+LOCATE_ARMS: tuple[str, ...] = ("A0", "fix1")
+LOCATE_FEATURES = ("input_last", "input_window", "stem", "fused", "z", "s")
+
+
+def token_cosine(x: np.ndarray, k: int) -> float:
+    """Mean cosine between the ``k`` tokens of each row of ``x`` ``[n, k * d]``, over every
+    pair of tokens and every row (1: the tokens are copies up to scale)."""
+    t = x.reshape(len(x), k, -1)
+    t = t / np.linalg.norm(t, axis=-1, keepdims=True).clip(min=1e-12)
+    cos = np.einsum("nid,njd->nij", t, t)
+    return float(cos[:, *np.triu_indices(k, 1)].mean())
+
+
+def locate(shard: str) -> None:
+    """Post hoc: where is the arm lost on its way to the state? Per encoder of ``LOCATE_ARMS``
+    and seed, ridge arm decoders (pooled, per effector) on every stage of the proprio_body
+    sense (``encode_parts``: normalised input, stem token, fused token, summary z, state s),
+    fitted and scored as the decoder check. With several summary tokens, also the mean
+    cosine between the tokens of z and of s (held-out babble_v2)."""
+    out = ROOT / "locate"
+    out.mkdir(parents=True, exist_ok=True)
+    jobs = [(a, s) for a in LOCATE_ARMS for s in SEEDS]
+    i, n = (int(x) for x in shard.split("/"))
+    for arm, seed in jobs[i::n]:
+        path = out / f"{arm}-s{seed}.json"
+        if path.exists():
+            continue
+        logging.info("locate: %s-s%d started", arm, seed)
+        fit_ = decoder_samples(arm, seed, fit_paths(), parts=True)
+        held = {
+            t: decoder_samples(arm, seed, variety.files(t, "heldout"), parts=True)
+            for t in TEST_SETS
+        }
+        result: dict[str, object] = {f: decoder_scores(fit_, held, f) for f in LOCATE_FEATURES}
+        k = layer(arm, seed).model.cfg.summary_tokens
+        if k > 1:
+            result["cosine"] = {f: token_cosine(held["babble"][f], k) for f in ("z", "s")}
+        path.write_text(json.dumps(result, indent=1))
+        logging.info("locate: %s-s%d done, peak RSS %.0f MB", arm, seed, peak_rss_mb())
+
+
+def locate_report() -> None:
+    """The locate check's table (per-effector R2, mean +- sd over seeds) and token cosines."""
+    variety.say("\n## Post hoc: where is the arm lost? (proprio_body stages, per-effector R2)\n")
+    cols = ("train", "cv", *TEST_SETS)
+    variety.say(
+        "| encoder | stage | train | CV | held-out babble | held-out variety "
+        "| pooled, held-out babble |"
+    )
+    variety.say("|---|---|---|---|---|---|---|")
+    for arm in LOCATE_ARMS:
+        paths = [ROOT / "locate" / f"{arm}-s{s}.json" for s in SEEDS]
+        runs = [json.loads(p.read_text()) for p in paths if p.exists()]
+        if not runs:
+            continue
+        for feature in LOCATE_FEATURES:
+            per = [r[feature]["per effector"] for r in runs]
+            cells = [mean_sd([p[c] for p in per]) for c in cols]
+            cells.append(mean_sd([r[feature]["pooled"]["babble"] for r in runs]))
+            variety.say(f"| {arm} | {feature} | " + " | ".join(cells) + " |")
+        if "cosine" in runs[0]:
+            for f in ("z", "s"):
+                cos = mean_sd([r["cosine"][f] for r in runs])
+                variety.say(f"| {arm} | token cosine of {f} | {cos} | | | | |")
+
+
+def mean_sd(values: list[float]) -> str:
+    """``mean +- sd`` (3 decimals)."""
+    return f"{np.mean(values):.3f} +- {np.std(values):.3f}"
 
 
 def decoder_report() -> None:

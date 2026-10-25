@@ -24,6 +24,8 @@ and B-fix-0/1's probe battery (``fix_test.py``) at every checkpoint.
     uv run python scripts/rep_test.py decoder --shard 0/16   # decoder check
     uv run python scripts/rep_test.py openloop --shard 0/5   # own-predictor open loop
     uv run python scripts/rep_test.py report
+    uv run python scripts/rep_test.py locate --shard 0/9     # post hoc: where is the arm lost?
+    uv run python scripts/rep_test.py locate-report
 """
 
 import argparse
@@ -53,6 +55,8 @@ ARMS: dict[str, dict[str, object]] = {
     "recon-s-multi-z": FIX1_OPTIONS | {"recon_source": "s", "summary_tokens": 4},
 }
 """The arms' model options (``ModelConfig``) on fix1's."""
+LOCATE_ARMS = ("A0", FIX1, "multi-z")
+"""The encoders of the post hoc locate check (where the arm is lost)."""
 FIXED_R2 = 0.85
 """The "fixed" bar: mean per-effector R2 of s, on train and on held-out babble_v2."""
 STEP = variety.STEPS
@@ -70,6 +74,7 @@ def configure() -> None:
     }
     plan.OWN = ("A0", FIX1, *ARMS)
     plan.RIDGE = ()
+    plan.LOCATE_ARMS = LOCATE_ARMS
     plan.layer.cache_clear()
     plan.heads.cache_clear()
     plan.effector_decoders.cache_clear()
@@ -292,7 +297,11 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
-        "command", choices=("train", "encode", "probe", "fit", "decoder", "openloop", "report")
+        "command",
+        choices=(
+            *("train", "encode", "probe", "fit", "decoder", "openloop", "report"),
+            *("locate", "locate-report"),
+        ),
     )
     parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--seed", type=int, default=0)
@@ -318,6 +327,10 @@ def main() -> None:
         plan.decoder(args.shard)
     elif args.command == "openloop":
         plan.openloop(args.shard)
+    elif args.command == "locate":
+        plan.locate(args.shard)
+    elif args.command == "locate-report":
+        plan.locate_report()
     else:
         report()
 
