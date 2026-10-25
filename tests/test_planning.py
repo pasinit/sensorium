@@ -118,6 +118,31 @@ def test_tokens_dyn_helpers_decode_per_effector_and_score_each_horizon() -> None
     assert np.allclose(plan.horizon_r2(q, q), 1.0)
 
 
+def test_the_tokens_bar_is_the_model_free_arm_copy() -> None:
+    plan = load_plan_script()
+    rng = np.random.default_rng(2)
+    n, h = 80, plan.HORIZON
+    walk = np.cumsum(rng.standard_normal((n, h + 1, 8)), 1)  # the arm moves: copy decays
+
+    def run(pred: np.ndarray, copy: np.ndarray) -> dict[str, np.ndarray]:
+        out = {"q": walk, "set": np.zeros(n, int), "groups": np.arange(n) // 4}
+        for f in plan.TOKENS_FEATURES:
+            out |= {f"{f}/pred": pred, f"{f}/copy": copy, f"{f}/ceiling": walk[:, 1:]}
+        return out
+
+    near = [
+        run(walk[:, 1:] + 0.01 * rng.standard_normal(walk[:, 1:].shape), walk[:, 0])
+        for _ in range(3)
+    ]
+    c, every, ok = plan.tokens_passes(near, "fused")
+    assert c.point > c.mdd and every and ok  # a near-perfect rollout beats "the arm stays"
+    still = [
+        run(np.broadcast_to(walk[:, :1], walk[:, 1:].shape).copy(), walk[:, -1]) for _ in range(3)
+    ]  # the rollout is the arm copy; the feature copy is perfect at h8
+    c, every, ok = plan.tokens_passes(still, "fused")
+    assert c.point == pytest.approx(0.0) and not every and not ok  # judged by the arm copy only
+
+
 def test_choose_alpha_takes_the_number_of_inner_folds() -> None:
     from sensorium.model import probes  # noqa: PLC0415
 

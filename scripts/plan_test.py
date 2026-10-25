@@ -1214,11 +1214,12 @@ def tokens_contrast(runs: list[dict[str, np.ndarray]], f: str, other: str, h: in
 
 def tokens_passes(runs: list[dict[str, np.ndarray]], f: str) -> tuple[Contrast, bool, bool]:
     """The pre-registered bar for one feature set: the contrast of its rollout against the
-    feature copy at ``HORIZON`` on held-out babble_v2, whether the rollout is ahead in every
-    seed, and whether it passes (ahead by more than the MDD, and in every seed)."""
-    c = tokens_contrast(runs, f, "copy", HORIZON)
+    model-free arm copy (``q_{t+h} = q_t``, B-rep-0's copy) at ``HORIZON`` on held-out
+    babble_v2, whether the rollout is ahead in every seed, and whether it passes (ahead by more
+    than the MDD, and in every seed)."""
+    c = tokens_contrast(runs, f, "arm copy", HORIZON)
     every = all(
-        tokens_lines(r, 0)[f"{f}/pred"][-1] > tokens_lines(r, 0)[f"{f}/copy"][-1] for r in runs
+        tokens_lines(r, 0)[f"{f}/pred"][-1] > tokens_lines(r, 0)["arm copy"][-1] for r in runs
     )
     return c, every, bool(c.point > c.mdd and every)
 
@@ -1267,21 +1268,21 @@ def tokens_reproduction(results: dict[str, list[dict[str, np.ndarray]]]) -> None
 
 
 def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
-    """The pre-registered bar per encoder and feature set, then the secondary contrasts
-    against the model-free arm copy (held-out babble_v2)."""
+    """The pre-registered bar per encoder and feature set (against the model-free arm copy),
+    then the secondary contrasts against the feature copy (held-out babble_v2)."""
     paired = {arm: runs for arm, runs in results.items() if len(runs) > 1}
-    variety.say("\nPre-registered bar: rollout - feature copy, h8, held-out babble_v2\n")
+    variety.say("\nPre-registered bar: rollout - arm copy (model-free), h8, held-out babble_v2\n")
     variety.say("| encoder | features | contrast | every seed | passes |\n|---|---|---|---|---|")
     for arm, runs in paired.items():
         for f in TOKENS_FEATURES:
             c, every, ok = tokens_passes(runs, f)
             yes = {True: "yes", False: "no"}
             variety.say(f"| {arm} | {f} | {describe(c)} | {yes[every]} | {yes[ok]} |")
-    variety.say("\nSecondary: rollout - model-free arm copy, held-out babble_v2\n")
+    variety.say("\nSecondary (not judged): rollout - feature copy, held-out babble_v2\n")
     variety.say("| encoder | features | h1 | h8 |\n|---|---|---|---|")
     for arm, runs in paired.items():
         for f in TOKENS_FEATURES:
-            cells = [describe(tokens_contrast(runs, f, "arm copy", h)) for h in (1, HORIZON)]
+            cells = [describe(tokens_contrast(runs, f, "copy", h)) for h in (1, HORIZON)]
             variety.say(f"| {arm} | {f} | " + " | ".join(cells) + " |")
 
 
