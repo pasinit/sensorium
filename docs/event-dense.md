@@ -107,8 +107,9 @@ Caveats:
 
 The six table objects are 3-10 cm across, small for a Shadow hand: its claw pinch lifts 28% of its
 isolated grasps of them, and 45% [31, 60] of grasps of hand-sized props (`docs/touch.md`). The
-`hand_sized` prop (`h1_props.HAND_SIZED_OBJECTS`) adds four free objects, and the hand blocks of
-`configs/event_dense.toml` now have it (pincer blocks unchanged):
+`hand_sized` prop (`h1_props.HAND_SIZED_OBJECTS`) adds four free objects. The hand blocks of
+`configs/event_dense.toml` had it from 2026-10-24 until the pre-registered cloud measurement
+(`docs/learned-grasp.md`, results) failed its rule. It is off again; the prop stays available:
 
 | object | shape | size | nominal mass |
 |---|---|---|---|
@@ -120,9 +121,11 @@ isolated grasps of them, and 45% [31, 60] of grasps of hand-sized props (`docs/t
 - The nominal masses replace the material density, which would make a metal can 4.8 kg.
 - With `hidden_properties` the mass, friction and softness are drawn per episode, as for every
   object (0.1-1.5 kg).
-- A hand block now has 12 free objects; the placement relaxes its spacing on a crowded table, as
-  with the other props.
+- With the prop a hand block has 12 free objects; the placement relaxes its spacing on a crowded
+  table, as with the other props.
 - `tests/test_h1_props.py` checks that each object spawns, settles on the table within a short
   episode, and is reachable by the planner's claw pinch.
-- The event rate and the grasp success with these objects are measured on the cloud, not on the
-  Mac (`docs/learned-grasp.md`, pre-registration).
+- Measured on the cloud (`docs/learned-grasp.md`, results): 94% of 1 s windows eventful in 10
+  episodes. The hands' own grasps then succeed 17% [13, 21] overall against 19% [15, 24] without
+  the objects, with fewer own lifts per episode (0.95 against 1.08), so the prop was taken out of
+  the config.
