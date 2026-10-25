@@ -133,6 +133,94 @@ slower cores on the cloud:
 - on a 32-vCPU machine with 30 processes, about 25 minutes of runs plus about 15 of set-up: under
   1 hour.
 
+## Results of the pre-registered measurement (2026-10-25)
+
+One n2-standard-32 Spot machine, about 35 minutes: set-up 3, smoke 2, A and B 13, C and the
+event episodes 9, report 1. Head-camera rendering used Mesa EGL on the CPU. Every planned grasp is
+counted; 60 episodes per run, seeds 0-59.
+
+| run | grasps | success per grasp [Wilson 95%] | on the hand-sized objects | own lifts/ep | distinct objects lifted/ep |
+|---|---|---|---|---|---|
+| A, without the hand-sized objects | 337 | 65/337 = 19% [15, 24] | - | 1.08 | 0.98 |
+| B, with them | 337 | 57/337 = 17% [13, 21] | 31/99 = 31% [23, 41] | 0.95 | 0.85 |
+
+![Success per grasp by object in A and B](figures/handsized_success_by_object.png)
+
+| object | A: lifts/grasps | B: lifts/grasps |
+|---|---|---|
+| metal box | 7/44 | 6/41 |
+| metal cylinder | 15/55 | 1/24 |
+| plastic box | 17/51 | 2/29 |
+| plastic sphere | 7/39 | 2/25 |
+| rubber sphere | 3/47 | 0/33 |
+| wood box | 1/25 | 5/19 |
+| wood tall box | 4/43 | 0/30 |
+| plastic tall cylinder | 11/33 | 10/37 |
+| can (new) | - | 15/30 |
+| bottle (new) | - | 13/23 |
+| box (new) | - | 2/17 |
+| ball (new) | - | 1/29 |
+| the eight old objects | 65/337 = 19% [15, 24] | 26/238 = 11% [8, 16] |
+
+| cause | A | B |
+|---|---|---|
+| success | 65 | 57 |
+| no pinch | 120 | 125 |
+| replan | 67 | 63 |
+| no rise | 19 | 36 |
+| slip | 30 | 24 |
+| director | 20 | 13 |
+| metal box | 12 | 15 |
+| reflex | 4 | 4 |
+
+C, isolated claw grasps (`--planner`, 100 placements each):
+
+| object | planned | lifted [Wilson 95%] |
+|---|---|---|
+| can | 34 | 20 (59%) [42, 74] |
+| bottle | 41 | 26 (63%) [48, 76] |
+| box | 49 | 18 (37%) [25, 51] |
+| ball | 44 | 7 (16%) [8, 29] |
+
+The event rate of B, from 10 recorded episodes, is 94% of 1 s windows eventful, 6% at rest.
+
+**The rule.** B's success per grasp has a lower bound of 13%, not above 20%. B's own lifts per
+episode (0.95) do not exceed A's (1.08). So, as pre-registered, the hand blocks of
+`configs/event_dense.toml` go back to their props without `hand_sized`; the prop stays available.
+
+**Why the old objects fall in B (exploratory, not pre-registered).** In B the eight old objects
+lift 11% [8, 16] of their grasps against 19% [15, 24] in A. The metal cylinder falls from 15/55 to
+1/24, the plastic box from 17/51 to 2/29.
+- Crowding is the likely reason.
+  - A hand block with the prop has 12 free objects in the same reach area (x 0.40-0.62 m). The
+    placement then falls back to its relaxed spacings of 9 and 7 cm between centres.
+  - In the frame strips of B's failed grasps of old objects, a larger hand-sized neighbour, often
+    the lying can or bottle, is under the palm or fingers as the hand comes down. The hand lands on
+    the neighbour and the pinch closes above the small object (rows 4 and 5 of the figure below).
+  - This is a visual reading of about 20 strips, not a count.
+- The old objects' grasps also end less often with the object pushed: at closure 54% had moved more
+  than 1.5 cm in B, against 65% in A. Some of A's lifts come from objects pushed into the hand, and
+  a crowded table leaves less room for that. This is a hint only.
+- The director is not the cause: its failures fall (20 to 13), and its settings are the same in both
+  runs.
+- Layout counts too: with 12 objects the same seeds give other positions, so A and B do not compare
+  object by object, scene by scene.
+
+![Frame strips](figures/handsized_strips.png)
+
+Rows of the figure, every 4th control step of one grasp each, the camera following the object:
+1. a can lifted;
+2. a bottle lifted;
+3. a ball, no rise;
+4. the metal cylinder, no pinch: the hand lands on the lying can beside it;
+5. the plastic box, no pinch: the hand lands on the lying bottle beside it.
+
+**What it means.**
+- The claw lifts hand-sized objects better, alone (can 59%, bottle 63%) and on the table (31%).
+- Adding them to an already full table costs the old objects more than it gains. A version with
+  fewer objects per block (the hand-sized ones replacing some of the small ones) would be a
+  separate, new pre-registration.
+
 ## Pilot of a learned grasp
 
 **Method.** As above:
@@ -156,6 +244,12 @@ for the check.
 
 **Success criterion.** In the C scene the policy lifts at least 60% of the 100 can grasps, and at
 least 20 points more than the scripted claw's isolated rate on the can (run C above).
+
+Run C measured the scripted claw on the can at 59% [42, 74] of 34 planned grasps. That is already
+at the 60% bar, so the binding criterion is the second one: at least 79%.
+- Over 100 policy grasps, the comparison is with the claw's 34; the claw's interval is wide.
+- If the claw is re-measured with more trials before the pilot, the bar moves with it: its rate
+  plus 20 points.
 
 **Go / no-go for the full programme** (8 objects, 80-400 GPU-hours):
 - Go if the criterion is met within the budget.
