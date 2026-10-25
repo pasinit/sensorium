@@ -368,24 +368,30 @@ def ridge_predict(
 
 
 def choose_alphas(
-    x: np.ndarray, y: np.ndarray, groups: np.ndarray, blocks: Sequence[slice]
+    x: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    blocks: Sequence[slice],
+    folds: int = INNER_FOLDS,
 ) -> list[float]:
     """Per block of output columns, the ridge strength (``ALPHA_GRID`` x number of features)
-    with the lowest error in an inner episode-grouped 3-fold."""
+    with the lowest error in an inner episode-grouped ``folds``-fold (3 by default)."""
     d = x.shape[1]
     if len(np.unique(groups)) < 2:
         return [d] * len(blocks)
     err = np.zeros((len(ALPHA_GRID), len(blocks)))
-    for tr, te in episode_folds(groups, INNER_FOLDS):
+    for tr, te in episode_folds(groups, folds):
         paths = ridge_path(x[tr], y[tr], x[te], [m * d for m in ALPHA_GRID])
         for j, block in enumerate(blocks):
             err[:, j] += ((paths[:, :, block] - y[te][:, block]) ** 2).sum(axis=(1, 2))
     return [ALPHA_GRID[int(i)] * d for i in err.argmin(axis=0)]
 
 
-def choose_alpha(x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> float:
+def choose_alpha(
+    x: np.ndarray, y: np.ndarray, groups: np.ndarray, folds: int = INNER_FOLDS
+) -> float:
     """The ridge strength for all output columns of ``y`` together (see ``choose_alphas``)."""
-    return choose_alphas(x, y, groups, [slice(0, y.shape[1])])[0]
+    return choose_alphas(x, y, groups, [slice(0, y.shape[1])], folds)[0]
 
 
 def cross_validated_blocks(

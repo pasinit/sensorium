@@ -1079,6 +1079,269 @@ def mean_sd(values: list[float]) -> str:
     return f"{np.mean(values):.3f} +- {np.std(values):.3f}"
 
 
+# ---------------------------------------------------------------------------------------------
+# post hoc: linear dynamics on the fused sense tokens (design step a)
+
+TOKENS_ARMS: tuple[str, ...] = ("A0", "fix1")
+TOKENS_FEATURES = ("s", "fused", "fused_all")
+"""The state s (the baseline), the fused proprio_body token, and every fused sense token."""
+TOKENS_FOLDS = 5
+
+
+def fit_transitions(arm: str, seed: int, paths: list[Path]) -> dict[str, np.ndarray]:
+    """Every model-step transition of the episodes at ``paths``: each feature of
+    ``TOKENS_FEATURES`` at a step (``<f>``) and at the next (``<f>@next``), the action chunk
+    between them, the arm joints, episode groups and effectors."""
+    rows: dict[str, list[np.ndarray]] = defaultdict(list)
+    lay = layer(arm, seed)
+    for i, p in enumerate(paths):
+        ep = Episode.load(p, privileged=False)
+        stride = model_stride(ep)
+        ends = np.arange(first_end(ep), ep.length - stride, stride)
+        parts = encode_parts(lay, ep, np.append(ends, ends[-1] + stride))
+        for f in TOKENS_FEATURES:
+            rows[f].append(parts[f][:-1])
+            rows[f"{f}@next"].append(parts[f][1:])
+        rows["chunks"].append(chunks_at(lay, ep, ends))
+        rows["q"].append(arm_q(ep, ends))
+        rows["groups"].append(np.full(len(ends), i))
+        rows["effector"].append(np.full(len(ends), effector_of(ep)))
+    return {k: np.concatenate(v) for k, v in rows.items()}
+
+
+def effector_ridges(
+    x: np.ndarray, y: np.ndarray, groups: np.ndarray, eff: np.ndarray
+) -> dict[str, Ridge]:
+    """One ridge map per effector, and a pooled one under ``*`` for an effector not seen in
+    fitting (strengths by ``TOKENS_FOLDS`` episode folds)."""
+    maps = {
+        e: Ridge.fit(x[eff == e], y[eff == e], groups[eff == e], TOKENS_FOLDS)
+        for e in np.unique(eff)
+    }
+    return maps | {"*": Ridge.fit(x, y, groups, TOKENS_FOLDS)}
+
+
+def decode(maps: dict[str, Ridge], x: np.ndarray, eff: np.ndarray) -> np.ndarray:
+    """``x [n, ..., D]`` -> arm joints ``[n, ..., 8]`` with each row's effector map (``eff``
+    ``[n]``; the pooled map for an effector without one)."""
+    out = np.zeros((*x.shape[:-1], len(ARM_JOINTS)))
+    for e in np.unique(eff):
+        rows = eff == e
+        m = maps.get(str(e), maps["*"])
+        out[rows] = m(x[rows].reshape(-1, x.shape[-1])).reshape(out[rows].shape)
+    return out
+
+
+def tokens_dyn(shard: str) -> None:
+    """Design step (a), post hoc: can a linear predictor on the fused tokens beat copy?
+
+    Per encoder of ``TOKENS_ARMS`` and seed, and per feature set of ``TOKENS_FEATURES``: a
+    ridge dynamics head ``x_{t+1} = W [x_t, a_t, 1]`` and per-effector arm decoders, both
+    fitted on the ``fit`` episodes (strength by ``TOKENS_FOLDS`` episode folds); then, on
+    B-plan-0's open-loop starts of both held-out sets, the decoded arm of the rollout (h1 to
+    ``HORIZON``), of the true features (the ceiling) and of the start's features held (feature
+    copy), with the true arm. Saved as ``runs/plan/tokens/<arm>-s<seed>.npz``."""
+    out = ROOT / "tokens"
+    out.mkdir(parents=True, exist_ok=True)
+    jobs = [(a, s) for a in TOKENS_ARMS for s in SEEDS]
+    i, n = (int(x) for x in shard.split("/"))
+    for arm, seed in jobs[i::n]:
+        path = out / f"{arm}-s{seed}.npz"
+        if path.exists():
+            continue
+        logging.info("tokens-dyn: %s-s%d started", arm, seed)
+        fit_ = fit_transitions(arm, seed, fit_paths())
+        g, e = fit_["groups"], fit_["effector"]
+        heads_ = {
+            f: (
+                RidgeDynamics.fit(fit_[f], fit_["chunks"], fit_[f"{f}@next"], g, TOKENS_FOLDS),
+                effector_ridges(fit_[f], fit_["q"], g, e),
+            )
+            for f in TOKENS_FEATURES
+        }
+        del fit_
+        rows: dict[str, list[np.ndarray]] = defaultdict(list)
+        lay = layer(arm, seed)
+        for k, test in enumerate(TEST_SETS):
+            for j, p in enumerate(variety.files(test, "heldout")):
+                ep = Episode.load(p, privileged=False)
+                ends = openloop_ends(ep, k, j)
+                parts = encode_parts(lay, ep, ends.ravel())
+                flat = chunks_at(lay, ep, ends[:, :-1].ravel())
+                chunks = flat.reshape(len(ends), HORIZON, *flat.shape[1:])
+                eff = np.full(len(ends), effector_of(ep))
+                for f, (dyn, dec) in heads_.items():
+                    x = parts[f].reshape(len(ends), HORIZON + 1, -1)
+                    rows[f"{f}/pred"].append(decode(dec, dyn.rollout(x[:, 0], chunks), eff))
+                    rows[f"{f}/ceiling"].append(decode(dec, x[:, 1:], eff))
+                    rows[f"{f}/copy"].append(decode(dec, x[:, 0], eff))
+                rows["q"].append(arm_q(ep, ends.ravel()).reshape(len(ends), HORIZON + 1, -1))
+                rows["groups"].append(np.full(len(ends), k * 1000 + j))
+                rows["set"].append(np.full(len(ends), k))
+        np.savez(path, **{key: np.concatenate(v) for key, v in rows.items()})
+        logging.info("tokens-dyn: %s-s%d done, peak RSS %.0f MB", arm, seed, peak_rss_mb())
+
+
+def horizon_r2(pred: np.ndarray, q: np.ndarray) -> np.ndarray:
+    """``[H]`` R2 of ``pred [n, H, 8]`` (or ``[n, 8]``, held for every horizon) against the
+    arm at each horizon, ``q [n, H, 8]``."""
+    if pred.ndim == 2:
+        pred = np.broadcast_to(pred[:, None], q.shape)
+    return np.array([r2(pred[:, h], q[:, h]) for h in range(q.shape[1])])
+
+
+def tokens_lines(run: dict[str, np.ndarray], test: int) -> dict[str, np.ndarray]:
+    """Per-horizon R2 on one held-out set of every line of a run: per feature set the
+    rollout, the ceiling and the feature copy, and the model-free arm copy."""
+    rows = run["set"] == test
+    q = run["q"][rows]
+    lines = {"arm copy": horizon_r2(q[:, 0], q[:, 1:])}
+    for f in TOKENS_FEATURES:
+        for kind in ("pred", "ceiling", "copy"):
+            lines[f"{f}/{kind}"] = horizon_r2(run[f"{f}/{kind}"][rows], q[:, 1:])
+    return lines
+
+
+def tokens_contrast(runs: list[dict[str, np.ndarray]], f: str, other: str, h: int) -> Contrast:
+    """``R2(f rollout) - R2(other)`` at horizon ``h`` on held-out babble_v2, paired by seed with
+    an episode bootstrap; ``other`` is ``copy`` (the same features held) or ``arm copy``."""
+    rows = runs[0]["set"] == 0
+    q = runs[0]["q"][rows]
+    a = [r[f"{f}/pred"][rows][:, h - 1] for r in runs]
+    b = [r["q"][rows][:, 0] if other == "arm copy" else r[f"{f}/copy"][rows] for r in runs]
+    return r2_contrast_values(a, b, q[:, h], runs[0]["groups"][rows])
+
+
+def tokens_passes(runs: list[dict[str, np.ndarray]], f: str) -> tuple[Contrast, bool, bool]:
+    """The pre-registered bar for one feature set: the contrast of its rollout against the
+    feature copy at ``HORIZON`` on held-out babble_v2, whether the rollout is ahead in every
+    seed, and whether it passes (ahead by more than the MDD, and in every seed)."""
+    c = tokens_contrast(runs, f, "copy", HORIZON)
+    every = all(
+        tokens_lines(r, 0)[f"{f}/pred"][-1] > tokens_lines(r, 0)[f"{f}/copy"][-1] for r in runs
+    )
+    return c, every, bool(c.point > c.mdd and every)
+
+
+def tokens_results() -> dict[str, list[dict[str, np.ndarray]]]:
+    """The saved runs of every encoder of ``TOKENS_ARMS`` (seed order; missing seeds left out)."""
+    results = {}
+    for arm in TOKENS_ARMS:
+        paths = [ROOT / "tokens" / f"{arm}-s{s}.npz" for s in SEEDS]
+        runs = [dict(np.load(p)) for p in paths if p.exists()]
+        if runs:
+            results[arm] = runs
+    return results
+
+
+def tokens_table(results: dict[str, list[dict[str, np.ndarray]]], k: int) -> None:
+    """Per-effector R2 at h1 and h8 of every line on held-out set ``k``."""
+    variety.say(f"\nHeld-out {TEST_SETS[k]} (mean +- sd over seeds)\n")
+    variety.say("| encoder | features | line | h1 | h8 |\n|---|---|---|---|---|")
+    for arm, runs in results.items():
+        lines = [tokens_lines(r, k) for r in runs]
+        for name in lines[0]:
+            f, _, kind = name.partition("/")
+            label = (f, kind) if kind else ("-", f)
+            cells = [mean_sd([ln[name][h] for ln in lines]) for h in (0, HORIZON - 1)]
+            variety.say(f"| {arm} | {label[0]} | {label[1]} | " + " | ".join(cells) + " |")
+
+
+def tokens_reproduction(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
+    """Arm RMS (rad) of s's ceiling and of the model-free arm copy at h1 and h8 on held-out
+    babble_v2, to compare with B-rep-0's open loop (per-effector ceiling, copy)."""
+    variety.say("\nReproduction check against B-rep-0, held-out babble_v2, arm RMS (rad)\n")
+    variety.say("| encoder | line | h1 | h8 |\n|---|---|---|---|")
+    for arm, runs in results.items():
+        for name in ("s/ceiling", "arm copy"):
+            cells = []
+            for h in (1, HORIZON):
+                vals = []
+                for r in runs:
+                    rows = r["set"] == 0
+                    q = r["q"][rows]
+                    pred = q[:, 0] if name == "arm copy" else r[name][rows][:, h - 1]
+                    vals.append(float(rms(pred, q[:, h]).mean()))
+                cells.append(mean_sd(vals))
+            variety.say(f"| {arm} | {name} | " + " | ".join(cells) + " |")
+
+
+def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
+    """The pre-registered bar per encoder and feature set, then the secondary contrasts
+    against the model-free arm copy (held-out babble_v2)."""
+    paired = {arm: runs for arm, runs in results.items() if len(runs) > 1}
+    variety.say("\nPre-registered bar: rollout - feature copy, h8, held-out babble_v2\n")
+    variety.say("| encoder | features | contrast | every seed | passes |\n|---|---|---|---|---|")
+    for arm, runs in paired.items():
+        for f in TOKENS_FEATURES:
+            c, every, ok = tokens_passes(runs, f)
+            yes = {True: "yes", False: "no"}
+            variety.say(f"| {arm} | {f} | {describe(c)} | {yes[every]} | {yes[ok]} |")
+    variety.say("\nSecondary: rollout - model-free arm copy, held-out babble_v2\n")
+    variety.say("| encoder | features | h1 | h8 |\n|---|---|---|---|")
+    for arm, runs in paired.items():
+        for f in TOKENS_FEATURES:
+            cells = [describe(tokens_contrast(runs, f, "arm copy", h)) for h in (1, HORIZON)]
+            variety.say(f"| {arm} | {f} | " + " | ".join(cells) + " |")
+
+
+def tokens_report() -> None:
+    """Tables (per-effector R2 at h1 and h8 of every line, both held-out sets), the
+    pre-registered bar and secondary contrasts, and ``figures/tokens_dyn.png``."""
+    variety.say("\n## Design step (a): linear dynamics on the fused tokens (per-effector R2)\n")
+    results = tokens_results()
+    for k in range(len(TEST_SETS)):
+        tokens_table(results, k)
+    tokens_reproduction(results)
+    tokens_contrasts(results)
+    tokens_figure(results)
+
+
+def tokens_figure(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
+    """``figures/tokens_dyn.png``: per encoder (columns) and held-out set (rows), R2 against
+    horizon of each feature set's rollout (solid), ceiling (dashed) and feature copy (dotted),
+    with the model-free arm copy (grey)."""
+    if not results:
+        return
+    hs = np.arange(1, HORIZON + 1)
+    fig, axes = plt.subplots(
+        len(TEST_SETS),
+        len(results),
+        figsize=(5 * len(results), 3.6 * len(TEST_SETS)),
+        squeeze=False,
+        sharey=True,
+    )
+    for col, (arm, runs) in enumerate(results.items()):
+        for row, test in enumerate(TEST_SETS):
+            ax = axes[row, col]
+            lines = [tokens_lines(r, row) for r in runs]
+            for i, f in enumerate(TOKENS_FEATURES):
+                for kind, ls in (("pred", "-"), ("ceiling", "--"), ("copy", ":")):
+                    v = np.array([ln[f"{f}/{kind}"] for ln in lines])
+                    label = f"{f}: {'rollout' if kind == 'pred' else kind}"
+                    ax.errorbar(
+                        hs,
+                        v.mean(0),
+                        v.std(0),
+                        color=f"C{i}",
+                        ls=ls,
+                        capsize=2,
+                        marker="o" if kind == "pred" else None,
+                        ms=3,
+                        label=label,
+                    )
+            v = np.array([ln["arm copy"] for ln in lines])
+            ax.plot(hs, v.mean(0), color="0.4", lw=2, label="arm copy (model-free)")
+            ax.set(title=f"{arm}, held-out {test}", xlabel="horizon (model steps of 0.2 s)")
+            ax.grid(alpha=0.25)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("arm R² (per effector)")
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=7, frameon=False, loc="lower center", ncol=4)
+    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    save_figure(fig, "tokens_dyn.png")
+
+
 def decoder_report() -> None:
     """The decoder check's table: R2 per encoder, feature and decoder (mean +- sd over seeds)."""
     variety.say("\n## Post hoc: arm decoder R2 (fit on 100 babble_v2 pretraining episodes)\n")
