@@ -207,6 +207,18 @@ def test_goals_are_sharded_by_block_and_resume_from_any_shard_file(tmp_path: Pat
     assert plan.peak_rss_mb() > 0
 
 
+def test_gallery_helpers_tile_rank_and_measure_shrinkage() -> None:
+    plan = load_plan_script()
+    ep = arm_episode(0, steps=200)
+    ends = plan.tiled_ends(ep)
+    assert ends[0, 0] == plan.first_end(ep) and ends.max() <= ep.length - 1
+    assert np.array_equal(ends[1:, 0], ends[:-1, -1])  # each segment starts where the last ended
+    q = np.random.default_rng(0).standard_normal((50, 8)) * 4.0 ** np.arange(8)
+    assert list(plan.top_variance_joints([q[:25], q[25:]], 3)) == [5, 6, 7]
+    true = np.linspace(-1, 1, 21)
+    assert plan.slope(0.25 * true + 3, true) == pytest.approx(0.25)
+
+
 def test_plan_script_fit_openloop_rank_and_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -270,6 +282,11 @@ def test_plan_script_fit_openloop_rank_and_report(
     check = json.loads((tmp_path / "plan/decoder/fix1-s2.json").read_text())
     assert set(check) == {"z", "s"} and set(check["s"]) == {"pooled", "per effector"}
     assert {"train", "cv", "babble", "variety", "alpha"} <= set(check["z"]["pooled"])
+    assert plan.gallery_goal_ids() == [0, 2, 8]  # first goal of babble 0, babble 1, variety 0
+    plan.gallery("openloop")
+    plan.gallery("scatter")
+    for name in ("openloop", "scatter"):
+        assert (tmp_path / f"plan/figures/plan_gallery_{name}.png").exists()
     capsys.readouterr()
     plan.decoder_report()
     assert "| raw proprio window | raw | pooled |" in capsys.readouterr().out
