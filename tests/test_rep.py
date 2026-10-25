@@ -89,6 +89,19 @@ def test_rep_decoder_check_open_loop_and_primary(
     plan.locate_report()
     out = capsys.readouterr().out
     assert "| multi-z | stem |" in out and "token cosine of z" in out
+    assert plan.TOKENS_ARMS == ("A0", rep.FIX1)
+    plan.tokens_dyn("0/1")
+    run = np.load(tmp_path / "plan/tokens/fix1-recon05-s1.npz")
+    assert run["fused_all/pred"].shape == run["s/ceiling"].shape == (64, 8, 8)
+    assert run["fused/copy"].shape == (64, 8) and run["q"].shape == (64, 9, 8)
+    lines = plan.tokens_lines(dict(run), 0)
+    assert lines["arm copy"][0] > lines["arm copy"][-1]  # the arm moves: copy decays
+    capsys.readouterr()
+    plan.tokens_report()
+    out = capsys.readouterr().out
+    assert "Pre-registered bar" in out and "| A0 | fused_all |" in out
+    assert "Reproduction check" in out and "| A0 | s/ceiling |" in out
+    assert (tmp_path / "plan/figures/tokens_dyn.png").exists()
 
 
 def test_rep_trains_and_probes_the_new_arms(

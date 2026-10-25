@@ -26,6 +26,8 @@ and B-fix-0/1's probe battery (``fix_test.py``) at every checkpoint.
     uv run python scripts/rep_test.py report
     uv run python scripts/rep_test.py locate --shard 0/9     # post hoc: where is the arm lost?
     uv run python scripts/rep_test.py locate-report
+    uv run python scripts/rep_test.py tokens-dyn --shard 0/6 # design step (a): fused-token dynamics
+    uv run python scripts/rep_test.py tokens-dyn-report
 """
 
 import argparse
@@ -57,6 +59,9 @@ ARMS: dict[str, dict[str, object]] = {
 """The arms' model options (``ModelConfig``) on fix1's."""
 LOCATE_ARMS = ("A0", FIX1, "multi-z")
 """The encoders of the post hoc locate check (where the arm is lost)."""
+TOKENS_ARMS = ("A0", FIX1)
+"""The encoders of design step (a), linear dynamics on the fused tokens; a later study adds its
+checkpoints to ``plan.ENCODERS`` and here."""
 FIXED_R2 = 0.85
 """The "fixed" bar: mean per-effector R2 of s, on train and on held-out babble_v2."""
 STEP = variety.STEPS
@@ -75,6 +80,7 @@ def configure() -> None:
     plan.OWN = ("A0", FIX1, *ARMS)
     plan.RIDGE = ()
     plan.LOCATE_ARMS = LOCATE_ARMS
+    plan.TOKENS_ARMS = TOKENS_ARMS
     plan.layer.cache_clear()
     plan.heads.cache_clear()
     plan.effector_decoders.cache_clear()
@@ -291,18 +297,30 @@ def report() -> None:
     report_battery()
 
 
+SHARDED = {
+    "encode": lambda shard: fix.encode(shard),
+    "probe": lambda shard: fix.probe(shard),
+    "decoder": lambda shard: plan.decoder(shard),
+    "openloop": lambda shard: plan.openloop(shard),
+    "locate": lambda shard: plan.locate(shard),
+    "tokens-dyn": lambda shard: plan.tokens_dyn(shard),
+}
+"""The commands that take ``--shard`` (looked up at call time, after ``configure``)."""
+WHOLE = {
+    "fit": lambda: plan.fit(),
+    "report": lambda: report(),
+    "locate-report": lambda: plan.locate_report(),
+    "tokens-dyn-report": lambda: plan.tokens_report(),
+}
+"""The commands that run whole."""
+
+
 def main() -> None:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument(
-        "command",
-        choices=(
-            *("train", "encode", "probe", "fit", "decoder", "openloop", "report"),
-            *("locate", "locate-report"),
-        ),
-    )
+    parser.add_argument("command", choices=("train", *SHARDED, *WHOLE))
     parser.add_argument("--arm", choices=ARMS)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--steps", type=int, default=0)
@@ -317,22 +335,10 @@ def main() -> None:
         if args.arm is None:
             parser.error("train needs --arm")
         fix.train_arm(args.arm, args.seed, args.steps, args.workers)
-    elif args.command == "encode":
-        fix.encode(args.shard)
-    elif args.command == "probe":
-        fix.probe(args.shard)
-    elif args.command == "fit":
-        plan.fit()
-    elif args.command == "decoder":
-        plan.decoder(args.shard)
-    elif args.command == "openloop":
-        plan.openloop(args.shard)
-    elif args.command == "locate":
-        plan.locate(args.shard)
-    elif args.command == "locate-report":
-        plan.locate_report()
+    elif args.command in SHARDED:
+        SHARDED[args.command](args.shard)
     else:
-        report()
+        WHOLE[args.command]()
 
 
 if __name__ == "__main__":

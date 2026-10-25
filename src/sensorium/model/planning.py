@@ -26,7 +26,7 @@ import torch
 from sensorium.episode import Episode
 from sensorium.model.data import build, load_episode, spacing
 from sensorium.model.layout import Header
-from sensorium.model.probes import choose_alpha
+from sensorium.model.probes import INNER_FOLDS, choose_alpha
 from sensorium.model.sensory_layer import SensoryLayer, _as_batch
 from sensorium.vision import eval_view
 
@@ -88,7 +88,8 @@ def encode_parts(
     * ``input_last`` ``[n, U]`` and ``input_window`` ``[n, K * U]``: the sense's normalised
       model input (the window's last observation, and all ``K``);
     * ``stem`` ``[n, dim]``: its stem token, before the fusion;
-    * ``fused`` ``[n, dim]``: the same token after the fusion;
+    * ``fused`` ``[n, dim]``: the same token after the fusion; ``fused_all`` ``[n, T * dim]``:
+      every sense token after the fusion, concatenated in sense order (``T`` tokens);
     * ``z`` ``[n, K_s * dim]``: the summary tokens; ``s`` ``[n, K_s * dim]``: the state.
 
     Raises:
@@ -99,14 +100,13 @@ def encode_parts(
     enc = model.encoder
     if sense not in enc.n_tokens or enc.n_tokens[sense] != 1:
         raise ValueError(f"{sense!r} is not a configured one-token sense")
-    seen: dict[str, list[torch.Tensor]] = {"z": [], "stem": [], "fused": []}
+    seen: dict[str, list[torch.Tensor]] = {"z": [], "stem": [], "fused": [], "fused_all": []}
 
     def keep(name: str, value: torch.Tensor) -> None:
         seen[name].append(value.detach())
 
-    slot = model.cfg.summary_tokens + sum(
-        enc.n_tokens[x] for x in enc.senses[: enc.senses.index(sense)]
-    )
+    n_summary = model.cfg.summary_tokens
+    slot = n_summary + sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index(sense)])
     k = model.cfg.substeps
     loaded = load_episode(episode, layer.space, model.senses)
     if np.min(ends) < (k - 1) * spacing(loaded.header.dt):
@@ -123,6 +123,7 @@ def encode_parts(
         enc.projector.register_forward_pre_hook(lambda m, a: keep("z", a[0])),
         enc.stems[sense].register_forward_hook(lambda m, a, o: keep("stem", o)),
         enc.fusion.register_forward_hook(lambda m, a, o: keep("fused", o[:, slot])),
+        enc.fusion.register_forward_hook(lambda m, a, o: keep("fused_all", o[:, n_summary:])),
     ]
     try:
         states = model.embed(_as_batch(arrays, len(ends))).squeeze(1).cpu().numpy()
@@ -195,11 +196,14 @@ class Ridge:
     alpha: float = float("nan")  # the chosen strength (not saved with the weights)
 
     @classmethod
-    def fit(cls, x: np.ndarray, y: np.ndarray, groups: np.ndarray) -> "Ridge":
-        """Fit with the strength chosen by episode-grouped inner folds (``probes.choose_alpha``)."""
+    def fit(
+        cls, x: np.ndarray, y: np.ndarray, groups: np.ndarray, folds: int = INNER_FOLDS
+    ) -> "Ridge":
+        """Fit with the strength chosen by ``folds`` episode-grouped inner folds
+        (``probes.choose_alpha``)."""
         mean, scale = x.mean(0), x.std(0).clip(min=1e-6)
         z = (x - mean) / scale
-        alpha = choose_alpha(z, y, groups)
+        alpha = choose_alpha(z, y, groups, folds)
         bias = y.mean(0)
         w = np.linalg.solve(z.T @ z + alpha * np.eye(z.shape[1]), z.T @ (y - bias))
         return cls(mean, scale, w, bias, alpha)
@@ -217,11 +221,17 @@ class RidgeDynamics:
 
     @classmethod
     def fit(
-        cls, states: np.ndarray, chunks: np.ndarray, nxt: np.ndarray, groups: np.ndarray
+        cls,
+        states: np.ndarray,
+        chunks: np.ndarray,
+        nxt: np.ndarray,
+        groups: np.ndarray,
+        folds: int = INNER_FOLDS,
     ) -> "RidgeDynamics":
-        """Fit on transitions ``(states [n, D], chunks [n, K, U]) -> nxt [n, D]``."""
+        """Fit on transitions ``(states [n, D], chunks [n, K, U]) -> nxt [n, D]`` (strength by
+        ``folds`` episode-grouped inner folds)."""
         x = np.concatenate([states, chunks.reshape(len(chunks), -1)], 1)
-        return cls(Ridge.fit(x, nxt, groups))
+        return cls(Ridge.fit(x, nxt, groups, folds))
 
     def rollout(self, start: np.ndarray, chunks: np.ndarray) -> np.ndarray:
         """``[B, H, D]`` states after 1..H chunks, from ``start [B, D]``."""

@@ -89,9 +89,68 @@ def test_encode_parts_returns_every_stage_of_a_sense(tiny_layer: SensoryLayer) -
     hook.remove()
     slot = 1 + sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index("proprio_body")])
     assert np.allclose(parts["fused"], fused[0][:, slot].numpy(), atol=1e-6)
+    every = fused[0][:, 1:].reshape(5, -1).numpy()  # every sense token, after the summary
+    assert np.allclose(parts["fused_all"], every, atol=1e-6)
+    assert parts["fused_all"].shape == (5, sum(enc.n_tokens.values()) * enc.cfg.dim)
     assert not enc.stems["proprio_body"]._forward_hooks  # every hook is removed
     with pytest.raises(ValueError, match="one-token"):
         planning.encode_parts(tiny_layer, ep, ends[:5], sense="vision")
+
+
+def test_tokens_dyn_helpers_decode_per_effector_and_score_each_horizon() -> None:
+    plan = load_plan_script()
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((200, 6))
+    eff = np.where(np.arange(200) < 100, "hand", "pincer")
+    w = {"hand": rng.standard_normal((6, 8)), "pincer": rng.standard_normal((6, 8))}
+    y = np.stack([x[i] @ w[e] for i, e in enumerate(eff)])
+    groups = np.arange(200) // 10
+    maps = plan.effector_ridges(x, y, groups, eff)
+    assert set(maps) == {"hand", "pincer", "*"}
+    assert np.allclose(plan.decode(maps, x, eff), y, atol=0.05)  # one map per effector
+    seq = np.stack([x, x], 1)  # [n, H, D]: rows keep their effector across horizons
+    assert plan.decode(maps, seq, eff).shape == (200, 2, 8)
+    other = plan.decode(maps, x[:3], np.array(["drone"] * 3))  # unseen: the pooled map
+    assert np.allclose(other, maps["*"](x[:3]))
+    q = rng.standard_normal((50, 3, 8))
+    r2 = plan.horizon_r2(q[:, 0], q)  # a held copy: perfect at the first horizon only
+    assert r2[0] == pytest.approx(1.0) and r2.shape == (3,) and r2[1] < 0.5
+    assert np.allclose(plan.horizon_r2(q, q), 1.0)
+
+
+def test_the_tokens_bar_is_the_model_free_arm_copy() -> None:
+    plan = load_plan_script()
+    rng = np.random.default_rng(2)
+    n, h = 80, plan.HORIZON
+    walk = np.cumsum(rng.standard_normal((n, h + 1, 8)), 1)  # the arm moves: copy decays
+
+    def run(pred: np.ndarray, copy: np.ndarray) -> dict[str, np.ndarray]:
+        out = {"q": walk, "set": np.zeros(n, int), "groups": np.arange(n) // 4}
+        for f in plan.TOKENS_FEATURES:
+            out |= {f"{f}/pred": pred, f"{f}/copy": copy, f"{f}/ceiling": walk[:, 1:]}
+        return out
+
+    near = [
+        run(walk[:, 1:] + 0.01 * rng.standard_normal(walk[:, 1:].shape), walk[:, 0])
+        for _ in range(3)
+    ]
+    c, every, ok = plan.tokens_passes(near, "fused")
+    assert c.point > c.mdd and every and ok  # a near-perfect rollout beats "the arm stays"
+    still = [
+        run(np.broadcast_to(walk[:, :1], walk[:, 1:].shape).copy(), walk[:, -1]) for _ in range(3)
+    ]  # the rollout is the arm copy; the feature copy is perfect at h8
+    c, every, ok = plan.tokens_passes(still, "fused")
+    assert c.point == pytest.approx(0.0) and not every and not ok  # judged by the arm copy only
+
+
+def test_choose_alpha_takes_the_number_of_inner_folds() -> None:
+    from sensorium.model import probes  # noqa: PLC0415
+
+    rng = np.random.default_rng(1)
+    x, y = rng.standard_normal((120, 5)), rng.standard_normal((120, 2))
+    groups = np.arange(120) // 6
+    assert probes.choose_alpha(x, y, groups) == probes.choose_alpha(x, y, groups, 3)
+    assert probes.choose_alpha(x, y, groups, 5) / 5 in probes.ALPHA_GRID
 
 
 def test_token_cosine_is_one_for_copies_and_zero_for_orthogonal_tokens() -> None:
