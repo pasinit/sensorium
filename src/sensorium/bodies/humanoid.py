@@ -45,17 +45,13 @@ slide, hover, and a grasp-lift-drop with a pincer or a power closure with a hand
 """
 
 import math
-import os
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
 
-# Offscreen rendering backend: EGL on Linux GPU boxes, GLFW on macOS. Must be set
-# before mujoco is first imported.
-os.environ.setdefault("MUJOCO_GL", "glfw" if sys.platform == "darwin" else "egl")
-
+# The offscreen rendering backend (MUJOCO_GL) is chosen in sensorium.bodies, which runs before
+# this module and before mujoco is first imported.
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 
