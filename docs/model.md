@@ -2819,12 +2819,19 @@ s, and several summary tokens instead of one.
 | arm | change from fix1 |
 |---|---|
 | `recon-s` | the reconstruction decoder reads s (the projector output) instead of z; same masks and targets |
+| `recon-s-allprop` (1b) | as recon-s, and the proprio reconstruction is scored on **every** channel (hidden and visible) against the clean input |
 | `multi-z` | K = 4 summary tokens; s = the 4 projected tokens concatenated (512-d); reconstruction on z as in fix1 |
 | `recon-s-multi-z` | both |
 
 * **recon-s, one change only.** The decoder reads s, so the projector must keep what the
-  reconstruction needs. A variant that also reconstructs the clean, visible joint angles from s
-  changes the targets too. It is held back, and run only if recon-s fails.
+  reconstruction needs.
+* **recon-s-allprop (1b), two changes**, added at the supervisor's request:
+  * the decoder reads s;
+  * the proprio reconstruction targets are every channel against the clean input, so the visible
+    joint angles must also be decodable from s.
+  * Its contrast with fix1 is **attributed to the pair**, not to either change. Its contrast with
+    recon-s (reported, secondary) isolates the clean-target change.
+  * Masks, pixel targets and the weight are unchanged.
 * **multi-z, K = 4:** one summary token per sense group of this recipe (vision, proprio_body,
   vestibular, proprio_effector). The tie to a group is nominal. Every summary token attends to every
   token, with no attention mask: this tests one bottleneck token against four, not a factorised
@@ -2853,7 +2860,7 @@ s, and several summary tokens instead of one.
   starts. The decoder is now **per effector** (B-plan-0 used one pooled decoder, which the decoder
   check showed hides A0's arm). Also the ceiling (the decoded true state) and copy.
 
-**Primary, per arm against fix1 (three contrasts, each read on its own MDD; no multiplicity
+**Primary, per arm against fix1 (four contrasts, each read on its own MDD; no multiplicity
 correction):**
 
 * The **per-effector R² of s on held-out babble_v2**, arm minus fix1:
@@ -2878,6 +2885,7 @@ correction):**
 **Secondary.**
 
 * The same R² with pooled decoders, on z, on train and on held-out variety.
+* recon-s-allprop - recon-s, the same measure: the clean-target change alone.
 * **multi-z only, capacity against structure:** the R² of the best single projected token (128-d),
   against fix1's s. A 512-d s gives the ridge 4 times the features, so a gain in s alone could be
   capacity.
@@ -2893,6 +2901,8 @@ correction):**
 **Expectation, so it can be wrong.**
 
 * recon-s **improved** and probably fixed. The decoder that keeps proprio in z now acts on s.
+* recon-s-allprop at least as good as recon-s. The visible arm angles are the easiest targets to
+  keep, so the gain is small.
 * multi-z **improved**, but most of the gain in s is capacity: its best single token is near
   fix1's s.
 * recon-s-multi-z is the best of the three.
@@ -2903,9 +2913,9 @@ an arm is fixed.
 
 **Compute.**
 
-* n2-standard-32 spot (128 GB): 9 trainings at once at 2 threads, about 1.5 GB each, plus the frame
-  cache.
-* Training about 45 to 60 min; evaluation about 45 to 60 min; setup about 15 min.
+* n2-standard-32 spot (128 GB): 12 trainings at once (4 arms x 3 seeds) at 2 threads, about
+  1.5 GB each, plus the frame cache (about 45 GB in all), as B-variety-0's 12 at once.
+* Training about 50 to 65 min; evaluation about 50 to 65 min; setup about 15 min.
 * About 2 to 2.5 h; about $1 to $1.50 at an estimated spot price; at most about $4.70 on demand for
   3 h.
 * **Stop rule:** at the 1,000-step checkpoint, if training is slower than 1.5 x the estimate, the VM
