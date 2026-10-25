@@ -1,9 +1,11 @@
 """B-plan-0: the model-side planning pieces and the simulator restore (the latter needs the
 assets; skipped otherwise)."""
 
+import json
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -148,28 +150,59 @@ def test_restore_and_replay_reproduce_the_recording(recorded: Episode) -> None:
     frame = np.abs(observed.rgb[0].astype(float) - recorded.rgb[t0 + 1].astype(float)).mean()
     assert frame < 10.0  # the same scene: appearance, props and layout restored
     assert np.allclose(planning.arm_q(observed, np.array([7]))[0], scene.arm_q(), atol=1e-5)
+    scene.close()
 
 
-def test_plan_script_fit_openloop_rank_and_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def load_plan_script() -> Any:
+    """``scripts/plan_test.py`` as a module (it imports ``variety_test`` from ``scripts/``)."""
     import importlib.util  # noqa: PLC0415
-    import json  # noqa: PLC0415
     import sys  # noqa: PLC0415
-
-    from test_model import privileged_episode  # noqa: PLC0415
-
-    from sensorium.model.pretrain import RunConfig, save_checkpoint  # noqa: PLC0415
 
     scripts = Path(__file__).resolve().parents[1] / "scripts"
     sys.path.insert(0, str(scripts))
     try:
         spec = importlib.util.spec_from_file_location("plan_test_script", scripts / "plan_test.py")
         assert spec is not None and spec.loader is not None
-        plan = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(plan)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
     finally:
         sys.path.remove(str(scripts))
+    return module
+
+
+def test_goals_are_sharded_by_block_and_resume_from_any_shard_file(tmp_path: Path) -> None:
+    plan = load_plan_script()
+    goals = [
+        (test, e, Path(f"humanoid-{block}-seated_babble-00{e}.npz"), t0)
+        for test in ("babble", "variety")
+        for block in ("hand_a", "hand_b", "pincer_a")
+        for e in range(2)
+        for t0 in (10, 40)
+    ]
+    shards = [plan.shard_goals(goals, f"{i}/4") for i in range(4)]
+    ids = [gid for shard in shards for gid, _ in shard]
+    assert sorted(ids) == list(range(len(goals)))  # every goal once, ids unchanged
+    blocks = [{plan.block_of(g) for _, g in shard} for shard in shards]
+    assert all(not (a & b) for i, a in enumerate(blocks) for b in blocks[i + 1 :])
+    for shard in shards:  # one block after the other: a process needs one scene at a time
+        order = [plan.block_of(g) for _, g in shard]
+        assert order == sorted(order)
+    (tmp_path / "0-30.jsonl").write_text(
+        json.dumps({"config": "own/A0/0", "goal": 3, "rms": 0.1}) + "\n" + '{"config": "own/A'
+    )
+    (tmp_path / "5-30.jsonl").write_text(json.dumps({"config": "bar/hold/0", "goal": 7}) + "\n")
+    assert plan.done_keys(tmp_path) == {("own/A0/0", 3), ("bar/hold/0", 7)}
+    assert plan.peak_rss_mb() > 0
+
+
+def test_plan_script_fit_openloop_rank_and_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from test_model import privileged_episode  # noqa: PLC0415
+
+    from sensorium.model.pretrain import RunConfig, save_checkpoint  # noqa: PLC0415
+
+    plan = load_plan_script()
     names: dict[str, list[str]] = {}
     for test, d in (("babble", "babble_v2"), ("variety", "variety")):
         root = tmp_path / "data" / d / "humanoid"
