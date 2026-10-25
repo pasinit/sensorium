@@ -27,7 +27,6 @@ Policies:
     expert   one RP1M trajectory, chosen by the seed.
 """
 
-import os
 import sys
 import time
 import types
@@ -65,8 +64,7 @@ class PianoRecorder:
         # never use (sound is synthesised offline). An empty stand-in avoids
         # requiring the system PortAudio library.
         sys.modules.setdefault("pyaudio", types.ModuleType("pyaudio"))
-        # Offscreen rendering backend: EGL on Linux GPU boxes, GLFW on macOS.
-        os.environ.setdefault("MUJOCO_GL", "glfw" if sys.platform == "darwin" else "egl")
+        # The offscreen rendering backend (MUJOCO_GL) is set by sensorium.bodies on import.
         # Imported here, after the stand-in and backend are set up, on purpose.
         from robopianist import suite  # noqa: PLC0415
 
