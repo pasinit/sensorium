@@ -3140,6 +3140,115 @@ count came out 0, and GNU `xargs -P 0` means unlimited. The cause is GNU `nproc`
 earlier decoder-check VM had the same bug ("decoder processes: 0"). Results are unaffected; later
 scripts count CPUs with `nproc --all`.
 
+### B-rep-0, design step (a): linear dynamics on the fused tokens (post hoc; GCP e2-standard-8 spot)
+
+**Question.** The locate check found the fused sense tokens hold more of the arm than z or s. Can
+a linear predictor on them beat copy at horizon 8? Post hoc, no training: the existing A0 and
+fix1 10,000-step checkpoints, 3 seeds each.
+
+**Method** (`rep_test.py tokens-dyn`). Three feature sets from `encode_parts`:
+
+* (i) s, the baseline;
+* (ii) the fused proprio_body token;
+* (iii) every fused sense token concatenated (`fused_all`, 7 x 128).
+
+For each feature set:
+
+* **Fit**, on every model step of the 100 babble_v2 pretraining episodes, with the strength chosen
+  by 5-fold episode CV on those episodes only:
+  * a ridge dynamics head `x_{t+1} = W [x_t, a_t, 1]`;
+  * per-effector ridge arm decoders on the true features.
+* **Roll out** open loop to h8 from B-plan-0's starts on both held-out sets (8 per episode,
+  1,600 in all), with the true action chunks.
+* **Decode** the arm from:
+  * the rollout;
+  * the true features (the ceiling);
+  * the start's features held (feature copy).
+
+Lines are per-effector arm R² against the true arm at each horizon.
+
+**Pre-registered bar** (in the code PR before any run): (ii) or (iii) beats the **model-free arm
+copy** (`q_{t+h} = q_t`, B-rep-0's copy) at h8 on held-out babble_v2.
+
+* The contrast is paired by seed, with an episode bootstrap.
+* It must be resolved positive (above MDD = 2.8 x combined SE), with the rollout ahead in 3 of 3
+  seeds.
+* The bar is read per encoder; either encoder passing counts.
+
+**Reproduction check.** s's ceiling gives an arm RMS of 0.637 / 0.650 rad (A0) and 0.661 /
+0.670 (fix1) at h1 / h8, and the arm copy 0.083 / 0.443. These match B-rep-0's open loop.
+
+**Results, as pre-registered.**
+
+| encoder | features | rollout h8 | arm copy h8 | rollout - arm copy (combined SE, MDD) | every seed | passes |
+|---|---|---|---|---|---|---|
+| A0 | s | 0.668 +- 0.023 | 0.767 | -0.098 (0.041, 0.116) | no | no |
+| A0 | fused | 0.961 +- 0.005 | 0.767 | +0.195 (0.019, 0.054) | yes | **yes** |
+| A0 | fused_all | 0.975 +- 0.003 | 0.767 | +0.209 (0.019, 0.053) | yes | **yes** |
+| fix1 | s | 0.642 +- 0.014 | 0.767 | -0.125 (0.040, 0.112) | no | no |
+| fix1 | fused | 0.885 +- 0.010 | 0.767 | +0.119 (0.024, 0.066) | yes | **yes** |
+| fix1 | fused_all | 0.903 +- 0.024 | 0.767 | +0.136 (0.028, 0.080) | yes | **yes** |
+
+**(1) The pre-registered bar passed** for the fused body token and for all fused tokens, on both
+encoders. s does not pass.
+
+![Rollout, ceiling and copies against horizon, before the baselines that see the actions](figures/tokens_dyn_prebase.png)
+
+**A red flag in that result.**
+
+* Every rollout beats its own ceiling. For example, A0 fused is 0.961 against 0.918 from decoding
+  the true features, and its R² rises with the horizon.
+* The actions are joint position targets (`docs/data-generation.md`), and the ridge head sees each
+  chunk.
+* So part of the rollout's skill is the arm going where it is commanded. Two model-free baselines
+  that also see the actions were added after the results; they are **not pre-registered**
+  (`rep_test.py tokens-base`).
+
+**The two baselines that see the actions.**
+
+* **Action copy:** the arm at t+h is the last commanded arm target of chunk h. The recorded
+  normalised action is mapped back to radians through the arm actuators' control ranges. There is
+  no fit, and no gravity feed-forward: the recorded target leaves it out.
+* **Arm+action ridge:** a ridge dynamics head on [true arm q_t, the chunk's arm targets], with the
+  same fit episodes and folds, rolled out open loop.
+
+| set | arm copy h1 / h8 | action copy h1 / h8 | arm+action ridge h1 / h8 | best rollout h8 (A0 fused_all) |
+|---|---|---|---|---|
+| held-out babble_v2 | 0.991 / 0.767 | 0.996 / **0.997** | 0.999 / **0.997** | 0.975 +- 0.003 |
+| held-out variety | 0.993 / 0.836 | 0.967 / **0.958** | 0.993 / **0.963** | 0.947 +- 0.007 |
+
+Rollout minus each baseline at h8 on held-out babble_v2 (paired by seed, episode bootstrap;
+added after the results, not pre-registered):
+
+| encoder | features | - action copy | - arm+action ridge |
+|---|---|---|---|
+| A0 | fused | -0.035 (0.006, MDD 0.016), resolved | -0.036 (0.006, MDD 0.016), resolved |
+| A0 | fused_all | -0.021 (0.004, MDD 0.010), resolved | -0.022 (0.004, MDD 0.010), resolved |
+| fix1 | fused | -0.111 (0.016, MDD 0.046), resolved | -0.112 (0.016, MDD 0.045), resolved |
+| fix1 | fused_all | -0.094 (0.022, MDD 0.061), resolved | -0.094 (0.022, MDD 0.061), resolved |
+
+![The same, with the two baselines that see the actions (black)](figures/tokens_dyn.png)
+
+**(2) On these data the arm goes where it is commanded.**
+
+* "The arm at t+h = the commanded target" alone reaches R² 0.997 on held-out babble_v2 and 0.958
+  on variety at h8.
+* A ridge on the true arm and the targets adds nothing on babble_v2 and little on variety.
+* So predicting the arm from the actions is near-trivial, and **every learned state is below
+  "arm = commanded target"**, by resolved margins: 0.02 to 0.04 for A0, 0.09 to 0.11 for fix1.
+* The rollouts' gain over the arm copy and over their own ceiling is mostly the action passed
+  through the linear head.
+
+**(3) What this shows.**
+
+* **The fused tokens keep the arm; s loses it.** A0's fused tokens reach 0.975 at h8, against
+  0.997 for the commanded target. s reaches 0.67.
+* **The arm-goal benchmark cannot show what a world model adds.** The arm reaches its commanded
+  targets, so a goal given as arm joint positions can be reached without any model, by setting
+  the targets to the goal. B-plan-0's closed-loop goals are scored on exactly these arm joint
+  positions (success is final arm RMS under 0.10 rad). A planner that uses a learned model can
+  at best match "targets = goal" on them, not beat it.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
