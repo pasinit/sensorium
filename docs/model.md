@@ -2921,6 +2921,156 @@ an arm is fixed.
 * **Stop rule:** at the 1,000-step checkpoint, if training is slower than 1.5 x the estimate, the VM
   uploads what it has and stops, for re-costing.
 
+### B-rep-0: results (GCP, n2-standard-32 spot, 12 trainings, 3 seeds; `scripts/rep_test.py report`)
+
+**Null result. No arm moves the arm readout of s.**
+
+* recon-s is slightly **worse** than fix1; the other three arms show **no difference**.
+* No arm is **fixed** (per-effector R² of s >= 0.85), and none is **useful for planning** (beats
+  copy at horizon 8).
+* On the probe battery every arm is level with fix1 and above A0.
+
+**Runs.**
+
+* All 12 trainings reached 10,000 steps.
+* Attempt 1 stopped on the stop rule, because of start-up, not training speed. Start-up was about
+  8.7 min from launch to the first logged step (12 processes at once), against the 2 min assumed.
+  The steady training rate was on the estimate.
+* Attempt 2 used a 25 min deadline for 1,000 steps. Timeline (UTC): training 10:05 to 11:04;
+  encode, fit, probe, decoder check and open loop 11:04 to 11:36; report 11:39.
+* Training start-up grows faster than the number of concurrent processes. Launch to the first
+  logged step was:
+  * about 0.4 min with 3 at once (B-fix-1);
+  * 5.6 to 8.7 min with 12 (B-variety-0; here);
+  * about 7 min with 15 (B-fix-0).
+* The likely cause is that every process reads all 791 episode files (header and action length)
+  when it builds its dataset, on a shared disk. The logs have no timestamps inside that window, so
+  this is not confirmed.
+  * **Suggestion, not a change:** store episode lengths once (in the split or an index), so a
+    process does not scan every file.
+  * Stop rules now time the 1,000-step deadline from each run's first logged step, with a separate
+    start-up cap.
+
+**Corrections to the pre-registration.**
+
+* **Model size.** The model has 7.9M parameters, not 2.4M; the reconstruction decoder is about
+  6.5M of it, and A0 without it has 1.4M. multi-z's 132,480 extra parameters are **+1.7%**, not
+  +5%.
+* **multi-z costs about 12% per step.** At equal 12-way load: recon-s 52 seq/s, multi-z 46 seq/s.
+  The end-of-run figures in the training table below were taken under varying load.
+
+**Decoder check** (R², mean +- sd over 3 seeds; A0 and fix1 as in B-plan-0):
+
+| encoder | s, per effector: train | held-out babble_v2 | held-out variety | z, per effector: held-out babble_v2 |
+|---|---|---|---|---|
+| raw proprio window | 1.000 | 1.000 | 1.000 | - |
+| A0 | 0.658 +- 0.021 | 0.622 +- 0.012 | 0.433 +- 0.015 | 0.764 +- 0.017 |
+| fix1 | 0.623 +- 0.006 | 0.594 +- 0.008 | 0.370 +- 0.020 | 0.651 +- 0.011 |
+| recon-s | 0.608 +- 0.002 | 0.576 +- 0.004 | 0.323 +- 0.003 | 0.630 +- 0.007 |
+| recon-s-allprop (1b) | 0.617 +- 0.008 | 0.589 +- 0.006 | 0.363 +- 0.022 | 0.647 +- 0.009 |
+| multi-z | 0.618 +- 0.002 | 0.588 +- 0.003 | 0.340 +- 0.006 | 0.654 +- 0.001 |
+| recon-s-multi-z | 0.609 +- 0.002 | 0.577 +- 0.001 | 0.324 +- 0.005 | 0.628 +- 0.013 |
+
+![Arm-joint R² per encoder: z and s, pooled and per effector](figures/rep_r2.png)
+
+**Primary:** per-effector R² of s, held-out babble_v2, arm - fix1 (paired by seed and episode;
+combined SE, MDD):
+
+| arm | contrast | reading | fixed |
+|---|---|---|---|
+| recon-s | -0.018 (0.004, MDD 0.012) | **worse** | no |
+| recon-s-allprop (1b; attributed to the pair) | -0.005 (0.004, MDD 0.011) | no difference | no |
+| multi-z | -0.006 (0.008, MDD 0.024) | no difference | no |
+| recon-s-multi-z | -0.017 (0.006, MDD 0.018) | no difference | no |
+
+Secondary contrasts:
+
+* **The clean-target change alone** (recon-s-allprop - recon-s) is +0.013 by the R² means, about
+  the size of recon-s's loss. Most of what 1b gains is undoing recon-s's small cost.
+* **Best single projected token against fix1's s:**
+  * multi-z: s3, 0.581, -0.013 (MDD 0.023), no difference;
+  * recon-s-multi-z: s0, 0.572, -0.022 (MDD 0.019), worse.
+
+**The four summary tokens are near-copies, not a per-sense structure.**
+
+* In both multi-z arms, the per-token R² values of s0 to s3 agree to three decimals.
+* Their held-out decoded arms correlate at 0.99994 to 0.99997 with each other, in every seed.
+* They are not identical: the largest difference per row is 0.07 to 0.18 rad. So this is not a
+  slicing bug (one block read four times would give identical predictions).
+* The tokens and their slots are initialised separately (independent draws), so it is not an
+  initialisation tie either.
+* Every summary token attends to every token, with no mask (the nominal tie of the
+  pre-registration). Per-token SIGReg makes each token isotropic, but nothing makes the tokens
+  differ from each other. The training converged to four linear copies of one summary.
+* The 512-d s therefore adds no readable arm over one token. A direct token cosine on a batch is
+  not computed here; it needs a VM.
+
+**Open loop** on held-out babble_v2, per-effector decoder (rad, mean +- sd over seeds):
+
+| arm | ceiling h1 | ceiling h8 | own prediction h1 | own prediction h8 |
+|---|---|---|---|---|
+| A0 | 0.637 +- 0.014 | 0.650 +- 0.016 | 0.697 +- 0.004 | 0.723 +- 0.002 |
+| fix1 | 0.660 +- 0.008 | 0.670 +- 0.008 | 0.689 +- 0.010 | 0.695 +- 0.003 |
+| recon-s | 0.674 +- 0.003 | 0.685 +- 0.004 | 0.688 +- 0.011 | 0.706 +- 0.008 |
+| recon-s-allprop | 0.666 +- 0.005 | 0.677 +- 0.005 | 0.686 +- 0.010 | 0.698 +- 0.010 |
+| multi-z | 0.665 +- 0.002 | 0.674 +- 0.004 | 0.702 +- 0.013 | 0.714 +- 0.013 |
+| recon-s-multi-z | 0.676 +- 0.001 | 0.684 +- 0.002 | 0.702 +- 0.006 | 0.725 +- 0.005 |
+| copy (model-free) | 0.083 | 0.443 | | |
+
+![Open loop against copy, held-out babble_v2](figures/rep_openloop.png)
+
+* **Copy is 0.443 rad at horizon 8 here, 0.375 in B-plan-0.** It is the same model-free baseline
+  on the same starts (`openloop_ends`, `rng([set, episode])`), with no decoder involved. Only the
+  set differs:
+  * B-plan-0 pooled held-out babble_v2 and variety (800 starts each);
+  * this table is held-out babble_v2 only, as pre-registered.
+  * The pooled 0.375 implies about 0.31 rad on variety: the variety arms move less within 1.6 s.
+* **The per-effector ceilings (0.64 to 0.69 rad) are below B-plan-0's pooled ones (0.73 to
+  0.86).** B-plan-0's numbers were for both sets with one pooled decoder. A0 has the lowest
+  ceiling here, as its per-effector R² is the highest.
+* Every arm's prediction stays 0.25 rad or more above copy at horizon 8, and far above it at
+  horizon 1.
+
+**Probe battery** (secondary; 10,000 steps, arm - fix1 / arm - A0, contact AUROCs and outcome
+battery, pre- and post-projector, three sets):
+
+* **Against fix1:** no difference in 45 of 48 cells. The three resolved cells are all recon-s,
+  contact AUROCs, small and negative:
+  * pre -0.013 (held-out babble_v2);
+  * pre -0.017 and post -0.028 (own-pretraining babble_v2).
+* **Against A0:** every arm is above A0 on post-projector contact on every set (+0.08 to +0.12,
+  resolved). It is also above A0 on post-projector outcome in most cells: the B-fix-0/1 gain of
+  reconstruction is kept by every arm.
+* **No arm costs anything elsewhere, and none gains.**
+
+**Training** (reported, not judged; last 500 steps, seed means): next-state MSE 0.245 to 0.261
+(fix1 0.257), with multi-z the lowest. Reconstruction loss is 0.41 for the z-decoded arms and 0.46
+to 0.50 for the s-decoded ones: reading s is harder for the decoder.
+
+![Training curves, 3 seeds per arm](figures/rep_loss.png)
+
+**Expectations against outcome.**
+
+* recon-s improved and probably fixed: **wrong**. It is slightly worse. The projector keeps less of
+  the arm when the decoder reads after it, not more.
+* recon-s-allprop at least as good as recon-s: right, but it only returns to fix1's level.
+* multi-z improved through capacity: **wrong**. The tokens collapse onto copies, so there is no
+  extra capacity to use.
+* No arm useful for planning: right.
+
+**Reading.**
+
+* **Every encoder sits near R² 0.6 on s and 0.63 to 0.76 on z** (per effector, held-out
+  babble_v2), whatever the objective. The raw
+  proprio window, which is part of the model's input, reaches 1.00.
+* Neither moving the reconstruction to s nor widening the summary changes this.
+* The loss of the arm happens **upstream of the summary**: in the proprio stem, in the fusion, or
+  in how the summary pools the tokens. It is not in the projector alone. That is the next thing to
+  locate.
+* The arm-joint normalisation is not the cause. The input statistics stored with the checkpoints
+  give the arm joints stds of 0.5 to 1.8 rad, and the input clip is +-10 std, far outside the joint
+  range.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
