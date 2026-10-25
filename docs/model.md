@@ -2460,12 +2460,18 @@ it has no trained predictor.
 
 ### B-plan-0 results, (a) open-loop prediction
 
-> **Caveat: the primary below measures the decoder more than the predictor.** The ridge decoder
-> reads the arm badly from *any* state: decoding the **true** future state already misses by
-> 0.73 to 0.86 rad, nearly flat from horizon 1 to 8. About half of the pre-registered contrast
-> (-0.124 of -0.256 rad) is that floor, the same at every horizon, and says that A0's states carry
-> less linearly readable arm position (the B-fix-0 finding). Only the excess over the floor
-> (-0.132 rad) is about prediction. The primary is reported as computed and pre-registered.
+> **Caveat: no encoder's state supports an arm readout better than "the arm does not move".**
+> The ridge decoder reads the arm badly from *any* state. Decoding the **true** future state misses
+> by 0.73 to 0.86 rad, flat from horizon 1 to 8. Copying the start's arm misses by 0.07 rad at
+> horizon 1 and 0.38 rad at horizon 8, and the constant mean arm by 1.11 rad. So the decoded arm
+> RMS cannot rank predictors or planners near a useful accuracy.
+>
+> Within that, fix1 beats A0 on both halves of the pre-registered contrast (-0.256 rad):
+> * -0.124 rad is the floor: A0's states carry less linearly readable arm position (the B-fix-0
+>   finding);
+> * -0.132 rad is the excess over the floor, the only part about prediction.
+>
+> The primary is reported as computed and pre-registered.
 
 All numbers are mean +- sd over 3 seeds on the 1,600 starts (8 per held-out episode, 100 babble_v2
 and 100 variety). Arm RMS is over the eight arm joints, in radians. Latent errors are divided by the
@@ -2493,8 +2499,8 @@ new encoding).**
   true arm, not the distance between the two decoded arms (that was not saved and would need the
   rollouts again), so it can be negative.
 * **Model-free baselines on the same starts**, from the episodes' proprio: copy (the start's arm,
-  held) and the constant mean arm of the targets. These are added to the report code and come
-  from its rerun.
+  held) and the constant mean arm of the targets (fitted on these targets, so slightly
+  optimistic).
 
 | predictor | arm | floor h1 | h2 | h4 | h8 | excess h1 | h2 | h4 | h8 |
 |---|---|---|---|---|---|---|---|---|---|
@@ -2504,8 +2510,8 @@ new encoding).**
 | ridge | A0 | 0.844 | 0.851 | 0.856 | 0.863 | -0.074 +- 0.003 | -0.092 +- 0.004 | -0.099 +- 0.008 | -0.102 +- 0.002 |
 | ridge | fix1 | 0.728 | 0.730 | 0.738 | 0.739 | -0.049 +- 0.004 | -0.065 +- 0.006 | -0.081 +- 0.007 | -0.084 +- 0.006 |
 | ridge | MAE | 0.776 | 0.779 | 0.780 | 0.785 | -0.093 +- 0.007 | -0.115 +- 0.008 | -0.124 +- 0.006 | -0.130 +- 0.008 |
-| copy (true arm at the start) | - | COPY1 | COPY2 | COPY4 | COPY8 | | | | |
-| constant mean arm | - | MEAN1 | MEAN2 | MEAN4 | MEAN8 | | | | |
+| copy (true arm at the start) | - | 0.074 | 0.133 | 0.233 | 0.375 | | | | |
+| constant mean arm | - | 1.107 | 1.109 | 1.113 | 1.119 | | | | |
 
 The floor's sd over seeds is 0.009 to 0.029. Paired contrasts fix1 - A0 (by seed and episode, MDD =
 2.8 x combined SE; post hoc):
@@ -2531,10 +2537,21 @@ The floor's sd over seeds is 0.009 to 0.029. Paired contrasts fix1 - A0 (by seed
   the true state does. A linear rollout shrinks the state toward the training mean, inside the
   span the linear decoder was fitted on, so the excess there is not a measure of prediction. The
   small +0.02 rad ridge contrast is not read as fix1 worse.
-* **What none of this shows is prediction quality against a baseline.** A floor of 0.73 to 0.86 rad
-  is large next to the arm's own motion (the hold bar ends 0.30 rad from the goal after 1.6 s; the
-  copy row gives the open-loop equivalent). A test of prediction itself needs a better state-to-arm
-  readout (a nonlinear decoder, or a probe trained on more arm variety), not a new predictor.
+* **No encoder's state supports an arm readout better than copy, at any horizon up to 8.** Even
+  the floor (0.73 to 0.86 rad) is about twice copy's error at horizon 8 (0.38) and ten times it at
+  horizon 1 (0.07). Against the constant mean arm (1.11 rad), the floor removes 24 to 34% of the
+  RMS, that is 42 to 57% of the variance (A0 the least, recon05 and fix1 the most). The arm joints
+  are a model input (proprio), so this is a weak linear readout of an input from the 128-d state.
+* **The readout is poor on both held-out sets**, not only on the new one: horizon-1 floor 0.69
+  (fix1) to 0.84 (A0) rad on babble_v2, the decoder's own distribution, and 0.76 to 0.85 on
+  variety.
+* **Plausibly part of why the planner had nothing to grip.** The goal is a latent state, and the
+  arm position is a small, weakly readable part of it.
+* **Not yet ruled out: the decoder's fit.** It is one ridge map from the post-projector state s to
+  the eight arm joints, pooled over effectors, on the 100 babble_v2 pretraining episodes. Its
+  strength is chosen by the probes' inner folds on globally scaled features, then applied to
+  per-column standardised ones. Train R² against held-out R² decides between the representation
+  and the fit. It needs the states re-encoded, so it is not in this report.
 
 Figures, not committed: `runs/plan/figures/plan_openloop.png` (decoded RMS per horizon) and
 `runs/plan/figures/plan_floor.png` (prediction and floor per arm, with the copy and constant
