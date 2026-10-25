@@ -2791,6 +2791,126 @@ The first run's goal results are a diagnosis only, and are never pooled with the
 never a model input) is no longer rendered. The scene is restored once per goal and rewound for
 every planner. Both are tested to give identical observations and results.
 
+## B-rep-0: can the state s carry the arm? (pre-registered)
+
+**Written before any code or run.** The B-plan-0 decoder check found the weak arm readout is in the
+representation, and the projector drops arm information:
+
+* per effector, s reaches R² 0.59 to 0.65 on held-out babble_v2 against 1.00 for the raw proprio
+  window;
+* z is above s for every encoder.
+
+The planner's cost and every linear readout use s. The supervisor chose two fixes: reconstruct from
+s, and several summary tokens instead of one.
+
+**Recipe:** fix1's (B-fix-1) unless stated:
+
+* cpu_tiny_a0 base, d = 128, V+P;
+* babble_v2 pretraining set (n = 791), 10,000 steps x 16, checkpoints 0, 250, 1,000, 2,500, 5,000
+  and 10,000, seeds 0 to 2;
+* one masked pass (`mae_ratio` 0.75, `mae_proprio_ratio` 0.5), reconstruction weight 0.5, 0.1 x
+  SIGReg.
+
+**Baselines, not retrained:** the A0 (B-variety-0 `jepa-babble`) and fix1 (B-fix-1 `fix1-recon05`)
+10,000-step checkpoints.
+
+**Arms.**
+
+| arm | change from fix1 |
+|---|---|
+| `recon-s` | the reconstruction decoder reads s (the projector output) instead of z; same masks and targets |
+| `multi-z` | K = 4 summary tokens; s = the 4 projected tokens concatenated (512-d); reconstruction on z as in fix1 |
+| `recon-s-multi-z` | both |
+
+* **recon-s, one change only.** The decoder reads s, so the projector must keep what the
+  reconstruction needs. A variant that also reconstructs the clean, visible joint angles from s
+  changes the targets too. It is held back, and run only if recon-s fails.
+* **multi-z, K = 4:** one summary token per sense group of this recipe (vision, proprio_body,
+  vestibular, proprio_effector). The tie to a group is nominal. Every summary token attends to every
+  token, with no attention mask: this tests one bottleneck token against four, not a factorised
+  state.
+  * **State.** One shared projector maps each token; s is the concatenation, 4 x 128 = 512-d. It is
+    one vector because the planner's cost and the linear decoders need one. A set of tokens would
+    also multiply the predictor's attention cost by 16.
+  * **Predictor.** The same width (128), with an input map 512 -> 128 and an output map 128 -> 512.
+    The next-state loss is on the 512-d s.
+  * **SIGReg** is applied per token (128-d each) and averaged over the 4. The statistic then has
+    fix1's dimension and sample count; on 512-d with 128 pooled samples it would be a different,
+    weaker constraint.
+  * **Reconstruction** stays on z. The decoder applies one shared first layer to every token and
+    sums them, a linear map on the concatenated z with tied weights, so its size is unchanged.
+  * **Size.** About +0.13M parameters on the 2.4M model (+5%), from the predictor's two maps and 3
+    extra summary tokens and slots.
+* **K = 1 is today's model**, bit for bit (tested).
+
+**Measures** on every arm and the baselines, at 10,000 steps:
+
+* **The decoder check of B-plan-0:**
+  * ridge arm-joint decoders on s and on z, pooled and per effector;
+  * fitted on every model step of the first 100 babble_v2 pretraining episodes;
+  * R² on train, 5-fold episode-grouped CV, held-out babble_v2 and held-out variety.
+* **Open loop with the own predictor:** decoded arm RMS at horizons 1 to 8 on B-plan-0's 1,600
+  starts. The decoder is now **per effector** (B-plan-0 used one pooled decoder, which the decoder
+  check showed hides A0's arm). Also the ceiling (the decoded true state) and copy.
+
+**Primary, per arm against fix1 (three contrasts, each read on its own MDD; no multiplicity
+correction):**
+
+* The **per-effector R² of s on held-out babble_v2**, arm minus fix1:
+  * paired by seed;
+  * an episode bootstrap of the R² difference (-delta SSE / SST of the set, 300 draws, `rng(0)`);
+  * MDD = 2.8 x combined SE.
+* Read as **improved** (resolved positive), **no difference** or **worse**.
+
+**Two bars, fixed now, before any run, and read separately:**
+
+* **Fixed (readable): mean per-effector R² of s at or above 0.85**, on both train and held-out
+  babble_v2.
+  * This is the bar for "s carries the arm": well above every encoder today (0.59 to 0.65 held-out),
+    near the raw window.
+  * It is not the planning bar. R² 0.85 is an RMS of about 0.43 rad against the 1.11 rad constant,
+    still above copy's 0.375 rad at horizon 8.
+* **Useful for planning:** open-loop own-predictor arm RMS at horizon 8, decoded per effector,
+  **below copy (0.375 rad)** on held-out babble_v2.
+  * This needs a ceiling near R² 0.89 or more, plus a small prediction excess. An arm can be fixed
+    and still not useful.
+
+**Secondary.**
+
+* The same R² with pooled decoders, on z, on train and on held-out variety.
+* **multi-z only, capacity against structure:** the R² of the best single projected token (128-d),
+  against fix1's s. A 512-d s gives the ridge 4 times the features, so a gain in s alone could be
+  capacity.
+* The open-loop excess over the per-effector ceiling, horizons 1 to 8.
+* **The probe battery of B-fix-0/1**, to see whether the fix costs anything elsewhere:
+  * contact AUROCs and the outcome battery, pre- and post-projector;
+  * on held-out babble_v2, own-pretraining babble_v2 and held-out variety;
+  * every checkpoint;
+  * contrasts against fix1 and A0, paired by seed and episode.
+  * For multi-z, post-projector is 512-d (stated with the result).
+* **Reported, not judged:** the next-state loss and SIGReg curves, and training speed (seq/s).
+
+**Expectation, so it can be wrong.**
+
+* recon-s **improved** and probably fixed. The decoder that keeps proprio in z now acts on s.
+* multi-z **improved**, but most of the gain in s is capacity: its best single token is near
+  fix1's s.
+* recon-s-multi-z is the best of the three.
+* No arm is useful for planning: the excess and copy's 0.375 rad leave little room.
+
+**Not part of this study.** The planner retry (B-plan-0, amendment 1) is the follow-up, and only if
+an arm is fixed.
+
+**Compute.**
+
+* n2-standard-32 spot (128 GB): 9 trainings at once at 2 threads, about 1.5 GB each, plus the frame
+  cache.
+* Training about 45 to 60 min; evaluation about 45 to 60 min; setup about 15 min.
+* About 2 to 2.5 h; about $1 to $1.50 at an estimated spot price; at most about $4.70 on demand for
+  3 h.
+* **Stop rule:** at the 1,000-step checkpoint, if training is slower than 1.5 x the estimate, the VM
+  uploads what it has and stops, for re-costing.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
