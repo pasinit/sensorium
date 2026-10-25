@@ -2458,6 +2458,75 @@ it has no trained predictor.
 
 **Compute.** CPU only, spot. The cost and plan are in the brief to the lead, not in the repo.
 
+### B-plan-0: first closed-loop run, a planner failure (post hoc, not the primary)
+
+The first run reached 3,224 goal-configs before a spot preemption (GCP, n2-standard-32). The open-loop
+part (a) is complete. The table covers the 133 goals that every planner and bar finished, described
+post hoc. **No pre-registered contrast is computed on it.**
+
+| planner | success < 0.10 rad | < 0.30 | < 0.50 | median final arm RMS (rad) |
+|---|---|---|---|---|
+| replay the true actions (ceiling) | 1.00 | 1.00 | 1.00 | 0.000 |
+| hold the current targets | 0.045 | 0.50 | 0.65 | 0.30 |
+| random actions (floor) | 0 | 0.02 | 0.13 | 0.71 |
+| own predictors: A0, recon05, fix1 (3 seeds each) | 0 | about 0.01 | about 0.04 | 1.08 to 1.17 |
+| ridge heads: A0, fix1, MAE (3 seeds each) | 0 | 0 to 0.01 | about 0.04 | 1.02 to 1.14 |
+
+**Reading.**
+
+* **Restore is faithful.** Replay reaches every goal (median 0.00015 rad on the 20 gate goals).
+* **Every planner ends further from the goal than random actions**, and far further than holding
+  still.
+* **Cause: the planner exploits model error.** CEM searched the whole range of arm targets in the
+  data, with a wide std. Targets no encoder has seen get the lowest *predicted* latent cost, so
+  the planner drives the arms there.
+* **The primary is uninformative** (0% against 0%), and so is any contrast of success.
+* **Time.** A goal-config took about 44 s per process with 30 processes, the same for the bars
+  (no planning) as for the planners. The time goes into restoring, simulating and rendering, not
+  into planning.
+
+### B-plan-0, amendment 1 (written before any rerun)
+
+**Why.** The planner above fails for every encoder, so the study cannot answer its question. This
+amendment changes **only the planner** and adds a pilot gate. Nothing else changes:
+
+* the goals and arms;
+* the 0.10 rad success rule and the bars;
+* the primary (fix1 - A0 success, own predictors, paired by seed and goal, MDD = 2.8 x combined
+  SE), the secondary contrasts and the open-loop part (a).
+
+The first run's goal results are a diagnosis only, and are never pooled with the rerun.
+
+**Trust region.**
+
+* The planner chooses per-chunk *changes* d_r of the eight arm targets. The targets are
+  x_r = hold + d_1 + ... + d_r.
+* Each component of d_r is bounded by +-sigma_Delta. sigma_Delta is the per-joint std of the change
+  between consecutive chunks' mean arm targets, in the 100 babble_v2 pretraining episodes, per
+  effector.
+* CEM samples d with initial mean 0 and std sigma_Delta, clipped to +-sigma_Delta. The targets are
+  also clipped to the data's range.
+
+**Cost.** ||s_hat_H - g||^2 / ||s_0 - g||^2 + lambda x mean_r ||d_r / sigma_Delta||^2, with
+**lambda = 0.1**, fixed now.
+
+* The latent term is normalised by the start's own distance to the goal, so one lambda fits every
+  encoder.
+* The penalty favours small moves.
+
+**Pilot gate, before the full run.**
+
+* Run the first 40 goals (ids 0 to 39) with own A0 seed 0, own fix1 seed 0, hold and replay.
+* **Pass** if own A0 or own fix1 reaches a **median final arm RMS of at most 0.9 x hold's** on those
+  40 goals.
+* The gate uses the median RMS, not success: at 0.10 rad, hold succeeds on 4.5% of goals, too few to
+  read on 40.
+* If neither passes, the study stops. The planner failure is the result, and there is no full run.
+
+**Not part of the amendment: speed-ups that do not change results.** The right eye (privileged,
+never a model input) is no longer rendered. The scene is restored once per goal and rewound for
+every planner. Both are tested to give identical observations and results.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:

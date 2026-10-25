@@ -596,6 +596,9 @@ def report_goals() -> None:
     variety.say(f"\n## (b) Goal reaching (closed loop)\n\nFidelity gate: {fid}\n")
     table, groups = goal_table()
     n = len(groups)
+    if any(success_family(table, p, a, n) is None for p, a in PLANNERS):
+        diagnosis(table)
+        return
     variety.say(f"| planner | success (< {SUCCESS_RAD} rad), mean +- sd | median final RMS |")
     variety.say("|---|---|---|")
     for predictor, arm in PLANNERS:
@@ -614,6 +617,42 @@ def report_goals() -> None:
         c = contrast_values(a, b, groups) if a is not None and b is not None else None
         variety.say(f"| {label} | {describe(c) if c else '-'} | {reading(c)} |")
     success_figure(table, n)
+
+
+DIAGNOSIS_THRESHOLDS = (0.10, 0.30, 0.50)
+
+
+def diagnosis(table: dict[str, dict[int, float]]) -> None:
+    """Goal reaching with planners incomplete: no primary and no contrast. Instead a post hoc
+    description on the goals that every planner and bar finished: success at a few thresholds
+    and the median final arm RMS (planners: mean +- sd over seeds)."""
+    keys = [f"{p}/{a}/{s}" for p, a in PLANNERS for s in ((0,) if p == "bar" else SEEDS)]
+    sets = [set(table.get(k, {})) for k in keys]
+    common = sorted(set.intersection(*sets)) if all(sets) else []
+    variety.say(
+        "**Incomplete: the pre-registered primary and contrasts are not computed.** Post hoc "
+        f"planner-failure diagnosis on the {len(common)} goals every planner and bar finished "
+        f"(of {max(len(x) for x in sets) if sets else 0} done by some):\n"
+    )
+    head = " | ".join(f"success < {t:.2f}" for t in DIAGNOSIS_THRESHOLDS)
+    variety.say(f"| planner | {head} | median final RMS (rad) |")
+    variety.say("|---|" + "---|" * (len(DIAGNOSIS_THRESHOLDS) + 1))
+    if not common:
+        return
+    for predictor, arm in PLANNERS:
+        seeds = (0,) if predictor == "bar" else SEEDS
+        rms_ = np.array([[table[f"{predictor}/{arm}/{s}"][g] for g in common] for s in seeds])
+        cells = []
+        for t in DIAGNOSIS_THRESHOLDS:
+            rates = (rms_ < t).mean(1)
+            cells.append(
+                f"{rates.mean():.3f}" + (f" +- {rates.std():.3f}" if len(seeds) > 1 else "")
+            )
+        meds = np.median(rms_, 1)
+        med = f"{meds.mean():.2f}" + (
+            f" ({meds.min():.2f}-{meds.max():.2f})" if len(seeds) > 1 else ""
+        )
+        variety.say(f"| {predictor} {arm} | " + " | ".join(cells) + f" | {med} |")
 
 
 def success_figure(table: dict[str, dict[int, float]], n: int) -> None:
