@@ -109,8 +109,26 @@ def test_the_converter_writes_episodes_and_lewms_h5_with_the_same_pixels(tmp_pat
     split = json.loads((out / "split.json").read_text())
     n_clips = sum(length - 19 for length in LENGTHS if length >= 20)
     assert len(split["lewm_clips"]["train"]) + len(split["lewm_clips"]["val"]) == n_clips
-    run("head", str(out / "lewm.h5"), str(out / "sample.h5"), "2")
+    run("select", str(out / "lewm.h5"), str(out / "sample.h5"), "--first", "2")
     with h5py.File(out / "sample.h5", "r") as f:
-        assert f["ep_len"][:].tolist() == list(LENGTHS[:2])
+        assert f["ep_len"][:].tolist() == list(LENGTHS[:2]) and f.attrs["code_commit"] == "abc1234"
+    run("subset", str(src), str(out / "subset.json"), "--count", "2", "--seed", "0")
+    chosen = json.loads((out / "subset.json").read_text())
+    assert chosen == np.sort(np.random.default_rng(0).choice(3, 2, replace=False)).tolist()
+    run("select", str(out / "lewm.h5"), str(out / "sub.h5"), "--episodes", str(out / "subset.json"))
+    run("split", str(src), str(out / "sub_split.json"), "--episodes", str(out / "subset.json"))
+    sub_split = json.loads((out / "sub_split.json").read_text())
+    with h5py.File(out / "sub.h5", "r") as f:
+        sub_lengths = f["ep_len"][:].tolist()
+    assert sub_lengths == [LENGTHS[i] for i in chosen]
+    assert sub_split["lewm_clips"] == {
+        k: [list(c) for c in v] for k, v in pusht.clip_split(sub_lengths).items()
+    }
+    assert all(
+        chosen[e] == src_e
+        for (e, _), (src_e, _) in zip(
+            sub_split["lewm_clips"]["train"], sub_split["source_clips"]["train"], strict=True
+        )
+    )
     run("report", str(src), str(out), str(out / "stats.json"), str(out / "fig"))
     assert (out / "fig" / "pusht_strip_224_vs_64.png").exists()

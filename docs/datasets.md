@@ -52,6 +52,7 @@ source and its terms, all **verified** that day:
 | Our episodes | body `pusht`, dt 0.1 s (the env's 10 Hz step; the model's step is 5 of them), one per source episode: 256 px frames (bilinear from 224), proprio `agent_x`, `agent_y`, `agent_vx`, `agent_vy`, actions `act_vx`, `act_vy` (relative velocity, Box(-1, 1), stored as they are; any outside [-1, 1] clipped and counted in `meta`), no touch, silent audio, `privileged/state` (as in the source) and `privileged/block_pose`. `meta` records the source episode, the code commit and the frame paths |
 | LeWM's copy | the same frames at 64 px, made from our stored episodes with our loader's resize (`pusht.lewm_frames`), in LeWM's HDF5 layout with its own unscaled columns. A full-frame view (`View(size=64, crop=1.0)`) gives our model the identical pixels |
 | Split | LeWM's split is over clips, not episodes: 4 observations frame-skip 5 apart, 90/10, torch generator seed 3072 (`le-wm/train.py`). `split` writes it to JSON as `[episode, start]` clips: observations at `start + 5k` (k < 4), actions `start` to `start + 19`. Our model uses the same clips |
+| Training subset | `subset` draws a fixed list of source episodes (`np.sort(default_rng(0).choice(n, 2000))` for the 2,000 of the B-pusht-0 pre-registration); `select` writes LeWM's 64 px file of those episodes in that order, and `split --episodes` the clip split over them, as LeWM's `train.py` computes it on that file |
 
 The data and the converted episodes stay in cloud storage and under `data/`; none of it goes into
 this repository.
