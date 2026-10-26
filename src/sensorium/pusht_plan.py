@@ -12,8 +12,8 @@ predicted embedding to the goal's. ``SensoryCostModel`` does the same with our l
   here; our layer normalises with its own statistics. The environment gives one observation, so
   the window of ``substeps`` observations repeats it;
 * actions: candidates are z-scored action blocks ``[B, N, H, action_block * 2]``; undone with the
-  evaluator's scaler, divided by the converter's ``action_scale`` (our episodes' units) and placed
-  in our action columns, one chunk per planning step;
+  evaluator's scaler (our episodes store the actions as they are, Box(-1, 1)) and placed in our
+  action columns, one chunk per planning step;
 * cost: ``|s_H - s_goal|^2`` of our own predictor's open-loop rollout from the current state
   (``planning.own_rollout``), as LeWM's ``criterion``.
 
@@ -68,7 +68,6 @@ class SensoryCostModel(torch.nn.Module):
         layer: The trained layer (eval mode is set here).
         header: The header of the training episodes (Push-T's).
         action_scaler: The evaluator's action scaler (``process['action']``).
-        action_scale: The converter's ``action_scale`` (stored actions = raw / scale).
         proprio_scaler: The evaluator's proprio scaler (``process['proprio']``); needed only if
             the layer reads proprio.
     """
@@ -78,7 +77,6 @@ class SensoryCostModel(torch.nn.Module):
         layer: SensoryLayer,
         header: Header,
         action_scaler: Scaler,
-        action_scale: float = 1.0,
         proprio_scaler: Scaler | None = None,
     ) -> None:
         super().__init__()
@@ -86,7 +84,6 @@ class SensoryCostModel(torch.nn.Module):
         self.model = layer.model.eval()
         self.header = header
         self.action_scaler = action_scaler
-        self.action_scale = action_scale
         self.proprio_scaler = proprio_scaler
         self.senses = self.model.senses
         self.uses_proprio = any(s != "vision" for s in self.senses)
@@ -119,7 +116,7 @@ class SensoryCostModel(torch.nn.Module):
         m, h, flat = candidates.shape
         a = len(self.header.action_names)
         raw = self.action_scaler.inverse_transform(as_numpy(candidates).reshape(-1, a))
-        ours = np.clip(raw / self.action_scale, -1.0, 1.0).reshape(m, h, flat // a, a)
+        ours = np.clip(raw, -1.0, 1.0).reshape(m, h, flat // a, a)  # as stored
         return union_actions(self.layer, self.header, ours.astype(np.float32))
 
     def observation(

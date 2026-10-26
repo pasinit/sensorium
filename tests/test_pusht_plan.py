@@ -69,7 +69,7 @@ def layer_for(senses: tuple[str, ...], ep: Episode, tmp_path: object) -> Sensory
 
 def test_frames64_is_the_training_pipeline() -> None:
     arrays = source()
-    ep = pusht.to_episode(0, arrays, 1.0)
+    ep = pusht.to_episode(0, arrays)
     assert np.array_equal(frames64(arrays["pixels"]), pusht.lewm_frames(ep))
     with pytest.raises(ValueError, match="224"):
         frames64(arrays["pixels"][:, :64])
@@ -80,9 +80,9 @@ def test_encode_matches_the_trained_layers_states(
     senses: tuple[str, ...], tmp_path: object
 ) -> None:
     arrays = source()
-    ep = pusht.to_episode(0, arrays, 1.0)
+    ep = pusht.to_episode(0, arrays)
     layer = layer_for(senses, ep, tmp_path)
-    cost = SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), 1.0, Affine(0.0, 1.0))
+    cost = SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), Affine(0.0, 1.0))
     ends = np.array([4, 9, 17])
     got = cost.encode(arrays["pixels"][ends], arrays["proprio"][ends]).numpy()
     want = states_at(layer, ep, ends)  # the episode path (constant proprio: the same window)
@@ -91,10 +91,10 @@ def test_encode_matches_the_trained_layers_states(
 
 def test_candidates_become_our_action_chunks_and_costs(tmp_path: object) -> None:
     arrays = source()
-    ep = pusht.to_episode(0, arrays, 2.0)
+    ep = pusht.to_episode(0, arrays)
     layer = layer_for(("vision",), ep, tmp_path)
     scaler = Affine(0.1, 0.5)
-    cost = SensoryCostModel(layer, header_of(ep), scaler, action_scale=2.0)
+    cost = SensoryCostModel(layer, header_of(ep), scaler)
     rng = np.random.default_rng(1)
     b, n, h = 2, 3, 5
     cand = torch.as_tensor(rng.normal(0, 1, (b, n, h, 10)), dtype=torch.float32)
@@ -102,7 +102,7 @@ def test_candidates_become_our_action_chunks_and_costs(tmp_path: object) -> None
     assert chunks.shape == (b * n, h, 5, layer.space.size("action"))
     raw = cand.numpy().reshape(b * n, h, 5, 2) * 0.5 + 0.1
     cols = layer.space.columns(header_of(ep))
-    assert np.allclose(chunks[..., cols.dst["action"]], np.clip(raw / 2.0, -1, 1), atol=1e-6)
+    assert np.allclose(chunks[..., cols.dst["action"]], np.clip(raw, -1, 1), atol=1e-6)
     frames = arrays["pixels"][[3, 8]]
     goals = arrays["pixels"][[20, 25]]
     info = {  # as the solver passes it: every entry repeated over the candidates, a history of 1
@@ -121,7 +121,7 @@ def test_candidates_become_our_action_chunks_and_costs(tmp_path: object) -> None
 
 
 def test_a_proprio_layer_needs_the_evaluators_proprio_scaler(tmp_path: object) -> None:
-    ep = pusht.to_episode(0, source(), 1.0)
+    ep = pusht.to_episode(0, source())
     layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
     with pytest.raises(ValueError, match="proprio scaler"):
         SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0))

@@ -142,15 +142,12 @@ def our_cost_model(run: str, process: dict[str, ZScore]) -> object:
     """Our layer of ``runs/pusht/runs/<run>/ckpt-<STEPS>.pt`` as a cost model."""
     import pusht_test as train_script  # noqa: PLC0415 (scripts/ is on sys.path)
 
-    from sensorium.episode import Episode  # noqa: PLC0415
     from sensorium.model.pretrain import load_layer  # noqa: PLC0415
     from sensorium.pusht_plan import SensoryCostModel  # noqa: PLC0415
 
     layer = load_layer(ROOT / "runs" / run / f"ckpt-{train_script.STEPS}.pt")
-    first = train_script.subset_paths()[0]
-    scale = float(Episode.load(first, privileged=False).meta["action_scale"])  # the converter's
     return SensoryCostModel(
-        layer, train_script.push_t_header(), process["action"], scale, process["proprio"]
+        layer, train_script.push_t_header(), process["action"], process["proprio"]
     )
 
 
