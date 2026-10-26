@@ -2035,3 +2035,66 @@ def test_recon_proprio_all_scores_every_channel_against_the_clean_input(
     assert not torch.equal(losses["hidden"], losses["all"])
     with pytest.raises(ValueError, match="recon_proprio"):
         replace(TINY, recon_proprio="visible")
+
+
+def test_skip_tokens_starts_as_the_model_without_it_and_learns(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    batch = batch_of(episodes, space, check_senses(V_P))
+    cfg = replace(TINY, senses=V_P, recon_weight=0.5)
+    torch.manual_seed(0)
+    base = SensoryModel(cfg, space)
+    torch.manual_seed(0)
+    skip = SensoryModel(replace(cfg, skip_tokens=True), space)
+    shared = base.state_dict()
+    assert all(torch.equal(shared[k], v) for k, v in skip.state_dict().items() if k in shared)
+    n = sum(skip.encoder.n_tokens.values())
+    extra = count_parameters(skip)["total"] - count_parameters(base)["total"]
+    assert extra == n * cfg.dim * cfg.dim + cfg.dim  # one linear map, all sense tokens -> z
+    torch.manual_seed(1)
+    a = base(batch)
+    torch.manual_seed(1)
+    b = skip(batch)
+    assert torch.equal(a["loss"], b["loss"])  # step 0 is the same model
+    b["loss"].backward()
+    assert skip.encoder.skip_weight.grad is not None
+    assert float(skip.encoder.skip_weight.grad.abs().sum()) > 0  # and it learns
+
+
+def test_skip_tokens_adds_the_present_sense_tokens_to_the_summary(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    batch = batch_of(episodes, space, check_senses(V_P))
+    model = SensoryModel(replace(TINY, senses=V_P, skip_tokens=True), space).eval()
+    enc = model.encoder
+    with torch.no_grad():
+        enc.skip_weight.normal_()
+        enc.skip_bias.normal_()
+        fused: list[Tensor] = []
+        hook = enc.fusion.register_forward_hook(lambda m, a, o: fused.append(o.detach()))
+        gone = {**batch, "present": batch["present"].clone()}
+        gone["present"][:, enc.senses.index("vestibular")] = False
+        z = enc.summary_token(gone)
+        hook.remove()
+        b, t = batch["action"].shape[:2]
+        tokens = fused[0][:, 1:].clone()
+        slot = sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index("vestibular")])
+        tokens[:, slot] = 0.0  # an absent sense's token is left out
+        want = fused[0][:, 0] + tokens.flatten(1) @ enc.skip_weight.T + enc.skip_bias
+        assert torch.allclose(z, want.view(b, t, -1), atol=1e-5)
+
+
+def test_skip_projector_adds_the_summary_to_the_projection(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    batch = batch_of(episodes, space, check_senses(V_P))
+    model = SensoryModel(replace(TINY, senses=V_P, skip_projector=True), space).eval()
+    with torch.no_grad():
+        z = model.encoder.summary_token(batch)
+        b, t = z.shape[:2]
+        plain = model.encoder.projector(z.flatten(0, 1)).view(b, t, -1)
+        assert torch.allclose(model.embed(batch), plain + z, atol=1e-6)
+    assert (
+        count_parameters(model)["total"]
+        == count_parameters(SensoryModel(replace(TINY, senses=V_P), space))["total"]
+    )

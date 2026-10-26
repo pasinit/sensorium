@@ -1009,7 +1009,7 @@ def decoder(shard: str) -> None:
 
 
 LOCATE_ARMS: tuple[str, ...] = ("A0", "fix1")
-LOCATE_FEATURES = ("input_last", "input_window", "stem", "fused", "z", "s")
+LOCATE_FEATURES = ("input_last", "input_window", "stem", "fused", "fused_all", "z", "s")
 
 
 def token_cosine(x: np.ndarray, k: int) -> float:
@@ -1366,11 +1366,13 @@ def tokens_reproduction(results: dict[str, list[dict[str, np.ndarray]]]) -> None
             variety.say(f"| {arm} | {name} | " + " | ".join(cells) + " |")
 
 
-def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
-    """The pre-registered bar per encoder and feature set (against the model-free arm copy),
-    then the secondary contrasts against the feature copy (held-out babble_v2)."""
+def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]], judged: bool = True) -> None:
+    """The bar per encoder and feature set (against the model-free arm copy; pre-registered for
+    design step (a), reported but not judged when ``judged`` is false), then the secondary
+    contrasts against the feature copy (held-out babble_v2)."""
     paired = {arm: runs for arm, runs in results.items() if len(runs) > 1}
-    variety.say("\nPre-registered bar: rollout - arm copy (model-free), h8, held-out babble_v2\n")
+    title = "Pre-registered bar" if judged else "Not judged here"
+    variety.say(f"\n{title}: rollout - arm copy (model-free), h8, held-out babble_v2\n")
     variety.say("| encoder | features | contrast | every seed | passes |\n|---|---|---|---|---|")
     for arm, runs in paired.items():
         for f in TOKENS_FEATURES:
@@ -1396,15 +1398,15 @@ def tokens_contrasts(results: dict[str, list[dict[str, np.ndarray]]]) -> None:
             variety.say(f"| {arm} | {f} | " + " | ".join(cells) + " |")
 
 
-def tokens_report() -> None:
-    """Tables (per-effector R2 at h1 and h8 of every line, both held-out sets), the
-    pre-registered bar and secondary contrasts, and ``figures/tokens_dyn.png``."""
+def tokens_report(judged: bool = True) -> None:
+    """Tables (per-effector R2 at h1 and h8 of every line, both held-out sets), the bar (judged
+    only for design step (a)) and secondary contrasts, and ``figures/tokens_dyn.png``."""
     variety.say("\n## Design step (a): linear dynamics on the fused tokens (per-effector R2)\n")
     results = tokens_results()
     for k in range(len(TEST_SETS)):
         tokens_table(results, k)
     tokens_reproduction(results)
-    tokens_contrasts(results)
+    tokens_contrasts(results, judged)
     tokens_figure(results)
 
 
