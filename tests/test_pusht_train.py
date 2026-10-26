@@ -49,7 +49,7 @@ def synthetic(index: int, steps: int, seed: int) -> Episode:
         "proprio": np.concatenate([xy, rng.normal(0, 1, (steps, 2))], 1),
         "state": rng.normal(0, 1, (steps, 7)),
     }
-    return pusht.to_episode(index, arrays, action_scale=1.0)
+    return pusht.to_episode(index, arrays)
 
 
 def test_our_sequences_end_on_lewms_clip_frames(plan: Any) -> None:
