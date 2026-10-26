@@ -14,10 +14,12 @@ extra (``h5py``, ``hdf5plugin``) and, for ``clip_split``, the ``model`` extra (t
 An episode of body ``pusht`` (10 Hz, ``DT``) holds:
 - ``rgb``: the frames upscaled to 256 px (``IMAGE_SIZE``);
 - ``proprio``: the agent's position and velocity (``PROPRIO_NAMES``);
-- ``action``: the commanded velocity divided by ``action_scale``, so that it lies in [-1, 1];
+- ``action``: the agent's relative velocity command, Box(-1, 1), stored as it is (values outside
+  [-1, 1], if any, are clipped and counted in ``meta``); LeWM's copy keeps them raw;
 - no touch and silent audio, so a loader sees vision and proprio only;
-- ``privileged/state``: the full state (``STATE_NAMES``), for goal states in planning; never model
-  input.
+- ``privileged/state``: the full state (``STATE_NAMES``) exactly as in the source, for the
+  planner's goal states, and ``privileged/block_pose`` (block x, y, angle) for the pose probe; never
+  model input.
 
 LeWM reads the same frames at 64 px (``lewm_frames``: the full stored frame resized as
 ``sensorium.vision.resize`` does), so with a full-frame view both models see identical pixels.
@@ -43,7 +45,7 @@ SOURCE = "huggingface.co/datasets/quentinll/lewm-pusht (pusht_expert_train.h5, M
 BODY = "pusht"
 DT = 0.1  # s: Push-T's 10 Hz control
 PROPRIO_NAMES = ["agent_x", "agent_y", "agent_vx", "agent_vy"]  # workspace px and px/s
-ACTION_NAMES = ["agent_vx_cmd", "agent_vy_cmd"]
+ACTION_NAMES = ["act_vx", "act_vy"]  # relative velocity, Box(-1, 1)
 STATE_NAMES = ["agent_x", "agent_y", "block_x", "block_y", "block_angle", "agent_vx", "agent_vy"]
 SOURCE_SIZE = 224
 LEWM_SIZE = 64
@@ -85,23 +87,25 @@ def upscale(pixels: np.ndarray) -> np.ndarray:
     )
 
 
-def to_episode(
-    index: int, arrays: dict[str, np.ndarray], action_scale: float, revision: str = ""
-) -> Episode:
-    """One source episode as a sensorium ``Episode``.
+FRAMES_PATH = "pusht.upscale (PIL bilinear 224 -> 256), H.264 (Episode.save)"
+LEWM_PATH = "pusht.lewm_frames: sensorium.vision.resize(decoded 256 px frames, 64), full frame"
+
+
+def to_episode(index: int, arrays: dict[str, np.ndarray], commit: str = "") -> Episode:
+    """One source episode as a sensorium ``Episode``; ``commit`` is the converter's code version.
 
     Raises:
-        ValueError: if the scaled actions leave [-1, 1] or a column is malformed.
+        ValueError: if a column is malformed.
     """
     pixels = arrays["pixels"]
     t = len(pixels)
     if pixels.shape[1:] != (SOURCE_SIZE, SOURCE_SIZE, 3):
         raise ValueError(f"pixels: want [T, {SOURCE_SIZE}, {SOURCE_SIZE}, 3], got {pixels.shape}")
-    action = np.asarray(arrays["action"], dtype=np.float32).reshape(t, -1) / np.float32(
-        action_scale
-    )
-    if action.shape[1] != len(ACTION_NAMES) or np.abs(action).max(initial=0.0) > 1.0 + 1e-6:
-        raise ValueError(f"action: {action.shape}, max |a| {np.abs(action).max():.3f} after scale")
+    action = np.asarray(arrays["action"], dtype=np.float32).reshape(t, -1)
+    if action.shape[1] != len(ACTION_NAMES):
+        raise ValueError(f"action: want [T, {len(ACTION_NAMES)}], got {action.shape}")
+    clipped = int((np.abs(action) > 1.0).sum())
+    state = np.asarray(arrays["state"], dtype=np.float32).reshape(t, len(STATE_NAMES))
     episode = Episode(
         body=BODY,
         dt=DT,
@@ -114,17 +118,19 @@ def to_episode(
         proprio_names=list(PROPRIO_NAMES),
         touch_names=[],
         action_names=list(ACTION_NAMES),
-        privileged={
-            "state": np.asarray(arrays["state"], dtype=np.float32).reshape(t, len(STATE_NAMES))
-        },
+        privileged={"state": state, "block_pose": state[:, 2:5].copy()},
         text=[""] * t,
         meta={
             "source": SOURCE,
-            "source_revision": revision,
             "source_episode": index,
             "licence": "MIT",
-            "action_scale": action_scale,
+            "code_commit": commit,
+            "frames": FRAMES_PATH,
+            "lewm_frames": LEWM_PATH,
+            "action": "relative velocity, Box(-1, 1)",
+            "actions_clipped": clipped,
             "state_names": STATE_NAMES,
+            "block_pose_names": STATE_NAMES[2:5],
             "senses": ["vision", "proprio"],
         },
     )
@@ -178,8 +184,11 @@ def clip_split(
     }
 
 
-def write_lewm_h5(path: Path, episodes: Iterator[dict[str, np.ndarray]]) -> int:
-    """Write ``episodes`` (``COLUMNS`` arrays, pixels at 64 px) in stable-worldmodel's HDF5 layout.
+def write_lewm_h5(
+    path: Path, episodes: Iterator[dict[str, np.ndarray]], attrs: dict[str, str] | None = None
+) -> int:
+    """Write ``episodes`` (``COLUMNS`` arrays, pixels at 64 px) in stable-worldmodel's HDF5 layout,
+    with ``attrs`` as file attributes (provenance).
 
     Returns:
         The number of episodes written.
@@ -187,6 +196,7 @@ def write_lewm_h5(path: Path, episodes: Iterator[dict[str, np.ndarray]]) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     count, offset = 0, 0
     with h5py.File(path, "w") as out:
+        out.attrs.update(attrs or {})
         for arrays in episodes:
             t = len(arrays["pixels"])
             for name in COLUMNS:

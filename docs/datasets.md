@@ -49,9 +49,9 @@ source and its terms, all **verified** that day:
 | Licence | MIT (dataset card), code MIT. Push-T comes from Diffusion Policy (arXiv 2303.04137) |
 | Content | 18,685 expert episodes, 2,336,736 steps (125 on average), 10 Hz, from the file's header; the paper says 20,000 episodes of about 196 steps. Decompressed 46.3 GB, `pixels` behind a plugin compression filter. Stable-worldmodel's HDF5 layout: `pixels` (224 x 224 RGB), `action` (2-D agent velocity command), `proprio` (agent x, y, vx, vy), `state` (agent position, block position and angle, agent velocity), `ep_len`, `ep_offset` |
 | Converter | `scripts/pusht_convert.py`, `sensorium.pusht`; needs `--extra pusht` (h5py, hdf5plugin) |
-| Our episodes | body `pusht`, one per source episode: 256 px frames (bilinear from 224), the 4 proprio channels, actions over `action_scale` (largest abs value, at least 1), no touch, silent audio, `privileged/state` |
+| Our episodes | body `pusht`, dt 0.1 s (the env's 10 Hz step; the model's step is 5 of them), one per source episode: 256 px frames (bilinear from 224), proprio `agent_x`, `agent_y`, `agent_vx`, `agent_vy`, actions `act_vx`, `act_vy` (relative velocity, Box(-1, 1), stored as they are; any outside [-1, 1] clipped and counted in `meta`), no touch, silent audio, `privileged/state` (as in the source) and `privileged/block_pose`. `meta` records the source episode, the code commit and the frame paths |
 | LeWM's copy | the same frames at 64 px, made from our stored episodes with our loader's resize (`pusht.lewm_frames`), in LeWM's HDF5 layout with its own unscaled columns. A full-frame view (`View(size=64, crop=1.0)`) gives our model the identical pixels |
-| Split | LeWM's split is over clips, not episodes: 4 observations frame-skip 5 apart, 90/10, torch generator seed 3072 (`le-wm/train.py`). `split` writes it, and an episode-level 90/10 split, to JSON |
+| Split | LeWM's split is over clips, not episodes: 4 observations frame-skip 5 apart, 90/10, torch generator seed 3072 (`le-wm/train.py`). `split` writes it to JSON as `[episode, start]` clips: observations at `start + 5k` (k < 4), actions `start` to `start + 19`. Our model uses the same clips |
 
 The data and the converted episodes stay in cloud storage and under `data/`; none of it goes into
 this repository.

@@ -33,23 +33,26 @@ def make_source(path: Path, lengths: tuple[int, ...] = LENGTHS, action_max: floa
 
 def test_an_episode_has_vision_proprio_and_actions_and_no_touch_or_audio(tmp_path: Path) -> None:
     src = tmp_path / "src.h5"
-    make_source(src, action_max=2.0)
+    make_source(src, action_max=1.2)
     with h5py.File(src, "r") as f:
         arrays = pusht.read_episode(f, 1)
-    ep = pusht.to_episode(1, arrays, action_scale=2.0)
+    ep = pusht.to_episode(1, arrays, commit="abc1234")
     t = LENGTHS[1]
     assert ep.body == "pusht" and ep.dt == pytest.approx(0.1) and ep.length == t
     assert ep.rgb.shape == (t, 256, 256, 3)
     assert ep.proprio_names == pusht.PROPRIO_NAMES and ep.action_names == pusht.ACTION_NAMES
     assert ep.touch.shape == (t, 0) and ep.audio_logmel.shape == (t, 0) and not ep.audio.any()
-    np.testing.assert_allclose(ep.action, arrays["action"] / 2.0, rtol=1e-6)
-    np.testing.assert_allclose(ep.privileged["state"], arrays["state"])
+    np.testing.assert_allclose(ep.action, np.clip(arrays["action"], -1, 1))  # stored as they are
+    assert ep.meta["actions_clipped"] == int((np.abs(arrays["action"]) > 1).sum()) > 0
+    np.testing.assert_array_equal(ep.privileged["state"], arrays["state"])
+    np.testing.assert_array_equal(ep.privileged["block_pose"], arrays["state"][:, 2:5])
     assert ep.meta["source_episode"] == 1 and ep.meta["licence"] == "MIT"
+    assert ep.meta["code_commit"] == "abc1234" and "resize" in str(ep.meta["lewm_frames"])
     ep.save(tmp_path / "ep.npz")
     back = Episode.load(tmp_path / "ep.npz")
     assert back.rgb.shape == ep.rgb.shape and np.abs(back.rgb.astype(int) - ep.rgb).mean() < 8
     with pytest.raises(ValueError, match="action"):
-        pusht.to_episode(1, arrays, action_scale=1.0)  # actions up to 2 do not fit [-1, 1]
+        pusht.to_episode(1, {**arrays, "action": arrays["action"][:, :1]})
 
 
 def test_the_clip_split_is_torchs_random_split_of_stable_worldmodels_clips() -> None:
@@ -82,14 +85,21 @@ def test_the_converter_writes_episodes_and_lewms_h5_with_the_same_pixels(tmp_pat
     info = json.loads((out / "stats.json").read_text())
     assert info["episodes"] == 3 and info["lengths"] == list(LENGTHS)
     for shard in ("0/2", "1/2"):
-        run("episodes", str(src), str(out), "--scale", str(info["action_scale"]), "--shard", shard)
+        run("episodes", str(src), str(out), "--shard", shard, "--commit", "abc1234")
     files = sorted((out / "pusht").glob("*.npz"))
     assert [f.name for f in files] == ["pusht-00000.npz", "pusht-00001.npz", "pusht-00002.npz"]
     for shard in ("0/2", "1/2"):
         run("lewm", str(src), str(out), str(out / f"part{shard[0]}.h5"), "--shard", shard)
-    run("merge", str(out / "lewm.h5"), str(out / "part0.h5"), str(out / "part1.h5"))
+    run(
+        "merge",
+        str(out / "lewm.h5"),
+        str(out / "part0.h5"),
+        str(out / "part1.h5"),
+        "--commit",
+        "abc1234",
+    )
     with h5py.File(out / "lewm.h5", "r") as f, h5py.File(src, "r") as s:
-        assert f["ep_len"][:].tolist() == list(LENGTHS)
+        assert f["ep_len"][:].tolist() == list(LENGTHS) and f.attrs["code_commit"] == "abc1234"
         assert f["pixels"].shape == (sum(LENGTHS), 64, 64, 3)
         np.testing.assert_array_equal(f["action"][:], s["action"][:])  # LeWM sees its own units
         for index, path in enumerate(files):
@@ -97,8 +107,10 @@ def test_the_converter_writes_episodes_and_lewms_h5_with_the_same_pixels(tmp_pat
             np.testing.assert_array_equal(pusht.read_episode(f, index)["pixels"], ours)
     run("split", str(src), str(out / "split.json"))
     split = json.loads((out / "split.json").read_text())
-    assert sorted(split["episodes"]["train"] + split["episodes"]["val"]) == [0, 1, 2]
     n_clips = sum(length - 19 for length in LENGTHS if length >= 20)
     assert len(split["lewm_clips"]["train"]) + len(split["lewm_clips"]["val"]) == n_clips
+    run("head", str(out / "lewm.h5"), str(out / "sample.h5"), "2")
+    with h5py.File(out / "sample.h5", "r") as f:
+        assert f["ep_len"][:].tolist() == list(LENGTHS[:2])
     run("report", str(src), str(out), str(out / "stats.json"), str(out / "fig"))
     assert (out / "fig" / "pusht_strip_224_vs_64.png").exists()
