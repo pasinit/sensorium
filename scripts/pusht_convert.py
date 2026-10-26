@@ -5,8 +5,9 @@ Usage (``<src>`` is ``pusht_expert_train.h5`` from ``quentinll/lewm-pusht``, aft
     uv run python scripts/pusht_convert.py episodes <src> <out_dir> [--shard I/N] [--commit C]
     uv run python scripts/pusht_convert.py lewm <src> <out_dir> <part.h5> [--shard I/N]
     uv run python scripts/pusht_convert.py merge <dst.h5> <part.h5> ... [--commit C]
-    uv run python scripts/pusht_convert.py split <src> <split.json>
-    uv run python scripts/pusht_convert.py head <src.h5> <dst.h5> <n>
+    uv run python scripts/pusht_convert.py subset <src> <subset.json> [--count 2000] [--seed 0]
+    uv run python scripts/pusht_convert.py split <src> <split.json> [--episodes subset.json]
+    uv run python scripts/pusht_convert.py select <h5> <dst.h5> [--episodes subset.json] [--first N]
     uv run python scripts/pusht_convert.py report <src> <out_dir> <stats.json> <fig_dir>
 
 - ``stats``: episode lengths and the ranges of action, proprio and state (no pixels read), and the
@@ -20,7 +21,12 @@ Usage (``<src>`` is ``pusht_expert_train.h5`` from ``quentinll/lewm-pusht``, aft
 - ``split``: LeWM's train/validation clips (``pusht.clip_split``) as JSON. A clip is
   ``[episode, start]``: its observations are steps ``start, start + 5, start + 10, start + 15`` and
   its actions steps ``start`` to ``start + 19`` (a span of 20).
-- ``head``: the first ``n`` episodes of an HDF5 file in the same layout (a sample).
+- ``subset``: a fixed training subset, ``np.sort(np.random.default_rng(seed).choice(n, count,
+  replace=False))`` over the file's episodes, as a JSON list of source episode indices.
+- ``split --episodes``: the clip split over the subset's episodes in that order (what LeWM computes
+  on a file of just those); ``lewm_clips`` index them by position, ``source_clips`` by source index.
+- ``select``: an HDF5 file of the listed episodes in that order (``--episodes``), or of the first
+  ``N`` (a sample); attributes kept.
 - ``report``: a length histogram, a 224 vs 64 px frame strip of three episodes, and a markdown
   table of counts and ranges.
 """
@@ -138,13 +144,34 @@ def merge(dst: Path, parts: list[Path], commit: str) -> None:
     print(f"merged {pusht.write_lewm_h5(dst, items(), attrs)} episodes into {dst}", flush=True)
 
 
-def split(src: Path, out: Path) -> None:
-    """Write LeWM's clip split (``[episode, start]`` lists, see the module docstring)."""
+def read_subset(path: Path | None, n: int) -> list[int]:
+    """Source episode indices from a ``subset`` JSON file, or all ``n``."""
+    return list(range(n)) if path is None else [int(i) for i in json.loads(path.read_text())]
+
+
+def subset(src: Path, out: Path, count: int, seed: int) -> None:
+    """Write ``count`` source episode indices: ``np.sort(default_rng(seed).choice(n, count))``."""
     with h5py.File(src, "r") as f:
-        lengths = pusht.episode_index(f)[0].tolist()
-    clips = pusht.clip_split(lengths)
+        n = len(pusht.episode_index(f)[0])
+    chosen = np.sort(np.random.default_rng(seed).choice(n, count, replace=False))
+    out.write_text(json.dumps([int(i) for i in chosen]))
+    print(f"{count} of {n} episodes (seed {seed}) into {out}")
+
+
+def split(src: Path, out: Path, episodes: Path | None) -> None:
+    """Write LeWM's clip split over the file's episodes, or a subset in its order.
+
+    ``lewm_clips`` index episodes by position in that order (what LeWM computes on a file holding
+    just those episodes); ``source_clips`` are the same clips by source episode index.
+    """
+    with h5py.File(src, "r") as f:
+        all_lengths = pusht.episode_index(f)[0]
+    order = read_subset(episodes, len(all_lengths))
+    clips = pusht.clip_split(all_lengths[order].tolist())
     result = {
+        "episodes": order,
         "lewm_clips": {k: [list(c) for c in v] for k, v in clips.items()},
+        "source_clips": {k: [[order[e], s] for e, s in v] for k, v in clips.items()},
         "lewm_clip_settings": {
             "num_steps": pusht.LEWM_NUM_STEPS,
             "frameskip": pusht.LEWM_FRAMESKIP,
@@ -157,10 +184,14 @@ def split(src: Path, out: Path) -> None:
     print(f"clips train {len(clips['train'])} val {len(clips['val'])}")
 
 
-def head(src: Path, dst: Path, n: int) -> None:
-    """Copy the first ``n`` episodes of ``src`` into ``dst`` (same layout)."""
+def select(src: Path, dst: Path, episodes: Path | None, first: int | None) -> None:
+    """Copy episodes of ``src`` into ``dst`` (same layout, attributes kept): those listed in
+    ``episodes`` in that order, or the first ``first``."""
     with h5py.File(src, "r") as f:
-        count = pusht.write_lewm_h5(dst, (pusht.read_episode(f, i) for i in range(n)))
+        n = len(pusht.episode_index(f)[0])
+        order = read_subset(episodes, n)[:first] if first else read_subset(episodes, n)
+        attrs = {k: str(v) for k, v in f.attrs.items()}
+        count = pusht.write_lewm_h5(dst, (pusht.read_episode(f, i) for i in order), attrs)
     print(f"{count} episodes into {dst}", flush=True)
 
 
@@ -228,13 +259,20 @@ def main() -> None:
     p.add_argument("dst", type=Path)
     p.add_argument("parts", type=Path, nargs="+")
     p.add_argument("--commit", default="")
+    p = sub.add_parser("subset")
+    p.add_argument("src", type=Path)
+    p.add_argument("out", type=Path)
+    p.add_argument("--count", type=int, default=2000)
+    p.add_argument("--seed", type=int, default=0)
     p = sub.add_parser("split")
     p.add_argument("src", type=Path)
     p.add_argument("out", type=Path)
-    p = sub.add_parser("head")
+    p.add_argument("--episodes", type=Path, default=None)
+    p = sub.add_parser("select")
     p.add_argument("src", type=Path)
     p.add_argument("dst", type=Path)
-    p.add_argument("n", type=int)
+    p.add_argument("--episodes", type=Path, default=None)
+    p.add_argument("--first", type=int, default=None)
     p = sub.add_parser("report")
     p.add_argument("src", type=Path)
     p.add_argument("out_dir", type=Path)
@@ -249,10 +287,12 @@ def main() -> None:
         lewm(args.src, args.out_dir, args.part, args.shard)
     elif args.command == "merge":
         merge(args.dst, args.parts, args.commit)
+    elif args.command == "subset":
+        subset(args.src, args.out, args.count, args.seed)
     elif args.command == "split":
-        split(args.src, args.out)
-    elif args.command == "head":
-        head(args.src, args.dst, args.n)
+        split(args.src, args.out, args.episodes)
+    elif args.command == "select":
+        select(args.src, args.dst, args.episodes, args.first)
     else:
         report(args.src, args.out_dir, args.stats, args.fig_dir)
 
