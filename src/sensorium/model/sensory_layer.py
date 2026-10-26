@@ -92,6 +92,11 @@ class ModelConfig:
         recon_proprio: ``hidden`` (the default: the proprio reconstruction is scored on the
             channels the mask hid) or ``all`` (B-rep-0 arm 1b: on every proprio channel, hidden
             and visible, against the clean input).
+        skip_tokens: B-skip-0: ``z = summary + W [fused sense tokens] + b``, the fusion's sense
+            tokens (absent senses zeroed) concatenated and mapped linearly onto the summary.
+            ``W`` and ``b`` start at zero (no random draw, so every other parameter initialises
+            as without the option and step 0 is the same model).
+        skip_projector: B-skip-0: ``s = projector(z) + z`` (a residual around the projector).
         summary_tokens: Summary tokens ``K`` of the fusion (default 1). With ``K > 1`` every
             token is projected by the shared projector and the state is their concatenation
             (``K * dim``); the predictor maps it to ``dim`` and back, SIGReg is applied per token
@@ -158,6 +163,8 @@ class ModelConfig:
     recon_source: str = "z"
     recon_proprio: str = "hidden"
     summary_tokens: int = 1
+    skip_tokens: bool = False
+    skip_projector: bool = False
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -243,6 +250,10 @@ class StateEncoder(nn.Module):
         self.projector = nn.Sequential(
             nn.Linear(d, d), nn.BatchNorm1d(d), nn.GELU(), nn.Linear(d, d)
         )
+        if cfg.skip_tokens:  # zeros, no random draw: the other parameters are unchanged
+            n = sum(self.n_tokens.values())
+            self.skip_weight = nn.Parameter(torch.zeros(k * d, n * d))
+            self.skip_bias = nn.Parameter(torch.zeros(k * d))
 
     def _tokens(self, sense: str) -> int:
         c = self.cfg
@@ -332,14 +343,21 @@ class StateEncoder(nn.Module):
         valid = [torch.ones(b * t, k, dtype=torch.bool, device=keep.device)]
         valid += [keep[:, i : i + 1].expand(-1, n) for i, n in enumerate(self.n_tokens.values())]
         x = torch.cat(tokens, 1) + self.slot
-        mask = torch.cat(valid, 1)[:, None, None, :]
-        return self.fusion(x, mask=mask)[:, :k].reshape(b, t, -1)
+        valid_all = torch.cat(valid, 1)
+        fused = self.fusion(x, mask=valid_all[:, None, None, :])
+        z = fused[:, :k].reshape(b * t, -1)
+        if self.cfg.skip_tokens:
+            sense = (fused[:, k:] * valid_all[:, k:, None]).flatten(1)  # absent senses zeroed
+            z = z + sense @ self.skip_weight.T + self.skip_bias
+        return z.reshape(b, t, -1)
 
     def project(self, summary: Tensor) -> Tensor:
         """Projector output ``[B, T, K * dim]`` of summary tokens ``[B, T, K * dim]`` (the
-        state): the shared projector applied to every token."""
+        state): the shared projector applied to every token (plus the summary itself with
+        ``skip_projector``)."""
         b, t = summary.shape[:2]
-        return self.projector(summary.reshape(-1, self.cfg.dim)).view(b, t, -1)
+        s = self.projector(summary.reshape(-1, self.cfg.dim)).view(b, t, -1)
+        return s + summary if self.cfg.skip_projector else s
 
 
 def surprise_weights(kind: str, err: Tensor, batch: Mapping[str, Tensor]) -> Tensor:
