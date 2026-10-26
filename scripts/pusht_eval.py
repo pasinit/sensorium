@@ -5,13 +5,19 @@ World evaluator and CEM solver (0.1.1), as le-wm's ``eval.py`` (``8edfeb3``) run
 repeats ``eval.py``'s steps (pair draw, scalers, World, policy, ``evaluate``) with any model:
 
 * ``ours:<arm>-s<seed>``: our layer through ``sensorium.pusht_plan.SensoryCostModel``;
-* ``lewm:<checkpoint name>``: a LeWM object checkpoint (``swm.wm.utils.load_pretrained``), its
-  frames through our 64 px pipeline then ImageNet normalisation, as LeWM-tiny was trained.
+* ``lewm:<run>``: a LeWM-tiny run's final weights (``<run>/weights_epoch_final.pt``, through
+  ``swm.wm.utils.load_pretrained``), its frames through our 64 px pipeline then ImageNet
+  normalisation, as LeWM-tiny was trained;
+* ``lewm224:<HF repo>``: LeWM's published checkpoint with le-wm ``eval.py``'s own 224 px transform:
+  the validation anchor. le-wm's ``eval.py`` cannot run on CPU (it moves the model to CUDA), so
+  the anchor runs here; it also checks that this script reproduces ``eval.py``.
 
-LeWM's published 224 px checkpoint is validated with le-wm's own ``eval.py``, unmodified.
+LeWM's configs instantiate le-wm's modules (``jepa.JEPA``), so le-wm's directory (``LEWM_DIR``,
+``/root/le-wm`` on the VM) is put on ``sys.path`` before a LeWM model is loaded.
 
     python scripts/pusht_eval.py plan ours:a0-pix-s0 --pairs 200 --seed 43
     python scripts/pusht_eval.py plan lewm:lewm-tiny-s0 --pairs 50 --seed 42
+    python scripts/pusht_eval.py plan lewm224:quentinll/lewm-pusht --pairs 50 --seed 42
     python scripts/pusht_eval.py pose ours:a0-pix-s0
     python scripts/pusht_eval.py report
 
@@ -151,6 +157,39 @@ def our_cost_model(run: str, process: dict[str, ZScore]) -> object:
     )
 
 
+LEWM_DIR = Path("/root/le-wm")
+
+
+def load_lewm(kind: str, name: str) -> object:
+    """A LeWM model: a LeWM-tiny run's final weights (``lewm``) or a HF checkpoint
+    (``lewm224``), in eval mode without gradients."""
+    import os  # noqa: PLC0415
+
+    import stable_worldmodel as swm  # noqa: PLC0415
+
+    sys.path.insert(0, os.environ.get("LEWM_DIR", str(LEWM_DIR)))
+    ref = f"{name}/weights_epoch_final.pt" if kind == "lewm" else name
+    model = swm.wm.utils.load_pretrained(ref).eval()
+    model.requires_grad_(False)
+    model.interpolate_pos_encoding = True
+    return model
+
+
+def lewm224_transform() -> Callable[[object], object]:
+    """le-wm ``eval.py``'s ``img_transform`` at 224 px (the published checkpoint's input)."""
+    import torch  # noqa: PLC0415
+    from torchvision.transforms import v2 as transforms  # noqa: PLC0415
+
+    return transforms.Compose(
+        [
+            transforms.ToImage(),
+            transforms.ToDtype(torch.float32, scale=True),
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            transforms.Resize(size=224),
+        ]
+    )
+
+
 def lewm_transform() -> Callable[[object], object]:
     """LeWM-tiny's frames: our 64 px pipeline, then le-wm's ImageNet normalisation."""
     import torch  # noqa: PLC0415
@@ -180,7 +219,7 @@ def plan(model: str, pairs: int, seed: int) -> Path:
     import torch  # noqa: PLC0415
 
     kind, name = model.split(":", 1)
-    out = EVAL / f"{kind}-{name}-{pairs}-{seed}.json"
+    out = EVAL / f"{kind}-{name.replace('/', '_')}-{pairs}-{seed}.json"
     if out.exists():
         return out
     dataset = swm.data.HDF5Dataset(DATASET, keys_to_cache=["action", "proprio", "state"])
@@ -202,10 +241,9 @@ def plan(model: str, pairs: int, seed: int) -> Path:
     if kind == "ours":
         cost_model, transform = our_cost_model(name, process), {}
     else:
-        cost_model = swm.wm.utils.load_pretrained(name).eval()
-        cost_model.requires_grad_(False)
-        cost_model.interpolate_pos_encoding = True
-        transform = {"pixels": lewm_transform(), "goal": lewm_transform()}
+        cost_model = load_lewm(kind, name)
+        make = lewm_transform if kind == "lewm" else lewm224_transform
+        transform = {"pixels": make(), "goal": make()}
     solver = swm.solver.CEMSolver(model=cost_model, device="cpu", seed=seed, **CEM)
     policy = swm.policy.WorldModelPolicy(
         solver=solver, config=swm.PlanConfig(**PLAN), process=process, transform=transform
@@ -294,12 +332,11 @@ def our_pose_features(run: str) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
 def lewm_pose_features(name: str) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
     """``(projected embedding, CLS token)`` of a LeWM checkpoint at given steps of an episode
     (its 64 px frames, as it was trained)."""
-    import stable_worldmodel as swm  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
     from sensorium import pusht  # noqa: PLC0415
 
-    model = swm.wm.utils.load_pretrained(name).eval()
+    model = load_lewm("lewm", name)
     mean = torch.tensor(IMAGENET_MEAN)[:, None, None]
     std = torch.tensor(IMAGENET_STD)[:, None, None]
 

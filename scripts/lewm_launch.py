@@ -12,6 +12,11 @@ Everything after ``--run-seed`` goes to LeWM's Hydra command line unchanged.
 LeWM logs its losses only to Weights & Biases; with that off its Lightning ``Trainer`` gets no
 logger. The launcher gives it a ``CSVLogger`` (``lewm_logs/<run>/``, every 50 steps), so every
 seed's loss curves are kept, as for our arms.
+
+LeWM saves its weights at the end of each epoch. B-pusht-0 stops at a step budget, inside an
+epoch, so the launcher also saves them when training ends (``weights_final.pt``, beside LeWM's
+per-epoch files), and logs a checksum of the initial weights when training starts (the seeds must
+differ).
 """
 
 import random
@@ -55,10 +60,31 @@ def with_csv_logger(name: str) -> None:
     pl.Trainer.__init__ = patched  # type: ignore[method-assign]
 
 
+def checksum(model: torch.nn.Module) -> float:
+    """A checksum of a model's parameters (their sum of absolute values)."""
+    return float(sum(p.detach().abs().sum() for p in model.parameters()))
+
+
+def with_final_save() -> None:
+    """Make LeWM's checkpoint callback also log the initial weights' checksum at the start and
+    save ``weights_final.pt`` at the end of training."""
+    import utils  # noqa: PLC0415 (le-wm's utils.py, next to this file on the VM)
+
+    def on_train_start(self: object, trainer: object, pl_module: object) -> None:
+        print(f"initial weights checksum {checksum(pl_module.model):.6f}", flush=True)  # type: ignore[attr-defined]  # noqa: T201
+
+    def on_train_end(self: object, trainer: object, pl_module: object) -> None:
+        self._save(pl_module.model, "final")  # type: ignore[attr-defined]
+
+    utils.SaveCkptCallback.on_train_start = on_train_start
+    utils.SaveCkptCallback.on_train_end = on_train_end
+
+
 def main() -> None:
     """Seed everything, then hand over to LeWM's Hydra entry point."""
     seed, rest = split_seed(sys.argv[1:])
     with_csv_logger(run_name(rest))
+    with_final_save()
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
