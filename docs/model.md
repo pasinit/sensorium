@@ -3249,6 +3249,120 @@ added after the results, not pre-registered):
   positions (success is final arm RMS under 0.10 rad). A planner that uses a learned model can
   at best match "targets = goal" on them, not beat it.
 
+## B-skip-0: do skip connections let s keep the arm? (pre-registered; results)
+
+**A representation test, not a planning test.** Two skip connections were added as options
+(`scripts/skip_test.py`). The arms use fix1's recipe (B-rep-0's data and schedule: babble_v2,
+10,000 steps x 16, seeds 0 to 2):
+
+* **skip-z** (`model.skip_tokens`): `z = summary + W [fused sense tokens] + b`.
+  * W and b start at zero, created without a random draw, so step 0 is fix1.
+  * One 896 -> 128 map: 114,816 parameters, +1.5% on 7.9M.
+* **skip-proj** (`model.skip_projector`): `s = projector(z) + z`. No new parameters.
+* **skip-both:** both.
+
+Controls, not retrained: fix1 and A0 at 10,000 steps.
+
+**Pre-registered (in the code PR, before any run).**
+
+* **Primary:** the per-effector arm R² of s on held-out babble_v2 (decoder-check protocol). Each
+  skip arm minus fix1, paired by seed with an episode bootstrap, MDD = 2.8 x combined SE.
+  * **"Keeps the arm"** if the gain is above the MDD and positive in each of the 3 seeds.
+  * Also reported: the fraction closed of the gap from fix1's s to fix1's fused-sense-token
+    ceiling (the locate check's `fused_all`).
+* **Secondary, not judged:**
+  * the locate stages;
+  * the ridge open loop on s and on the fused tokens, against the arm and action copies;
+  * the probe battery;
+  * the training curves;
+  * the sense reliance of s.
+* **Out of scope:** arm-goal planning success, which can be solved without a model (design
+  step (a)).
+
+**Run.** GCP n2-standard-32 spot, 9 trainings at once. Timeline (UTC):
+
+* training 09:15 to 10:10;
+* evaluation 10:10 to 10:42;
+* done at 10:44.
+
+All stop rules passed (timed per job from its own output).
+
+### B-skip-0: results
+
+**(1) Pre-registered result: no arm improves s.** All three are within +-0.004 of fix1, with MDDs
+of 0.018 to 0.028. None keeps the arm, and none closes any of the gap.
+
+| arm | per-effector R² of s, held-out babble_v2 | arm - fix1 (combined SE, MDD) | positive in every seed | keeps the arm | gap closed |
+|---|---|---|---|---|---|
+| fix1 (control) | 0.594 +- 0.008 | - | - | - | - |
+| skip-z | 0.590 +- 0.011 | -0.004 (0.007, 0.018) | no | **no** | -0.02 |
+| skip-proj | 0.590 +- 0.000 | -0.003 (0.007, 0.018) | no | **no** | -0.02 |
+| skip-both | 0.593 +- 0.007 | -0.001 (0.010, 0.028) | no | **no** | 0.00 |
+
+The gap is from fix1's s (0.594) to fix1's fused sense tokens (0.817, the same protocol).
+
+![Decoder check: z and s, pooled and per effector](figures/skip_r2.png)
+
+**(2) Reading.**
+
+* Architectural shortcuts alone do not keep the arm in s.
+  * A direct linear path from the fused tokens (which hold 0.82 of the arm) into z does not carry
+    it through to s.
+  * Neither does a residual around the projector.
+* *Interpretation, not tested here:* the loss of the arm in s looks driven by the objective (what
+  next-state prediction and SIGReg reward in s), not by a lack of capacity or of a path.
+
+**(3) Secondaries.**
+
+* **Locate stages** (per effector, held-out babble_v2):
+
+  | encoder | stem | fused | fused_all | z | s |
+  |---|---|---|---|---|---|
+  | fix1 | 0.912 | 0.789 | 0.817 | 0.651 | 0.594 |
+  | skip-z | 0.905 | 0.800 | 0.790 | **0.672** | 0.590 |
+  | skip-proj | 0.897 | 0.751 | 0.792 | 0.624 | 0.590 |
+  | skip-both | 0.896 | 0.747 | 0.736 | 0.630 | 0.593 |
+
+  * skip-z raises z slightly (0.651 to 0.672), but s does not move.
+  * skip-proj and skip-both lose a little at the fused body token and at z. Their s is unchanged.
+* **skip-both is unstable on all fused tokens.**
+  * The locate check's CV R² of its `fused_all` is -0.14 +- 0.84, from one seed's folds.
+  * Its held-out `fused_all` is lower and more variable (0.736 +- 0.048).
+  * The fused-token rollout's margin over the arm copy does not resolve for skip-both `fused_all`
+    (+0.051, MDD 0.165). It resolves for every other arm and feature set.
+* **Ridge open loop** (held-out babble_v2, h8):
+  * s stays below the arm copy for every arm (-0.13 to -0.14, resolved), as for fix1.
+  * The fused-token rollouts stay below "arm = commanded target", by -0.10 to -0.18, resolved.
+  * The skips change neither by much.
+* **Probe battery** against fix1 (contact AUROCs, outcome battery; pre and post; three sets).
+  Mostly level, with these resolved cells:
+  * skip-both post-projector contact: +0.034 on held-out babble_v2, +0.025 on own-pretraining
+    babble_v2, +0.026 on held-out variety;
+  * skip-proj: post contact +0.019 (variety), and pre contact -0.033 (own-pretraining).
+  * Every arm stays above A0 on post-projector contact (+0.10 to +0.15, resolved).
+* **Sense reliance of s** (how far removing a sense moves s; held-out babble_v2):
+
+  | encoder | proprio_body | proprio_effector | vestibular | vision |
+  |---|---|---|---|---|
+  | A0 | 0.669 +- 0.018 | 0.693 +- 0.046 | 0.058 +- 0.004 | 0.109 +- 0.043 |
+  | fix1 | 0.289 +- 0.010 | 0.724 +- 0.005 | 0.048 +- 0.001 | 0.064 +- 0.012 |
+  | skip-z | 0.241 +- 0.008 | 0.644 +- 0.003 | 0.064 +- 0.017 | **0.217 +- 0.036** |
+  | skip-proj | 0.242 +- 0.009 | 0.732 +- 0.017 | 0.049 +- 0.002 | 0.048 +- 0.001 |
+  | skip-both | 0.274 +- 0.020 | 0.745 +- 0.010 | 0.079 +- 0.018 | **0.819 +- 0.451** |
+
+  * skip-z's s uses vision more than fix1's (0.22 against 0.06). s did not become proprio-only.
+  * skip-both's 0.82 +- 0.45 comes from one outlier seed. It matches the `fused_all` instability
+    above.
+* **Training** (reported, not judged):
+  * skip-proj and skip-both start with a higher next-state loss (about 0.75 against 0.5 at the
+    first log) and end slightly higher (0.278 and 0.273 against fix1's 0.257, last 500 steps).
+  * Their effective rank of s stays higher (about 47 against about 40).
+  * SIGReg and reconstruction curves overlap fix1's.
+  * Throughput was 62 seq/s under 9-way load. fix1's 82 seq/s was measured under 3-way load, so
+    the two are not comparable.
+
+![Training curves, every seed (5-point moving average)](figures/skip_loss.png)
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
