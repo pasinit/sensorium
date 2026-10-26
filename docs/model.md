@@ -3363,6 +3363,128 @@ The gap is from fix1's s (0.594) to fix1's fused sense tokens (0.817, the same p
 
 ![Training curves, every seed (5-point moving average)](figures/skip_loss.png)
 
+## B-pusht-0: our sensory layer against LeWorldModel on Push-T, at a matched tiny size (pre-registered)
+
+**Written before any code or run.** LeWorldModel (LeWM, arXiv 2603.19312) is the JEPA our `sigreg`
+objective follows. On Push-T it reports 96.0 +- 2.8% planning success, and 86.0 +- 7.5% with a
+decoder loss added. This study runs LeWM's own code and our model on the same Push-T data, on CPU,
+at one tiny size and one training budget. It evaluates all of them with LeWM's planning protocol.
+It asks two questions:
+
+* Does our model plan as well as LeWM at equal size and budget?
+* Does our reconstruction default (fix1) hurt planning?
+
+It does not reproduce LeWM's published size; that is on hold.
+
+**Pinned sources.**
+
+* `lucas-maes/le-wm` at commit `8edfeb3` (MIT): training, model and evaluation code.
+* `stable-worldmodel` 0.1.1 (git `15a5538`, MIT): the environment `swm/PushT-v1`, the World
+  evaluator, the CEM solver and the success rule.
+* `stable-pretraining`: the version that install resolves, recorded at run time.
+* Data: HF `quentinll/lewm-pusht`, `pusht_expert_train` (20,000 expert episodes, about 196 steps,
+  10 Hz; MIT). It is converted by phd-a's converter into our episodes and into a 64 px file in
+  LeWM's own format. **Both models see identical 64 px frames**: our stored frames are decoded,
+  then resized to 64 px over the full frame, with no crop and no jitter.
+
+**Arms** (3 seeds each):
+
+| arm | code | input | objective |
+|---|---|---|---|
+| (i) LeWM-tiny | LeWM's `train.py`, with the overrides below | pixels | next-embedding MSE + 0.09 x SIGReg (theirs) |
+| (ii) ours A0, pixels | `sensorium` | pixels | `sigreg`, `recon_weight = 0` |
+| (iii) ours A0, pixels + agent | `sensorium` | pixels + agent x, y, vx, vy (proprio) | `sigreg`, `recon_weight = 0` |
+| (iv) ours fix1, pixels | `sensorium` | pixels | `sigreg` + reconstruction 0.5, one masked pass (the default) |
+
+* **LeWM-tiny overrides,** recorded exactly in the code PR and the run logs:
+  * `img_size` 64; encoder `patch_size` 8;
+  * ViT `hidden_size` 128, with 4 layers, 4 heads and `intermediate_size` 512 (through `vit_hf`'s
+    config keywords);
+  * `embed_dim` 128;
+  * predictor depth 2, 4 heads, `dim_head` 32, `mlp_dim` 512;
+  * projector and `pred_proj` hidden 512;
+  * `trainer.accelerator` cpu, `precision` 32.
+  * Every other value is LeWM's: SIGReg 0.09 with 1,024 projections; history 3; frame-skip 5;
+    AdamW 5e-5; their scheduler and their 90/10 clip split (seed 3072).
+* **Ours:** the `cpu_tiny` widths (dim 128; the vision ViT at 64 px, patch 8, dim 64, 2 layers;
+  fusion 2; predictor 2).
+  * Sequences of 4 model steps, so each sample is 3 context frames + 1 target, as LeWM's.
+  * One model step is 5 env steps (substeps 5), so an action chunk is LeWM's action block of 5.
+  * SIGReg is per time step (batch 128 is large enough).
+  * Our own learning rate and schedule.
+* **Size:** the parameter counts of all four are printed in the code PR before any run, and are
+  matched to within 25% of each other.
+  * Reconstruction adds a decoder to (iv) that the planner never uses. It is counted separately.
+* **Matched budget:** every run sees **2,560,000 training clips**: 20,000 steps of batch 128,
+  about 0.73 of an epoch of LeWM's training clips. The clips are drawn from the same training
+  clip set, LeWM's split.
+  * This is far below LeWM's published 10 epochs, so absolute success rates are expected below
+    96%. The comparisons are within the budget.
+
+**Evaluation: LeWM's protocol, through stable-worldmodel's own World evaluator** (`eval.py` at
+`8edfeb3`, config `pusht.yaml`):
+
+* **Pairs:** 50 start-goal pairs drawn with `rng(42)` from the training file. The goal is the
+  dataset state 25 env steps later, with a budget of 50 env steps.
+* **Planner:** CEM, 300 samples, 30 elites, 30 iterations, initial variance 1, horizon 5 planning
+  steps (25 env steps).
+* **Execution, resolved from the code:**
+  * `WorldModelPolicy` keeps `receding_horizon` = 5 planned steps x `action_block` 5 = 25 env
+    steps, and replans when they are used up.
+  * With horizon 5, the full planned sequence is executed (two plans per episode).
+* **Success:** `eval_state`, agent + block position error under 20 (of 512) and block angle error
+  under pi/9.
+* **Plugging in our model:** our model enters the same evaluator as a cost model. The solver calls
+  `get_cost(info, candidates)`; our wrapper encodes the history and the goal, rolls out our own
+  predictor over the candidate action chunks, and returns the squared distance of the final
+  predicted state to the goal's state, exactly as LeWM's `criterion`. Our model gets our own image
+  transform (64 px, as in training) in place of the ImageNet normalisation.
+* **Validation of the evaluator, before the arms:** LeWM's published Push-T checkpoint
+  (`quentinll/lewm-pusht`, 224 px) is run through the same evaluator on our VM. It must give a
+  success rate within 2 binomial SE of 96% on the 50 pairs. If not, the environment or versions
+  differ from the paper's, and that is reported before any arm is read.
+* **Secondary evaluation, for resolution:** the same, on 200 pairs drawn with `rng(43)`.
+
+**Primary.** Planning success rate per arm (mean over 3 seeds of the success fraction on the 50
+pairs), and two contrasts:
+
+* **(ii) - (i):** ours against LeWM at equal size and budget. The seeds of the two codebases are
+  unrelated, so seed variance is unpaired. The bootstrap resamples the 50 pairs, shared by both.
+* **(iv) - (ii):** does reconstruction hurt planning? The same codebase and seeds, so paired by
+  seed and by pair.
+* **MDD = 2.8 x combined SE.** Read as **better**, **worse** or **no difference**.
+* **Stated now:** 150 binomial trials per arm give an SE of about 4 points per arm at 50%, so the
+  MDD of a difference is about 15 points. LeWM's 10-point decoder effect is near the edge of what
+  this can resolve. The 200-pair secondary shrinks the pair part of the SE by half.
+
+**Secondary.**
+
+* (iii) - (ii): does agent proprio help planning?
+* **Object pose from the state** (our arm-in-s question, on an object). Ridge probes of the block's
+  x, y and angle (as sin and cos) from each arm's planning state (s for ours; LeWM's projected
+  embedding):
+  * per arm and seed, with episode-grouped 5-fold CV on 400 episodes (one state per model step);
+  * R² per target, and the same from z / the CLS token before the projector.
+* **Training curves for every seed:** prediction loss, SIGReg and (iv) reconstruction against
+  samples seen. Also held-out prediction loss on LeWM's validation clips, each model in its own
+  units.
+* Wall-clock throughput per arm (clips/s), under the load it ran at.
+
+**Expectation, so it can be wrong.**
+
+* (ii) ~ (i): the two objectives are the same family.
+* (iv) <= (ii), as in LeWM's Table 7, but probably not resolved.
+* (iii) >= (ii).
+* The block pose is better read from z than from s, as the arm was in H1.
+
+**Compute** (CPU only; the estimate is in the brief to the lead).
+
+* About 4 to 5 h per training run at 2 threads.
+* 12 runs at once on one 48-vCPU spot VM, plus evaluation and validation on a 16-vCPU VM.
+* About $3 to $5 in total, estimated.
+* **Stop rule:** if the measured throughput of the first 1,000 steps puts the total above $10, the
+  run stops for re-costing. It is timed from each run's first logged step.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
