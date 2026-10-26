@@ -3374,7 +3374,9 @@ It asks two questions:
 * Does our model plan as well as LeWM at equal size and budget?
 * Does our reconstruction default (fix1) hurt planning?
 
-It does not reproduce LeWM's published size; that is on hold.
+It does not reproduce LeWM's published size; that is on hold. **The comparison is relative:** the
+arms match in size, data and training budget, and the budget is far below LeWM's. Absolute success
+rates are therefore expected well below LeWM's 96%. Only the contrasts between arms are read.
 
 **Pinned sources.**
 
@@ -3415,17 +3417,24 @@ It does not reproduce LeWM's published size; that is on hold.
 * **Size:** the parameter counts of all four are printed in the code PR before any run, and are
   matched to within 25% of each other.
   * Reconstruction adds a decoder to (iv) that the planner never uses. It is counted separately.
-* **Matched budget:** every run sees **2,560,000 training clips**: 20,000 steps of batch 128,
-  about 0.73 of an epoch of LeWM's training clips. The clips are drawn from the same training
-  clip set, LeWM's split.
-  * This is far below LeWM's published 10 epochs, so absolute success rates are expected below
-    96%. The comparisons are within the budget.
+* **Training data: a fixed subset of 2,000 episodes** of `pusht_expert_train` (about 392,000
+  steps), the same for every arm.
+  * The subset is drawn once with `rng(0)` from the 20,000, and written in both formats.
+  * LeWM's own clip split (90/10, Generator seed 3072, over the subset file) defines the training
+    and validation clips of every arm.
+* **Matched budget:** every run sees **2,048,000 training clips**: 16,000 steps of batch 128, about
+  6 epochs of the subset's training clips.
+  * This is far below LeWM's 10 epochs of the full 20,000 episodes (about 35M clips).
 
 **Evaluation: LeWM's protocol, through stable-worldmodel's own World evaluator** (`eval.py` at
 `8edfeb3`, config `pusht.yaml`):
 
-* **Pairs:** 50 start-goal pairs drawn with `rng(42)` from the training file. The goal is the
-  dataset state 25 env steps later, with a budget of 50 env steps.
+* **Pairs:**
+  * **Primary: 200 start-goal pairs drawn with `rng(43)`.**
+  * **Published-comparable secondary: LeWM's 50 pairs, `rng(42)`, reported in full.**
+  * Both are drawn from the full 20,000-episode file, as LeWM's evaluation does, so most pairs come
+    from episodes outside the 2,000 used for training.
+  * The goal is the dataset state 25 env steps later, with a budget of 50 env steps.
 * **Planner:** CEM, 300 samples, 30 elites, 30 iterations, initial variance 1, horizon 5 planning
   steps (25 env steps).
 * **Execution, resolved from the code:**
@@ -3434,31 +3443,40 @@ It does not reproduce LeWM's published size; that is on hold.
   * With horizon 5, the full planned sequence is executed (two plans per episode).
 * **Success:** `eval_state`, agent + block position error under 20 (of 512) and block angle error
   under pi/9.
+* **Frames at evaluation:** the environment renders at 224 px, as the source data. Every arm
+  receives the training pipeline's 64 px frames: the bilinear upscale to 256, then resize to 64 over
+  the full frame. Only the video compression of the stored episodes is absent.
 * **Plugging in our model:** our model enters the same evaluator as a cost model. The solver calls
   `get_cost(info, candidates)`; our wrapper encodes the history and the goal, rolls out our own
   predictor over the candidate action chunks, and returns the squared distance of the final
   predicted state to the goal's state, exactly as LeWM's `criterion`. Our model gets our own image
   transform (64 px, as in training) in place of the ImageNet normalisation.
 * **Validation of the evaluator, before the arms:** LeWM's published Push-T checkpoint
-  (`quentinll/lewm-pusht`, 224 px) is run through the same evaluator on our VM. It must give a
-  success rate within 2 binomial SE of 96% on the 50 pairs. If not, the environment or versions
-  differ from the paper's, and that is reported before any arm is read.
-* **Secondary evaluation, for resolution:** the same, on 200 pairs drawn with `rng(43)`.
+  (`quentinll/lewm-pusht`, at its native 224 px, CPU) is run through the same evaluator on our VM,
+  on **LeWM's 50-pair protocol** (where its 96% comes from). It must give a success rate within 2
+  binomial SE of 96%. If not, the environment or versions differ from the paper's, and that is
+  reported before any arm is read.
 
-**Primary.** Planning success rate per arm (mean over 3 seeds of the success fraction on the 50
-pairs), and two contrasts:
+**Primary.** Planning success rate per arm on the **200 primary pairs** (mean over 3 seeds of the
+success fraction), and two contrasts:
 
 * **(ii) - (i):** ours against LeWM at equal size and budget. The seeds of the two codebases are
-  unrelated, so seed variance is unpaired. The bootstrap resamples the 50 pairs, shared by both.
+  unrelated, so seed variance is unpaired. The bootstrap resamples the 200 pairs, shared by both.
 * **(iv) - (ii):** does reconstruction hurt planning? The same codebase and seeds, so paired by
   seed and by pair.
 * **MDD = 2.8 x combined SE.** Read as **better**, **worse** or **no difference**.
-* **Stated now:** 150 binomial trials per arm give an SE of about 4 points per arm at 50%, so the
-  MDD of a difference is about 15 points. LeWM's 10-point decoder effect is near the edge of what
-  this can resolve. The 200-pair secondary shrinks the pair part of the SE by half.
+* **Expected resolution, stated now:**
+  * 200 pairs x 3 seeds = 600 trials per arm give a binomial SE of about 2 points per arm at 50%
+    success.
+  * With LeWM's seed spread (sd about 3 to 7 points, Table 5 and Table 7), the MDD of a
+    difference is about 8 to 11 points: unpaired (ii) - (i) at the top of that range, and paired
+    (iv) - (ii) lower, since the shared pairs cancel.
+  * So a 10-point effect such as LeWM's decoder cost is resolvable.
+  * On the 50-pair secondary (150 trials per arm) the MDD is about 15 points.
 
 **Secondary.**
 
+* Every arm and contrast on **LeWM's 50 pairs** (`rng(42)`), the published-comparable numbers.
 * (iii) - (ii): does agent proprio help planning?
 * **Object pose from the state** (our arm-in-s question, on an object). Ridge probes of the block's
   x, y and angle (as sin and cos) from each arm's planning state (s for ours; LeWM's projected
@@ -3479,9 +3497,15 @@ pairs), and two contrasts:
 
 **Compute** (CPU only; the estimate is in the brief to the lead).
 
-* About 4 to 5 h per training run at 2 threads.
-* 12 runs at once on one 48-vCPU spot VM, plus evaluation and validation on a 16-vCPU VM.
-* About $3 to $5 in total, estimated.
+* **Training:** about 3.5 to 4.5 h per run at 2 threads (2,048,000 clips at an estimated 130 to 160
+  clips/s). 12 runs at once on one 48-vCPU spot VM (about 3 vCPU and 2 GB each): about 5 h, about
+  $2.5, estimated.
+* **Evaluation:** 12 models x (200 + 50) pairs. Two plans per episode, each 30 CEM iterations of
+  300 rollouts of 5 steps through a tiny predictor: about 2 to 3 s per episode, about 15 min per
+  model. About 3 h of 4-thread processes on a 16-vCPU spot VM, about $0.3.
+* **Validation anchor:** LeWM's published 224 px checkpoint on 50 pairs, about 30 to 60 min at 8
+  threads, under $0.2. It is skipped, and reported, if its measured cost would pass $2.
+* **Total about $3 to $4.5, estimated.**
 * **Stop rule:** if the measured throughput of the first 1,000 steps puts the total above $10, the
   run stops for re-costing. It is timed from each run's first logged step.
 
