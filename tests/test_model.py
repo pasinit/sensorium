@@ -2098,3 +2098,14 @@ def test_skip_projector_adds_the_summary_to_the_projection(
         count_parameters(model)["total"]
         == count_parameters(SensoryModel(replace(TINY, senses=V_P), space))["total"]
     )
+
+
+def test_a_2d_agent_s_proprio_is_an_effector() -> None:
+    from sensorium.model.layout import proprio_group  # noqa: PLC0415
+
+    for name in ("agent_x", "agent_y", "agent_vx", "agent_vy"):
+        assert proprio_group(name) == "proprio_effector"
+    assert proprio_group("q_lh_thumb") == "proprio_effector"  # unchanged
+    assert proprio_group("q_left_elbow") == "proprio_body"
+    assert proprio_group("vest_gyro_x") == "vestibular"
+    assert proprio_group("eff_agent_x") == "proprio_body"  # the prefix must lead
