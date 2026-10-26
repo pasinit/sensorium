@@ -15,7 +15,7 @@ MENAGERIE_SHA      := 0059d4335f8156206f63a35662313385f7ad6d74
 
 setup:
 	# pybullet builds from source on macOS; its bundled zlib clashes with recent SDKs.
-	CFLAGS="-Dfdopen=fdopen" uv sync --extra sims --extra model
+	CFLAGS="-Dfdopen=fdopen" uv sync --extra sims --extra model --extra pusht
 
 # RP1M expert piano data, toy subset (351 MB, CC BY 4.0, doi:10.17617/3.XCE8NX), checksum-verified.
 rp1m-toy:

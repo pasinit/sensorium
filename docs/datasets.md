@@ -36,6 +36,26 @@ ManiSkill3, MuJoCo Playground, Isaac Lab.
 | Sonicverse, SoundSpaces 2.0 | physics-based audio in scenes | A | later: physics-based contact audio |
 | TACTO / Taxim | tactile-image rendering (DIGIT/GelSight) | tactile images | later, if taxel forces prove too coarse |
 
+## 2b. External benchmark data
+
+### Push-T, as LeWorldModel uses it (2026-10-26)
+
+The comparison with LeWorldModel (LeWM, arXiv 2603.19312) at matched tiny size, on the CPU. The
+source and its terms, all **verified** that day:
+
+| Item | Value |
+|---|---|
+| Source | Hugging Face dataset `quentinll/lewm-pusht`: `pusht_expert_train.h5.zst`, 13.1 GB compressed. It is the data of LeWM's code (github.com/lucas-maes/le-wm, MIT), and the same expert trajectories DINO-WM uses (arXiv 2411.04983) |
+| Licence | MIT (dataset card), code MIT. Push-T comes from Diffusion Policy (arXiv 2303.04137) |
+| Content | 18,685 expert episodes, 2,336,736 steps (125 on average), 10 Hz, from the file's header; the paper says 20,000 episodes of about 196 steps. Decompressed 46.3 GB, `pixels` behind a plugin compression filter. Stable-worldmodel's HDF5 layout: `pixels` (224 x 224 RGB), `action` (2-D agent velocity command), `proprio` (agent x, y, vx, vy), `state` (agent position, block position and angle, agent velocity), `ep_len`, `ep_offset` |
+| Converter | `scripts/pusht_convert.py`, `sensorium.pusht`; needs `--extra pusht` (h5py, hdf5plugin) |
+| Our episodes | body `pusht`, one per source episode: 256 px frames (bilinear from 224), the 4 proprio channels, actions over `action_scale` (largest abs value, at least 1), no touch, silent audio, `privileged/state` |
+| LeWM's copy | the same frames at 64 px, made from our stored episodes with our loader's resize (`pusht.lewm_frames`), in LeWM's HDF5 layout with its own unscaled columns. A full-frame view (`View(size=64, crop=1.0)`) gives our model the identical pixels |
+| Split | LeWM's split is over clips, not episodes: 4 observations frame-skip 5 apart, 90/10, torch generator seed 3072 (`le-wm/train.py`). `split` writes it, and an episode-level 90/10 split, to JSON |
+
+The data and the converted episodes stay in cloud storage and under `data/`; none of it goes into
+this repository.
+
 ## 3. Coverage matrix for E1 (one H1 body)
 
 | Part | RGB | Audio | Touch | Vestibular | Proprio | Actions | Expert behaviour | Babbling |

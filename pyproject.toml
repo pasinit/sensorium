@@ -25,6 +25,11 @@ sims = [
 model = [
     "torch==2.14.1",
 ]
+# Reads LeWorldModel's Push-T dataset (HDF5, possibly Blosc-compressed): scripts/pusht_convert.py.
+pusht = [
+    "h5py==3.16.0",
+    "hdf5plugin==7.1.0",
+]
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
