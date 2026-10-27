@@ -3533,6 +3533,50 @@ success fraction), and two contrasts:
 * **Stop rule:** if the measured throughput of the first 1,000 steps puts the total above $10, the
   run stops for re-costing. It is timed from each run's first logged step.
 
+### B-pusht-0: results (GCP, n2-highcpu-48 spot; `scripts/pusht_eval.py report`)
+
+<!-- SKELETON: filled from runs/pusht/report.txt and stage.log once the run finishes. -->
+
+**Runs.** [timeline from stage.log; start-up and steady throughput per arm (clips/s); the initial
+weights' checksums of LeWM-tiny's three seeds (must differ); the count of LeWM training clips our
+windows could not take (`weights.log`); cost.]
+
+**Validation anchor.** LeWM's published checkpoint (224 px), 50 pairs, `rng(42)`, through our
+driver: [success] against the published 96.0% (binomial SE [se]). [Inside / outside 2 SE.]
+
+**Primary: planning success on the 200 pairs (`rng(43)`)**, mean +- sd over 3 seeds:
+
+| arm | success |
+|---|---|
+| (i) LeWM-tiny | |
+| (ii) ours A0, pixels | |
+| (iii) ours A0, pixels + agent | |
+| (iv) ours fix1, pixels | |
+
+| contrast | value (seed SE, pair SE, combined, MDD) | reading |
+|---|---|---|
+| (ii) - (i), seeds unpaired, pairs shared | | |
+| (iv) - (ii), paired | | |
+
+**Secondary.**
+
+* LeWM's 50 pairs (`rng(42)`), every arm and contrast: [table].
+* (iii) - (ii): [value].
+* **Block pose from the state** (episode-grouped 5-fold ridge R², 400 episodes outside the
+  training subset): [table of x, y, sin, cos per arm, for the state and for the layer before the
+  projector].
+* **Training curves**, every seed of every arm: [figure `pusht_curves.png`].
+
+**Caveats** (from the pre-registration):
+
+* The comparison is relative: the arms match in size, data and budget, far below LeWM's.
+* The evaluation is in-distribution: Push-T's episodes are 185 demonstrations replayed with noise,
+  and the pairs come from the same file.
+* At evaluation the environment renders frames live, without the stored episodes' video
+  compression; every arm is affected alike.
+
+**Reading.** [After the numbers.]
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
