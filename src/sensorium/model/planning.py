@@ -74,13 +74,13 @@ def encode_at(
     Raises:
         ValueError: if a window starts before the episode.
     """
-    parts = encode_parts(layer, episode, ends)
+    parts = encode_parts(layer, episode, ends, sense=None)
     return parts["s"], parts["z"]
 
 
 @torch.no_grad()
 def encode_parts(
-    layer: SensoryLayer, episode: Episode, ends: np.ndarray, sense: str = "proprio_body"
+    layer: SensoryLayer, episode: Episode, ends: np.ndarray, sense: str | None = "proprio_body"
 ) -> dict[str, np.ndarray]:
     """Every stage of one sense on its way to the state, for the windows ending at ``ends``,
     from one forward pass (eval mode, centre crop):
@@ -92,21 +92,24 @@ def encode_parts(
       every sense token after the fusion, concatenated in sense order (``T`` tokens);
     * ``z`` ``[n, K_s * dim]``: the summary tokens; ``s`` ``[n, K_s * dim]``: the state.
 
+    With ``sense=None`` only ``fused_all``, ``z`` and ``s`` (for a layer without that sense).
+
     Raises:
         ValueError: if a window starts before the episode, or the sense is not configured or
             has more than one token.
     """
     model = layer.model
     enc = model.encoder
-    if sense not in enc.n_tokens or enc.n_tokens[sense] != 1:
+    if sense is not None and (sense not in enc.n_tokens or enc.n_tokens[sense] != 1):
         raise ValueError(f"{sense!r} is not a configured one-token sense")
-    seen: dict[str, list[torch.Tensor]] = {"z": [], "stem": [], "fused": [], "fused_all": []}
+    seen: dict[str, list[torch.Tensor]] = {"z": [], "fused_all": []}
+    if sense is not None:
+        seen |= {"stem": [], "fused": []}
 
     def keep(name: str, value: torch.Tensor) -> None:
         seen[name].append(value.detach())
 
     n_summary = model.cfg.summary_tokens
-    slot = n_summary + sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index(sense)])
     k = model.cfg.substeps
     loaded = load_episode(episode, layer.space, model.senses)
     if np.min(ends) < (k - 1) * spacing(loaded.header.dt):
@@ -121,10 +124,14 @@ def encode_parts(
     arrays = build(loaded, layer.space, model.senses, np.asarray(ends), k, rgb=rgb)
     hooks = [
         enc.projector.register_forward_pre_hook(lambda m, a: keep("z", a[0])),
-        enc.stems[sense].register_forward_hook(lambda m, a, o: keep("stem", o)),
-        enc.fusion.register_forward_hook(lambda m, a, o: keep("fused", o[:, slot])),
         enc.fusion.register_forward_hook(lambda m, a, o: keep("fused_all", o[:, n_summary:])),
     ]
+    if sense is not None:
+        slot = n_summary + sum(enc.n_tokens[x] for x in enc.senses[: enc.senses.index(sense)])
+        hooks += [
+            enc.stems[sense].register_forward_hook(lambda m, a, o: keep("stem", o)),
+            enc.fusion.register_forward_hook(lambda m, a, o: keep("fused", o[:, slot])),
+        ]
     try:
         states = model.embed(_as_batch(arrays, len(ends))).squeeze(1).cpu().numpy()
     finally:
@@ -132,9 +139,11 @@ def encode_parts(
             hook.remove()
         model.train(was)
     n = len(states)
-    x = np.asarray(arrays[sense], dtype=np.float64)  # [n, K, U], normalised
     out = {name: torch.cat(v).reshape(n, -1).cpu().numpy() for name, v in seen.items()}
-    out |= {"s": states, "input_last": x[:, -1], "input_window": x.reshape(n, -1)}
+    out["s"] = states
+    if sense is not None:
+        x = np.asarray(arrays[sense], dtype=np.float64)  # [n, K, U], normalised
+        out |= {"input_last": x[:, -1], "input_window": x.reshape(n, -1)}
     return {name: np.asarray(v, dtype=np.float64) for name, v in out.items()}
 
 
