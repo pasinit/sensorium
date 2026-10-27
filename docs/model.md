@@ -3384,8 +3384,8 @@ rates are therefore expected well below LeWM's 96%. Only the contrasts between a
 * `stable-worldmodel` 0.1.1 (git `15a5538`, MIT): the environment `swm/PushT-v1`, the World
   evaluator, the CEM solver and the success rule.
 * `stable-pretraining`: the version that install resolves, recorded at run time.
-* Data: HF `quentinll/lewm-pusht`, `pusht_expert_train` (20,000 expert episodes, about 196 steps,
-  10 Hz; MIT). It is converted by phd-a's converter into our episodes and into a 64 px file in
+* Data: HF `quentinll/lewm-pusht`, `pusht_expert_train` (18,685 expert episodes, 2,336,736
+  steps, 125 on average, as read from the file; the paper says 20,000 of about 196; 10 Hz; MIT). It is converted by phd-a's converter into our episodes and into a 64 px file in
   LeWM's own format. **Both models see identical 64 px frames**: our stored frames are decoded,
   then resized to 64 px over the full frame, with no crop and no jitter.
 
@@ -3400,11 +3400,15 @@ rates are therefore expected well below LeWM's 96%. Only the contrasts between a
 
 * **LeWM-tiny overrides,** recorded exactly in the code PR and the run logs:
   * `img_size` 64; encoder `patch_size` 8;
-  * ViT `hidden_size` 128, with 4 layers, 4 heads and `intermediate_size` 512 (through `vit_hf`'s
+  * ViT `hidden_size` 128, with 3 layers, 4 heads and `intermediate_size` 512 (through `vit_hf`'s
     config keywords);
   * `embed_dim` 128;
   * predictor depth 2, 4 heads, `dim_head` 32, `mlp_dim` 512;
-  * projector and `pred_proj` hidden 512;
+  * projector and `pred_proj` hidden 256;
+  * *Corrected before any run, when the parameters were counted:* first listed as 4 layers and
+    hidden 512. That gives LeWM-tiny 1.76M parameters against our 1.21M, 0.69 of it, outside the
+    25% bar. With 3 layers and hidden 256 it has 1,427,054, and ours 1,214,016 to 1,233,344 (0.85
+    to 0.86 of it). The predictors are the same size (593,920; the same AdaLN design).
   * `trainer.accelerator` cpu, `precision` 32.
   * Every other value is LeWM's: SIGReg 0.09 with 1,024 projections; history 3; frame-skip 5;
     AdamW 5e-5; their scheduler and their 90/10 clip split (seed 3072).
@@ -3414,17 +3418,37 @@ rates are therefore expected well below LeWM's 96%. Only the contrasts between a
   * One model step is 5 env steps (substeps 5), so an action chunk is LeWM's action block of 5.
   * SIGReg is per time step (batch 128 is large enough).
   * Our own learning rate and schedule.
-* **Size:** the parameter counts of all four are printed in the code PR before any run, and are
-  matched to within 25% of each other.
+* **Size** (planning model): LeWM-tiny 1,427,054; ours 1,214,016 (pixels), 1,233,344 (pixels +
+  agent). Within 25% of each other, as required.
   * Reconstruction adds a decoder to (iv) that the planner never uses. It is counted separately.
-* **Training data: a fixed subset of 2,000 episodes** of `pusht_expert_train` (about 392,000
+* **Training data: a fixed subset of 2,000 episodes** of `pusht_expert_train` (about 250,000
   steps), the same for every arm.
-  * The subset is drawn once with `rng(0)` from the 20,000, and written in both formats.
+  * The subset is drawn once with `rng(0)` from the 18,685, and written in both formats.
   * LeWM's own clip split (90/10, Generator seed 3072, over the subset file) defines the training
-    and validation clips of every arm.
+    and validation clips of every arm: 190,550 training and 21,172 validation clips.
+  * Our sequence ends on LeWM's clip frames t, t+5, t+10, t+15 when it starts at t - 4, since our
+    window of 5 observations ends on each frame. The training clips that start in an episode's
+    first 4 steps (about 4%) cannot be taken by our windows. Their count is logged and reported,
+    and our arms draw from the rest.
+  * LeWM's `cfg.seed` (3072) seeds both its split and its loader order, so it is kept. The run
+    seed (0, 1, 2) is set as the global torch, numpy and Python seed before LeWM's `run()`. The
+    initial weights' checksum is logged per seed, to check that the seeds differ.
 * **Matched budget:** every run sees **2,048,000 training clips**: 16,000 steps of batch 128, about
-  6 epochs of the subset's training clips.
-  * This is far below LeWM's 10 epochs of the full 20,000 episodes (about 35M clips).
+  10.7 epochs of the subset's training clips (about 191,000).
+  * This is far below LeWM's 10 epochs of the full file (about 17.8M clips).
+
+**The data are in-distribution for evaluation** (found by the converter, stated before any run):
+
+* Push-T's 18,685 episodes are 185 expert demonstrations, each replayed about 101 times with noise.
+  In file order, the episode lengths form 183 runs of 101 consecutive equal-length episodes (two
+  are 202 long), and 185 x 101 = 18,685, as DINO-WM's "expert trajectories replayed with noise".
+* Every validation clip has near-duplicate siblings in training: validation loss measures fit to
+  the 185 demonstrations, not generalisation.
+* LeWM's evaluation draws its start-goal pairs from the same file, so starts and goals lie on
+  training demonstrations, and success rates are in-distribution.
+* This holds for every arm alike, so the comparison stays fair; absolute rates are not
+  generalisation.
+* The 2,000-episode subset covers all 183 runs (about 11 replays each).
 
 **Evaluation: LeWM's protocol, through stable-worldmodel's own World evaluator** (`eval.py` at
 `8edfeb3`, config `pusht.yaml`):
@@ -3432,7 +3456,7 @@ rates are therefore expected well below LeWM's 96%. Only the contrasts between a
 * **Pairs:**
   * **Primary: 200 start-goal pairs drawn with `rng(43)`.**
   * **Published-comparable secondary: LeWM's 50 pairs, `rng(42)`, reported in full.**
-  * Both are drawn from the full 20,000-episode file, as LeWM's evaluation does, so most pairs come
+  * Both are drawn from the full file, as LeWM's evaluation does, so most pairs come
     from episodes outside the 2,000 used for training.
   * The goal is the dataset state 25 env steps later, with a budget of 50 env steps.
 * **Planner:** CEM, 300 samples, 30 elites, 30 iterations, initial variance 1, horizon 5 planning
