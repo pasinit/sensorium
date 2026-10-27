@@ -54,6 +54,24 @@ source and its terms, all **verified** that day:
 | Split | LeWM's split is over clips, not episodes: 4 observations frame-skip 5 apart, 90/10, torch generator seed 3072 (`le-wm/train.py`). `split` writes it to JSON as `[episode, start]` clips: observations at `start + 5k` (k < 4), actions `start` to `start + 19`. Our model uses the same clips |
 | Training subset | `subset` draws a fixed list of source episodes (`np.sort(default_rng(0).choice(n, 2000))` for the 2,000 of the B-pusht-0 pre-registration); `select` writes LeWM's 64 px file of those episodes in that order, and `split --episodes` the clip split over them, as LeWM's `train.py` computes it on that file |
 
+**What the converted data shows (2026-10-26, converter at 01cbb93, all 18,685 episodes):**
+
+| Item | Value |
+|---|---|
+| Episodes, steps | 18,685 episodes, 2,336,736 steps at 10 Hz; length min 49, median 123, mean 125.1, max 246 |
+| LeWM clips | all episodes: 1,783,549 train / 198,172 validation; the 2,000-episode subset: 190,550 / 21,172 |
+| Actions outside [-1, 1] | 2,909 of 4,673,472 values (0.062%), up to 2.04 in magnitude: clipped in our episodes (`meta["actions_clipped"]`), raw in LeWM's copy. 98% of values lie within about ±0.55 |
+| Agent position | workspace pixels, nominally 0-512; 1st to 99th percentile 38-482, extremes -153 to 724 |
+
+- **185 demonstrations, each replayed about 101 times.**
+  - Read in file order, the episode lengths form 183 runs of 101 consecutive episodes of identical length; two runs are 202 long (two demonstrations of equal length that happen to be adjacent). That makes 185 x 101 = 18,685 exactly.
+  - This fits DINO-WM's description of the data: released expert trajectories replayed with noise.
+  - Consequences:
+    - Every validation clip, under LeWM's clip split or any episode-level split, has near-duplicate siblings in training. Validation loss measures fit to the 185 demonstrations, not generalisation to new ones.
+    - LeWM's planning evaluation draws its start-goal pairs from the same file, so its starts and goals lie on training demonstrations: the evaluation is in-distribution, for every model alike.
+    - The 2,000-episode training subset covers all 183 runs (about 11 replays of each demonstration), so it keeps the full set's behavioural diversity.
+- **The T's angle stays readable at 64 px.** Frames of three episodes were compared, 8 per episode, at 224 px and at the 64 px both models see. The T's orientation, its stem against its bar, the goal T and the agent's dot are visible in every 64 px frame. The T is about 4 px thick and 25-30 px long there, enough to resolve angles to a few degrees against the success rule's 20 degrees. Only edges soften, such as the joint of stem and bar.
+
 The data and the converted episodes stay in cloud storage and under `data/`; none of it goes into
 this repository.
 
