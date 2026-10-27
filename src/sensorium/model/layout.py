@@ -10,7 +10,8 @@ share (the H1's body joints and body skin) is the same column, so it shares weig
 Names decide the groups, so ablations are configuration, not code:
 
 * proprio: ``vestibular`` = ``vest_*``, ``gravity_*``, ``pelvis_height``;
-  ``proprio_effector`` = joints of the hands or pincers (``q_lh_*``, ``dq_rp_*`` ...);
+  ``proprio_effector`` = joints of the hands or pincers (``q_lh_*``, ``dq_rp_*`` ...) and the
+  controlled agent of a 2-D task (``agent_*``, Push-T);
   ``proprio_body`` = everything else.
 * touch: one **region** per skin patch (``body/<link>``, ``hand/<side>/<segment>``,
   ``pincer/<side>/<pad>``), holding that patch's taxels and its 3 dynamics channels
@@ -49,6 +50,9 @@ N_MELS = 32
 
 EFFECTOR_JOINT = re.compile(r"^(?:d?q_)?(?:lh|rh|lp|rp)_")
 VESTIBULAR_PREFIXES = ("vest_", "gravity_", "pelvis_height")
+AGENT_PREFIX = "agent_"
+"""Proprio of a 2-D task's controlled agent (Push-T: ``agent_x``, ``agent_y``, ``agent_vx``,
+``agent_vy``), grouped as an effector."""
 BLOCKS = ("body", "effector", "other")
 SIDES = ("none", "left", "right")
 
@@ -59,10 +63,11 @@ def namespace(body: str) -> str:
 
 
 def proprio_group(name: str) -> str:
-    """The proprio group a channel name belongs to."""
+    """The proprio group a channel name belongs to (``agent_*``: the controlled agent of a 2-D
+    task such as Push-T, an effector)."""
     if name.startswith(VESTIBULAR_PREFIXES):
         return "vestibular"
-    if EFFECTOR_JOINT.match(name):
+    if EFFECTOR_JOINT.match(name) or name.startswith(AGENT_PREFIX):
         return "proprio_effector"
     return "proprio_body"
 

@@ -137,9 +137,10 @@ def compute_stats(paths: Sequence[Path], space: ChannelSpace, limit: int = 64) -
             sums[g][0, cols.dst[g]] += x.sum(0)
             sums[g][1, cols.dst[g]] += (x**2).sum(0)
             counts[g][cols.dst[g]] += len(x)
-        sums["audio"][0] += audio.sum(0)
-        sums["audio"][1] += (audio**2).sum(0)
-        counts["audio"] += len(audio)
+        if audio.shape[1]:  # an episode without sound (log-mel ``[T, 0]``) adds nothing
+            sums["audio"][0] += audio.sum(0)
+            sums["audio"][1] += (audio**2).sum(0)
+            counts["audio"] += len(audio)
     for g, s in sums.items():
         n = np.maximum(counts[g], 1.0)
         mean = s[0] / n
