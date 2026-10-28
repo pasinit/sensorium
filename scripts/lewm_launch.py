@@ -7,7 +7,8 @@ next to le-wm's ``train.py`` (commit ``8edfeb3``) on the VM and run from there:
 
     python lewm_launch.py --run-seed=0 <LeWM's Hydra overrides ...>
 
-Everything after ``--run-seed`` goes to LeWM's Hydra command line unchanged.
+Everything after ``--run-seed`` goes to LeWM's Hydra command line unchanged, and ``train.py``
+runs as ``__main__``, as ``python train.py`` would (Hydra resolves its config path next to it).
 
 LeWM logs its losses only to Weights & Biases; with that off its Lightning ``Trainer`` gets no
 logger. The launcher gives it a ``CSVLogger`` (``lewm_logs/<run>/``, every 50 steps), so every
@@ -20,7 +21,9 @@ differ).
 """
 
 import random
+import runpy
 import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -88,10 +91,12 @@ def main() -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    sys.argv = [sys.argv[0], *rest]
-    import train  # noqa: PLC0415 (le-wm's train.py, next to this file on the VM)
-
-    train.run()
+    script = Path(__file__).resolve().parent / "train.py"  # le-wm's, next to this file on the VM
+    sys.argv = [str(script), *rest]
+    # As ``python train.py``: imported as a module, train.py's @hydra.main would look for its
+    # config_path ("./config/train") as a package-relative module and fail; run as __main__, Hydra
+    # resolves it next to train.py.
+    runpy.run_path(str(script), run_name="__main__")
 
 
 if __name__ == "__main__":
