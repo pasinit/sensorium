@@ -113,3 +113,21 @@ def test_the_launcher_names_the_csv_logs_after_the_run() -> None:
     launch = load("lewm_launch")
     assert launch.run_name(["img_size=64", "output_model_name=lewm-tiny-s1"]) == "lewm-tiny-s1"
     assert launch.run_name([]) == "lewm"
+
+
+def test_the_launcher_runs_train_py_as_main_with_the_remaining_arguments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = load("lewm_launch")
+    script = tmp_path / "train.py"
+    script.write_text(
+        "import sys, json\n"
+        "if __name__ == '__main__':\n"
+        "    open(sys.argv[0] + '.ran', 'w').write(json.dumps(sys.argv[1:]))\n"
+    )
+    monkeypatch.setattr(launch, "__file__", str(tmp_path / "lewm_launch.py"))
+    monkeypatch.setattr(launch, "with_csv_logger", lambda name: None)
+    monkeypatch.setattr(launch, "with_final_save", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["lewm_launch.py", "--run-seed=3", "img_size=64"])
+    launch.main()
+    assert json.loads((tmp_path / "train.py.ran").read_text()) == ["img_size=64"]
