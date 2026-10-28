@@ -3567,7 +3567,24 @@ driver: [success] against the published 96.0% (binomial SE [se]). [Inside / outs
   projector].
 * **Training curves**, every seed of every arm: [figure `pusht_curves.png`].
 
-**Caveats** (from the pre-registration):
+**Run notes** (for the write-up):
+
+* The first launch stopped in its dry run: stable-pretraining 0.1.8's `Manager` replaces any
+  Lightning logger with its own RegistryLogger, so LeWM-tiny's metrics are written under its cache
+  (`runs/<date>/<time>/<id>/metrics.csv`), not `lewm_logs/<run>/`. The relaunch finds that CSV from
+  each training log and copies it. LeWM-tiny's curves come from there. (`lewm_launch.py`'s docstring
+  to be corrected in this PR.)
+* The dry run measured LeWM-tiny at 0.72 steps/s alone on 2 threads: 16,000 steps take about 6.2 h,
+  against the 4 to 5 h estimated. The machine's hard limit was raised to 18 h; the $10 stop rule is
+  unchanged.
+
+**Caveats** (from the pre-registration, and one found at launch):
+
+* **LeWM-tiny's seeds differ only in their initial weights.** stable-pretraining's `Manager` seeds
+  itself to 0 after the model is built (the run seed is set before). The three LeWM-tiny runs start
+  from different weights (checksums logged), but share the loader order and every random draw during
+  training. Their seed spread is therefore an underestimate of a fully reseeded one; our arms are
+  reseeded fully.
 
 * The comparison is relative: the arms match in size, data and budget, far below LeWM's.
 * The evaluation is in-distribution: Push-T's episodes are 185 demonstrations replayed with noise,
