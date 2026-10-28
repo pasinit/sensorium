@@ -11,8 +11,10 @@ Everything after ``--run-seed`` goes to LeWM's Hydra command line unchanged, and
 runs as ``__main__``, as ``python train.py`` would (Hydra resolves its config path next to it).
 
 LeWM logs its losses only to Weights & Biases; with that off its Lightning ``Trainer`` gets no
-logger. The launcher gives it a ``CSVLogger`` (``lewm_logs/<run>/``, every 50 steps), so every
-seed's loss curves are kept, as for our arms.
+logger, and the launcher offers it a ``CSVLogger``. stable-pretraining 0.1.8's ``Manager`` replaces
+any logger with its own RegistryLogger, which writes ``metrics.csv`` under stable-pretraining's
+cache (the training log names it: ``[RegistryLogger] ... run_dir=``); the B-pusht-0 VM copies it to
+``lewm_logs/<run>/``, where ``pusht_eval.lewm_curve`` reads it.
 
 LeWM saves its weights at the end of each epoch. B-pusht-0 stops at a step budget, inside an
 epoch, so the launcher also saves them when training ends (``weights_final.pt``, beside LeWM's

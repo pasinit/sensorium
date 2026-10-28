@@ -116,6 +116,11 @@ def test_report_reads_both_protocols_and_the_pose_probes(
     csv.parent.mkdir(parents=True)
     csv.write_text("step,train/pred_loss,train/sigreg_loss\n49,0.9,3.0\n99,0.5,2.0\n")
     assert ev.lewm_curve(0)["reg"].tolist() == pytest.approx([0.27, 0.18])
+    flat = tmp_path / "lewm_logs/lewm-tiny-s1/metrics.csv"  # the VM's copy: no version folder
+    flat.parent.mkdir(parents=True)
+    flat.write_text("epoch,train/sigreg_loss_step,global_step,train/pred_loss_step\n0,1.0,49,0.7\n")
+    one = ev.lewm_curve(1)
+    assert one["clips"].tolist() == [49 * 128] and one["pred"].tolist() == [0.7]
     ev.report()
     out = capsys.readouterr().out
     assert (tmp_path / "pusht/figures/pusht_curves.png").exists()
