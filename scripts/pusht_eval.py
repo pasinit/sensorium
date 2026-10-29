@@ -404,22 +404,54 @@ def our_curve(arm: str, seed: int) -> dict[str, np.ndarray]:
     return out
 
 
+LEWM_COLUMNS = {
+    "step": ("step", "global_step", "trainer/global_step"),
+    "pred": ("fit/pred_loss", "train/pred_loss", "train/pred_loss_step", "pred_loss"),
+    "sigreg": ("fit/sigreg_loss", "train/sigreg_loss", "train/sigreg_loss_step", "sigreg_loss"),
+}
+"""Accepted column names of LeWM's logged metrics (Lightning's CSVLogger or stable-pretraining's
+RegistryLogger), first match wins."""
+
+
+def lewm_metrics(seed: int) -> Path | None:
+    """A LeWM-tiny run's ``metrics.csv``: in ``lewm_logs/lewm-tiny-s<seed>/`` (as the VM copies
+    stable-pretraining's RegistryLogger output) or a Lightning ``version_*`` folder under it."""
+    run = LEWM_LOGS / f"lewm-tiny-s{seed}"
+    found = sorted(run.glob("metrics.csv")) + sorted(run.glob("version_*/metrics.csv"))
+    return found[0] if found else None
+
+
+def column(header: list[str], key: str) -> str:
+    """The first of ``LEWM_COLUMNS[key]`` in ``header``.
+
+    Raises:
+        KeyError: if none is (the names are listed in the message).
+    """
+    for name in LEWM_COLUMNS[key]:
+        if name in header:
+            return name
+    raise KeyError(f"no {key} column among {header}")
+
+
 def lewm_curve(seed: int) -> dict[str, np.ndarray]:
-    """``{clips, pred, reg}`` of a LeWM-tiny run (Lightning's ``metrics.csv``; ``reg`` is the
-    weighted SIGReg term, as ours)."""
+    """``{clips, pred, reg}`` of a LeWM-tiny run (its ``metrics.csv``; ``reg`` is the weighted
+    SIGReg term, as ours)."""
     import csv  # noqa: PLC0415
 
     import pusht_test as train_script  # noqa: PLC0415
 
-    found = sorted((LEWM_LOGS / f"lewm-tiny-s{seed}").glob("version_*/metrics.csv"))
-    if not found:
+    path = lewm_metrics(seed)
+    if path is None:
         return {}
-    rows = [r for r in csv.DictReader(found[-1].open()) if r.get("train/pred_loss")]
+    reader = csv.DictReader(path.open())
+    header = list(reader.fieldnames or [])
+    step, pred, sig = (column(header, k) for k in ("step", "pred", "sigreg"))
+    rows = [r for r in reader if r.get(pred) not in (None, "") and r.get(step) not in (None, "")]
     weight = 0.09  # LeWM's SIGReg weight
     return {
-        "clips": np.array([int(r["step"]) for r in rows]) * train_script.BATCH,
-        "pred": np.array([float(r["train/pred_loss"]) for r in rows]),
-        "reg": np.array([weight * float(r["train/sigreg_loss"]) for r in rows]),
+        "clips": np.array([int(float(r[step])) for r in rows]) * train_script.BATCH,
+        "pred": np.array([float(r[pred]) for r in rows]),
+        "reg": np.array([weight * float(r[sig]) if r.get(sig) else np.nan for r in rows]),
     }
 
 

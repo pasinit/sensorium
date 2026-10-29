@@ -3533,6 +3533,169 @@ success fraction), and two contrasts:
 * **Stop rule:** if the measured throughput of the first 1,000 steps puts the total above $10, the
   run stops for re-costing. It is timed from each run's first logged step.
 
+### B-pusht-0: results (GCP spot, CPU; `scripts/pusht_eval.py report`)
+
+**Runs.** Our 9 runs trained on an n2-highcpu-48 spot VM, 12 runs sharing its 48 vCPUs, from
+00:25 UTC; all reached 16,000 steps (2,048,000 clips) in 2.0 to 2.1 h for a0-pix and a0-pix-agent
+(270 to 285 sequences/s at the end) and 2.6 h for fix1-pix (about 220 sequences/s; its decoder).
+LeWM-tiny trained on an n2-standard-16 spot VM (3 runs, about 3 vCPU each) after two preemptions
+(run notes) from 06:24 UTC; all three reached step 15,999 at about 12:55 UTC, about 6.5 h (about
+0.68 steps/s, 87 clips/s). The same VM then ran the anchor (13:01 to 13:29 UTC), the 24 planning
+evaluations and 12 pose probes (13:29 to 14:28 UTC). Of LeWM's 190,550 training clips, 183,360
+could be taken by our windows; 7,190 (3.8%) start in an episode's first 4 steps. VM time: about
+4.2 h of n2-highcpu-48 (3.3 h on the first VM, 0.9 h on the relaunches before the second
+preemption) and about 8.3 h of n2-standard-16.
+
+**Validation anchor.** LeWM's published checkpoint (224 px), 50 pairs, `rng(42)`, through our
+driver: **0.960** against the published 96.0% (binomial SE 0.028). Inside 2 SE: the environment,
+evaluator and versions reproduce the paper's protocol.
+
+**Primary: planning success on the 200 pairs (`rng(43)`)**, mean +- sd over 3 seeds:
+
+| arm | success | per seed |
+|---|---|---|
+| (i) LeWM-tiny | 0.088 +- 0.012 | 0.075, 0.105, 0.085 |
+| (ii) ours A0, pixels | 0.143 +- 0.029 | 0.150, 0.175, 0.105 |
+| (iii) ours A0, pixels + agent | 0.290 +- 0.011 | 0.300, 0.295, 0.275 |
+| (iv) ours fix1, pixels | 0.043 +- 0.012 | 0.060, 0.030, 0.040 |
+
+| contrast | value (seed SE, pair SE, combined, MDD) | reading |
+|---|---|---|
+| (ii) - (i), seeds unpaired, pairs shared | +0.055 (0.022, 0.017, 0.028, 0.079) | no difference |
+| (iv) - (ii), paired | -0.100 (0.024, 0.018, 0.030, 0.083) | **worse** |
+
+As pre-registered, absolute rates are far below LeWM's 96%: the training budget is about a ninth of
+LeWM's (2.0M against about 17.8M clips), at a far smaller size.
+
+**Secondary.**
+
+* **LeWM's 50 pairs (`rng(42)`):**
+
+  | arm | success |
+  |---|---|
+  | (i) LeWM-tiny | 0.060 +- 0.043 |
+  | (ii) ours A0, pixels | 0.127 +- 0.009 |
+  | (iii) ours A0, pixels + agent | 0.207 +- 0.009 |
+  | (iv) ours fix1, pixels | 0.027 +- 0.009 |
+
+  | contrast | value (seed SE, pair SE, combined, MDD) | reading |
+  |---|---|---|
+  | (ii) - (i) | +0.067 (0.031, 0.033, 0.046, 0.127) | no difference |
+  | (iv) - (ii) | -0.100 (0.012, 0.029, 0.032, 0.088) | worse |
+  | (iii) - (ii) | +0.080 (0.000, 0.039, 0.039, 0.110) | no difference |
+
+* **(iii) - (ii)** on the 200 pairs: **+0.147** (seed SE 0.015, pair SE 0.027, combined 0.031, MDD
+  0.086), better, but see the reading: it is not evidence of a better world model.
+* **Which pairs are solved.** Of the 200 primary pairs, (iii) solves 41 with all three seeds; (ii)
+  solves 3 and (i) 4. Pairs solved by at least one seed: (i) 39, (ii) 58, (iii) 75, (iv) 17;
+  (ii) and (iii) share 36 of them, and (i) and (ii) 23.
+* **Block pose from the state** (episode-grouped 5-fold ridge R², 400 episodes outside the training
+  subset; "pre" is z for ours and the CLS token for LeWM), mean over 3 seeds (every seed in
+  `report.txt`; seed ranges within 0.04 for x and y and 0.07 for the angle, except
+  fix1-pix's x, 0.22):
+
+  | arm | layer | x | y | sin | cos |
+  |---|---|---|---|---|---|
+  | (i) LeWM-tiny | state | 0.882 | 0.896 | 0.309 | 0.290 |
+  | | pre | 0.862 | 0.881 | 0.281 | 0.297 |
+  | (ii) ours A0, pixels | state | 0.873 | 0.876 | 0.275 | 0.244 |
+  | | pre | 0.876 | 0.887 | 0.281 | 0.254 |
+  | (iii) ours A0, pixels + agent | state | 0.453 | 0.410 | 0.126 | 0.116 |
+  | | pre | 0.466 | 0.421 | 0.135 | 0.121 |
+  | (iv) ours fix1, pixels | state | 0.600 (0.465 to 0.688) | 0.863 | 0.140 | 0.115 |
+  | | pre | 0.666 | 0.872 | 0.141 | 0.121 |
+
+* **Training curves**, every seed of every arm (prediction loss, weighted SIGReg, fix1's
+  reconstruction; each codebase in its own units, so levels compare only within ours):
+
+  ![B-pusht-0 training curves](figures/pusht_curves.png)
+
+  * Prediction loss over the last 500 steps: a0-pix 0.035 to 0.037, a0-pix-agent 0.011.
+  * **fix1-pix's prediction loss does not fall.** It rises from 0.44 to 0.47 at step 50 to about
+    0.73 by step 1,000 and stays between 0.70 and 0.76 to the end (0.745 over the last 500
+    steps), on all 3 seeds, while its reconstruction and SIGReg
+    fall as the other arms'.
+* **Held-out prediction loss:** LeWM-tiny's, on its validation clips per epoch, falls from 0.18 to
+  0.24 after epoch 0 to 0.046 to 0.048 after epoch 9 (its units). Our arms' runs were configured
+  without held-out windows (`eval_windows = 0`), so this pre-registered secondary has no numbers
+  for ours.
+
+**Run notes** (for the write-up):
+
+* The first launch stopped in its dry run: stable-pretraining 0.1.8's `Manager` replaces any
+  Lightning logger with its own RegistryLogger, so LeWM-tiny's metrics are written under its cache
+  (`runs/<date>/<time>/<id>/metrics.csv`), not `lewm_logs/<run>/`. The relaunch finds that CSV from
+  each training log and copies it. LeWM-tiny's curves come from there (`lewm_launch.py`'s docstring
+  says so).
+* **Two spot preemptions and one false stop; LeWM-tiny trained from scratch on a third VM.** Our 9
+  runs trained once, to 16,000 steps, on the first VM (n2-highcpu-48). It was preempted at 03:32 UTC,
+  with the 3 LeWM-tiny runs near step 8,000. LeWM's per-epoch files hold weights only, and resuming
+  through stable-pretraining's `Manager` would drop the optimizer state, so LeWM-tiny was retrained
+  from scratch. The first relaunch (about 03:45 UTC) stopped itself two minutes into training on a
+  launcher bug (its 1,000-step rule misread the LeWM-tiny runs' start times); the second (about
+  04:00 UTC, same machine type and zone) was preempted at 04:32 UTC, 21 minutes into training. The
+  third (about 06:15 UTC, n2-standard-16, another zone) trained LeWM-tiny and ran the whole
+  evaluation. Nothing trained in the interrupted runs is used; their logs are kept apart. Every
+  LeWM-tiny launch started from the same initial weights per seed (checksums 34160.738281,
+  34135.363281, 34164.882812): the seeding is deterministic.
+* The dry run measured LeWM-tiny at 0.72 steps/s alone on 2 threads: 16,000 steps take about 6.2 h,
+  against the 4 to 5 h estimated. The machine's hard limit was raised to 18 h; the $10 stop rule is
+  unchanged. On the third VM it ran at about 0.68 steps/s.
+
+**Caveats** (from the pre-registration, and those found at launch and in the results):
+
+* **(iii)'s planning cost sees the goal's agent position.** Its state reads the agent's x, y, vx, vy,
+  and the goal is encoded from the goal frame *and* the goal's agent proprio (`goal_proprio`, the
+  dataset's value 25 steps later), so the cost `|s_H - s_goal|²` includes the distance to where the
+  demonstration's agent was. Push-T's success rule also scores the agent's position (with the
+  block's). The pixel arms see the agent only in the goal frame.
+* **fix1's state is trained on masked frames only.** In the one-pass design (B-fix-1) the JEPA
+  states come from the masked batch: 75% of each frame's 64 patches hidden, drawn independently per
+  frame. Planning encodes clean frames.
+* **Wall-clock speeds are within-VM only.** Our arms trained on n2-highcpu-48 and LeWM-tiny on
+  n2-standard-16 (the preemptions), so their throughputs are not compared.
+* **LeWM-tiny's seeds differ only in their initial weights.** stable-pretraining's `Manager` seeds
+  itself to 0 after the model is built (the run seed is set before). The three LeWM-tiny runs start
+  from different weights (checksums logged), but share the loader order and every random draw during
+  training. Their seed spread is therefore an underestimate of a fully reseeded one; our arms are
+  reseeded fully.
+* The comparison is relative: the arms match in size, data and budget, far below LeWM's.
+* The evaluation is in-distribution: Push-T's episodes are 185 demonstrations replayed with noise,
+  and the pairs come from the same file.
+* At evaluation the environment renders frames live, without the stored episodes' video
+  compression; every arm is affected alike.
+
+**Reading.**
+
+* **The evaluator is validated:** the published checkpoint gives exactly its published 96.0% through
+  our driver.
+* **Ours against LeWM, pixels, equal size and budget: no difference** (+0.055, MDD 0.079; +0.067 on
+  LeWM's 50 pairs, MDD 0.127). The point estimate favours ours: every seed of ours is at or above
+  every LeWM-tiny seed (ours' worst and LeWM-tiny's best are both 0.105). As expected, (ii) ~ (i).
+  Block pose is read from both states about equally (x, y 0.87 to 0.90; angle 0.24 to 0.31).
+* **fix1 plans worse than A0: -0.100, resolved** on both protocols. The expectation (iv) <= (ii)
+  holds, and is resolved where it was expected not to be; the size matches LeWM's decoder cost
+  (-10 points). But fix1's training prediction loss never
+  falls (0.70 to 0.76 from step 1,000), so its predictor is not learning dynamics here. One
+  mechanism in the code fits this: its states come from independently masked frames, so the next
+  state depends on the next frame's random mask and is largely unpredictable; at planning it sees
+  clean frames instead. That is an explanation consistent with the code, not one tested here.
+  What this run shows is that **the default one-pass fix1 fails on pixel-only Push-T**; it does not
+  separate "reconstruction hurts planning" from that design's masking.
+* **Pixels + agent plans best (+0.147, resolved on 200 pairs; +0.080, not resolved on 50), but its
+  state holds the block worst** (x 0.45, angle 0.12, against 0.87 and 0.24 to 0.28 for pixels only;
+  the same before the projector). Its cost measures the distance to the goal's agent position as
+  well as to the goal frame, and the success rule scores the agent's position too. Its successes
+  are also unusually systematic: 41 pairs are solved by all three seeds, against 3 for (ii). This
+  pattern fits a planner that mainly steers the agent to where the demonstration's agent was 25
+  steps later, on in-distribution demonstrations, more than a better model of the block. How much of
+  (iii)'s success that explains is not measured here, so (iii) - (ii) is **not read as "agent proprio
+  gives a better world model"**.
+* **Pose from s or z:** for our pixel arms the layer before the projector reads the block slightly
+  better (by 0.00 to 0.01; fix1 by up to 0.07), for LeWM-tiny the projected state reads it slightly
+  better (by up to 0.03; cos the other way, by 0.01). The pre-registered expectation, z clearly
+  above s as for the arm in H1, holds only weakly for ours and not for LeWM's.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
