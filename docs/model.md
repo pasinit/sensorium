@@ -3537,8 +3537,10 @@ success fraction), and two contrasts:
 
 <!-- SKELETON: filled from runs/pusht/report.txt and stage.log once the run finishes. -->
 
-**Runs.** [timeline from stage.log; start-up and steady throughput per arm (clips/s); the initial
-weights' checksums of LeWM-tiny's three seeds (must differ); the count of LeWM training clips our
+**Runs.** [timeline from stage.log.] All 12 runs passed 1,000 steps by 00:50 UTC. Speeds at 26 min,
+12 runs sharing 48 vCPUs: our arms 200 to 280 sequences/s (a0-pix and a0-pix-agent about 3,200
+steps, fix1-pix about 2,450); LeWM-tiny 0.7 steps/s (about 1,050 steps), the bottleneck. LeWM-tiny's
+initial weights differ by seed (checksums 34160.74, 34135.36, 34164.88). [Final throughput; the count of LeWM training clips our
 windows could not take (`weights.log`); cost.]
 
 **Validation anchor.** LeWM's published checkpoint (224 px), 50 pairs, `rng(42)`, through our
