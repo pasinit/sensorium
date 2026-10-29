@@ -406,8 +406,8 @@ def our_curve(arm: str, seed: int) -> dict[str, np.ndarray]:
 
 LEWM_COLUMNS = {
     "step": ("step", "global_step", "trainer/global_step"),
-    "pred": ("train/pred_loss", "train/pred_loss_step", "pred_loss"),
-    "sigreg": ("train/sigreg_loss", "train/sigreg_loss_step", "sigreg_loss"),
+    "pred": ("fit/pred_loss", "train/pred_loss", "train/pred_loss_step", "pred_loss"),
+    "sigreg": ("fit/sigreg_loss", "train/sigreg_loss", "train/sigreg_loss_step", "sigreg_loss"),
 }
 """Accepted column names of LeWM's logged metrics (Lightning's CSVLogger or stable-pretraining's
 RegistryLogger), first match wins."""
