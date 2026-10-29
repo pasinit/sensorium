@@ -3577,24 +3577,25 @@ driver: [success] against the published 96.0% (binomial SE [se]). [Inside / outs
   (`runs/<date>/<time>/<id>/metrics.csv`), not `lewm_logs/<run>/`. The relaunch finds that CSV from
   each training log and copies it. LeWM-tiny's curves come from there. (`lewm_launch.py`'s docstring
   to be corrected in this PR.)
-* **One spot preemption, 03:32 UTC.** Our 9 runs had finished (all at 16,000 steps); the 3
-  LeWM-tiny runs were near step 8,000. LeWM's per-epoch files hold weights only, and resuming through
-  stable-pretraining's `Manager` would drop the optimizer state, so LeWM-tiny was retrained from
-  scratch on a relaunched VM, which then ran the whole evaluation. That relaunch (about 03:45 UTC)
-  stopped itself two minutes into training on a launcher bug (its 1,000-step rule misread the
-  LeWM-tiny runs' start times), so it was relaunched again at about 04:00 UTC; nothing trained in the
-  false start was used. Our arms were
-  trained once, on the first VM. The interrupted LeWM-tiny logs are kept apart and not used.
-  The relaunched seeds start from the same initial weights as on the first VM (checksums
-  34160.738281, 34135.363281, 34164.882812): the seeding is deterministic.
+* **Two spot preemptions and one false stop; LeWM-tiny trained from scratch on a third VM.** Our 9
+  runs trained once, to 16,000 steps, on the first VM (n2-highcpu-48). It was preempted at 03:32 UTC,
+  with the 3 LeWM-tiny runs near step 8,000. LeWM's per-epoch files hold weights only, and resuming
+  through stable-pretraining's `Manager` would drop the optimizer state, so LeWM-tiny was retrained
+  from scratch. The first relaunch (about 03:45 UTC) stopped itself two minutes into training on a
+  launcher bug (its 1,000-step rule misread the LeWM-tiny runs' start times); the second (about
+  04:00 UTC, same machine type and zone) was preempted at 04:32 UTC, 21 minutes into training. The
+  third (about 06:15 UTC, n2-standard-16, another zone) trained LeWM-tiny and ran the whole
+  evaluation. Nothing trained in the interrupted runs is used; their logs are kept apart. Every
+  LeWM-tiny launch started from the same initial weights per seed (checksums 34160.738281,
+  34135.363281, 34164.882812): the seeding is deterministic.
 * The dry run measured LeWM-tiny at 0.72 steps/s alone on 2 threads: 16,000 steps take about 6.2 h,
   against the 4 to 5 h estimated. The machine's hard limit was raised to 18 h; the $10 stop rule is
   unchanged.
 
 **Caveats** (from the pre-registration, and one found at launch):
 
-* **Wall-clock speeds are within-VM only.** Our arms and LeWM-tiny trained on different VMs (the
-  preemption), so their throughputs are not compared.
+* **Wall-clock speeds are within-VM only.** Our arms trained on n2-highcpu-48 and LeWM-tiny on
+  n2-standard-16 (the preemptions), so their throughputs are not compared.
 * **LeWM-tiny's seeds differ only in their initial weights.** stable-pretraining's `Manager` seeds
   itself to 0 after the model is built (the run seed is set before). The three LeWM-tiny runs start
   from different weights (checksums logged), but share the loader order and every random draw during
