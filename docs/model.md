@@ -3539,8 +3539,9 @@ success fraction), and two contrasts:
 
 **Runs.** [timeline from stage.log.] All 12 runs passed 1,000 steps by 00:50 UTC. Speeds at 26 min,
 12 runs sharing 48 vCPUs: our arms 200 to 280 sequences/s (a0-pix and a0-pix-agent about 3,200
-steps, fix1-pix about 2,450); LeWM-tiny 0.7 steps/s (about 1,050 steps), the bottleneck. LeWM-tiny's
-initial weights differ by seed (checksums 34160.74, 34135.36, 34164.88). [Final throughput; the count of LeWM training clips our
+steps, fix1-pix about 2,450); LeWM-tiny 0.7 steps/s (about 1,050 steps), the bottleneck. On that first
+VM, LeWM-tiny's initial weights differed by seed (checksums 34160.74, 34135.36, 34164.88); see the
+preemption note for the relaunch. [Final throughput; the count of LeWM training clips our
 windows could not take (`weights.log`); cost.]
 
 **Validation anchor.** LeWM's published checkpoint (224 px), 50 pairs, `rng(42)`, through our
@@ -3576,12 +3577,20 @@ driver: [success] against the published 96.0% (binomial SE [se]). [Inside / outs
   (`runs/<date>/<time>/<id>/metrics.csv`), not `lewm_logs/<run>/`. The relaunch finds that CSV from
   each training log and copies it. LeWM-tiny's curves come from there. (`lewm_launch.py`'s docstring
   to be corrected in this PR.)
+* **One spot preemption, 03:32 UTC.** Our 9 runs had finished (all at 16,000 steps); the 3
+  LeWM-tiny runs were near step 8,000. LeWM's per-epoch files hold weights only, and resuming through
+  stable-pretraining's `Manager` would drop the optimizer state, so LeWM-tiny was retrained from
+  scratch on a relaunched VM (about 03:45 UTC), which then ran the whole evaluation. Our arms were
+  trained once, on the first VM. The interrupted LeWM-tiny logs are kept apart and not used.
+  [The relaunch's LeWM-tiny initial-weight checksums.]
 * The dry run measured LeWM-tiny at 0.72 steps/s alone on 2 threads: 16,000 steps take about 6.2 h,
   against the 4 to 5 h estimated. The machine's hard limit was raised to 18 h; the $10 stop rule is
   unchanged.
 
 **Caveats** (from the pre-registration, and one found at launch):
 
+* **Wall-clock speeds are within-VM only.** Our arms and LeWM-tiny trained on different VMs (the
+  preemption), so their throughputs are not compared.
 * **LeWM-tiny's seeds differ only in their initial weights.** stable-pretraining's `Manager` seeds
   itself to 0 after the model is built (the run seed is set before). The three LeWM-tiny runs start
   from different weights (checksums logged), but share the loader order and every random draw during
