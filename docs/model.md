@@ -3580,9 +3580,13 @@ driver: [success] against the published 96.0% (binomial SE [se]). [Inside / outs
 * **One spot preemption, 03:32 UTC.** Our 9 runs had finished (all at 16,000 steps); the 3
   LeWM-tiny runs were near step 8,000. LeWM's per-epoch files hold weights only, and resuming through
   stable-pretraining's `Manager` would drop the optimizer state, so LeWM-tiny was retrained from
-  scratch on a relaunched VM (about 03:45 UTC), which then ran the whole evaluation. Our arms were
+  scratch on a relaunched VM, which then ran the whole evaluation. That relaunch (about 03:45 UTC)
+  stopped itself two minutes into training on a launcher bug (its 1,000-step rule misread the
+  LeWM-tiny runs' start times), so it was relaunched again at about 04:00 UTC; nothing trained in the
+  false start was used. Our arms were
   trained once, on the first VM. The interrupted LeWM-tiny logs are kept apart and not used.
-  [The relaunch's LeWM-tiny initial-weight checksums.]
+  The relaunched seeds start from the same initial weights as on the first VM (checksums
+  34160.738281, 34135.363281, 34164.882812): the seeding is deterministic.
 * The dry run measured LeWM-tiny at 0.72 steps/s alone on 2 threads: 16,000 steps take about 6.2 h,
   against the 4 to 5 h estimated. The machine's hard limit was raised to 18 h; the $10 stop rule is
   unchanged.
