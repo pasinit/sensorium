@@ -45,6 +45,21 @@ def test_zscore_is_sklearns_standard_scaler_as_lewm_fits_it(ev: Any) -> None:
     assert np.allclose(z.inverse_transform(z.transform(y)), y)
 
 
+def test_lewm_frame_takes_one_channels_first_frame_as_the_evaluator_gives_it(ev: Any) -> None:
+    import torch
+
+    from sensorium.pusht_plan import frames64
+
+    rng = np.random.default_rng(0)
+    hwc = rng.integers(0, 256, (224, 224, 3), dtype=np.uint8)
+    out = ev.lewm_frame(torch.as_tensor(hwc).permute(2, 0, 1))  # as tv_tensors.Image(hwc)
+    assert tuple(out.shape) == (3, 64, 64)
+    want = torch.as_tensor(frames64(hwc[None])[0]).permute(2, 0, 1).float() / 255.0
+    assert torch.equal(out, want)
+    with pytest.raises(ValueError, match="one"):
+        ev.lewm_frame(torch.as_tensor(hwc[None]).permute(0, 3, 1, 2))
+
+
 def test_eval_pairs_follow_lewms_draw(ev: Any) -> None:
     lengths = [60, 30, 80, 45]
     episode_idx = np.concatenate([np.full(n, e) for e, n in enumerate(lengths)])

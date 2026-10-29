@@ -190,19 +190,36 @@ def lewm224_transform() -> Callable[[object], object]:
     )
 
 
-def lewm_transform() -> Callable[[object], object]:
-    """LeWM-tiny's frames: our 64 px pipeline, then le-wm's ImageNet normalisation."""
+def lewm_frame(x: object) -> object:
+    """One evaluator frame -> LeWM-tiny's input before normalisation: our 64 px pipeline.
+
+    stable-worldmodel's ``_prepare_info`` calls the transform once per frame, on a
+    ``tv_tensors.Image`` (``[3, 224, 224]`` uint8, channels first); returns ``[3, 64, 64]``
+    float in [0, 1].
+
+    Raises:
+        ValueError: if the frame is not ``[3, 224, 224]``.
+    """
     import torch  # noqa: PLC0415
-    from torchvision.transforms import v2 as transforms  # noqa: PLC0415
 
     from sensorium.pusht_plan import frames64  # noqa: PLC0415
+
+    chw = torch.as_tensor(x).detach().cpu()
+    if chw.ndim != 3 or chw.shape[0] != 3:
+        raise ValueError(f"want one [3, H, W] frame, got {tuple(chw.shape)}")
+    small = frames64(chw.permute(1, 2, 0).numpy()[None])[0]  # [64, 64, 3] uint8
+    return torch.as_tensor(small).permute(2, 0, 1).float() / 255.0
+
+
+def lewm_transform() -> Callable[[object], object]:
+    """LeWM-tiny's frames: our 64 px pipeline (``lewm_frame``), then le-wm's ImageNet
+    normalisation."""
+    from torchvision.transforms import v2 as transforms  # noqa: PLC0415
 
     imagenet = transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 
     def apply(x: object) -> object:
-        frames = np.asarray(x.cpu().numpy() if torch.is_tensor(x) else x)  # [n, H, W, 3] uint8
-        small = torch.as_tensor(frames64(frames)).permute(0, 3, 1, 2).float() / 255.0
-        return imagenet(small)
+        return imagenet(lewm_frame(x))
 
     return apply
 
