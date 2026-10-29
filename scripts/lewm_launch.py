@@ -17,7 +17,7 @@ cache (the training log names it: ``[RegistryLogger] ... run_dir=``); the B-push
 ``lewm_logs/<run>/``, where ``pusht_eval.lewm_curve`` reads it.
 
 LeWM saves its weights at the end of each epoch. B-pusht-0 stops at a step budget, inside an
-epoch, so the launcher also saves them when training ends (``weights_final.pt``, beside LeWM's
+epoch, so the launcher also saves them when training ends (``weights_epoch_final.pt``, beside LeWM's
 per-epoch files), and logs a checksum of the initial weights when training starts (the seeds must
 differ).
 """
@@ -72,7 +72,7 @@ def checksum(model: torch.nn.Module) -> float:
 
 def with_final_save() -> None:
     """Make LeWM's checkpoint callback also log the initial weights' checksum at the start and
-    save ``weights_final.pt`` at the end of training."""
+    save ``weights_epoch_final.pt`` at the end of training."""
     import utils  # noqa: PLC0415 (le-wm's utils.py, next to this file on the VM)
 
     def on_train_start(self: object, trainer: object, pl_module: object) -> None:
