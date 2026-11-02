@@ -31,6 +31,11 @@ clips with clean, per-frame-masked and sequence-masked inputs:
     python scripts/pusht_eval.py pred ours:fix1-pix-s0
     python scripts/pusht_eval.py check-report
 
+Mask-ratio follow-up (fix1 at ``mae_ratio`` 0.5 and 0.3, ``pusht_test.ARMS``): the same plans,
+``pred`` and ``pose`` on its runs, then
+
+    python scripts/pusht_eval.py ratio-report
+
 stable-worldmodel, hydra and le-wm's modules are needed only by ``plan`` and LeWM's ``pose``, on
 the VM; they are imported there.
 """
@@ -740,13 +745,15 @@ def check_paths(eval_dir: Path, family: str, variant: str) -> list[Path]:
     ]
 
 
-def check_plans(eval_dir: Path | None = None) -> dict[str, dict[str, np.ndarray]]:
-    """``{arm: {rule: [seeds, pairs] successes, "evaluator": the evaluator's own}}`` of check 2's
-    arms on the primary protocol, from ``eval_dir`` (default ``EVAL``; arms with a missing seed
-    left out)."""
+def check_plans(
+    eval_dir: Path | None = None, arms: dict[str, tuple[str, str]] | None = None
+) -> dict[str, dict[str, np.ndarray]]:
+    """``{arm: {rule: [seeds, pairs] successes, "evaluator": the evaluator's own}}`` of ``arms``
+    (default check 2's, ``CHECK_ARMS``) on the primary protocol, from ``eval_dir`` (default
+    ``EVAL``; arms with a missing seed left out)."""
     eval_dir = EVAL if eval_dir is None else eval_dir
     out: dict[str, dict[str, np.ndarray]] = {}
-    for arm, (family, variant) in CHECK_ARMS.items():
+    for arm, (family, variant) in (CHECK_ARMS if arms is None else arms).items():
         paths = check_paths(eval_dir, family, variant)
         if not all(p.exists() for p in paths):
             continue
@@ -757,9 +764,11 @@ def check_plans(eval_dir: Path | None = None) -> dict[str, dict[str, np.ndarray]
     return out
 
 
-def success_figure(plans: dict[str, dict[str, np.ndarray]]) -> None:
-    """``runs/pusht/figures/pusht_check_rules.png``: success under each rule per arm (bars: mean
-    over seeds; dots: each seed)."""
+def success_figure(
+    plans: dict[str, dict[str, np.ndarray]], name: str = "pusht_check_rules.png"
+) -> None:
+    """``runs/pusht/figures/<name>``: success under each rule per arm (bars: mean over seeds;
+    dots: each seed)."""
     import matplotlib  # noqa: PLC0415
 
     matplotlib.use("Agg")
@@ -780,20 +789,21 @@ def success_figure(plans: dict[str, dict[str, np.ndarray]]) -> None:
     ax.legend(title="rule", fontsize=8, frameon=False)
     fig.tight_layout()
     (ROOT / "figures").mkdir(parents=True, exist_ok=True)
-    fig.savefig(ROOT / "figures" / "pusht_check_rules.png", dpi=130)
+    fig.savefig(ROOT / "figures" / name, dpi=130)
     plt.close(fig)
 
 
-def check_report() -> None:
-    """Both checks: success under each rule per arm, the contrasts with a0-pix, the match of the
-    ``full`` rule with the evaluator (and with the first run's plans, if copied to
-    ``runs/pusht/eval_first``), the bar figure, and check 1's prediction losses."""
+def rule_tables(
+    plans: dict[str, dict[str, np.ndarray]],
+    contrasts: tuple[tuple[str, str], ...],
+    first: dict[str, np.ndarray],
+) -> None:
+    """Print success under each rule per arm, the ``full`` rule's match with the evaluator (and
+    with ``first``'s plans), and the paired contrasts under each rule."""
     from sensorium.model.paired import contrast_values, describe  # noqa: PLC0415
 
     pairs, seed = PROTOCOLS["primary"]
-    plans = check_plans()
-    first = load_plans_from(ROOT / "eval_first")
-    print(f"\n## Check 2: success by rule ({pairs} pairs, rng {seed})\n")  # noqa: T201
+    print(f"\n## Success by rule ({pairs} pairs, rng {seed})\n")  # noqa: T201
     print("| arm | full | block | agent | seeds |\n|---|---|---|---|---|")  # noqa: T201
     for arm, rules in plans.items():
         cells = " | ".join(
@@ -809,26 +819,45 @@ def check_report() -> None:
     groups = np.arange(pairs)
     print("\n| rule | contrast | value |\n|---|---|---|")  # noqa: T201
     for rule in RULES:
-        for a, b in CHECK_CONTRASTS:
+        for a, b in contrasts:
             if a in plans and b in plans:
                 c = contrast_values(plans[a][rule], plans[b][rule], groups, paired=True)
                 print(f"| {rule} | {a} - {b} | {describe(c)} |")  # noqa: T201
-    if plans:
-        success_figure(plans)
-    print("\n## Check 1: prediction loss on LeWM's validation clips\n")  # noqa: T201
+
+
+def pred_table(runs: tuple[str, ...] | None = None) -> None:
+    """Print check 1's prediction losses of every ``runs/pusht/check/pred-<run>.json`` (or only
+    those of ``runs``)."""
+    print("\n## Prediction loss on LeWM's validation clips\n")  # noqa: T201
     print("| run | BN | clean | per-frame | shared |\n|---|---|---|---|---|")  # noqa: T201
     for path in sorted(CHECK.glob("pred-*.json")):
+        if runs is not None and path.stem.removeprefix("pred-") not in runs:
+            continue
         r = json.loads(path.read_text())
         for bn in ("eval", "batch"):
             cells = " | ".join(f"{r[bn][m]:.4f}" for m in MASKS)
             print(f"| {r['model']} | {bn} | {cells} |")  # noqa: T201
 
 
-def load_plans_from(eval_dir: Path) -> dict[str, np.ndarray]:
-    """``{arm: [seeds, pairs]}`` evaluator successes of the first run's primary plans in
-    ``eval_dir`` (arms without all seeds left out; empty if the folder is absent)."""
+def check_report() -> None:
+    """Both checks: success under each rule per arm, the contrasts with a0-pix, the match of the
+    ``full`` rule with the evaluator (and with the first run's plans, if copied to
+    ``runs/pusht/eval_first``), the bar figure, and check 1's prediction losses."""
+    plans = check_plans()
+    rule_tables(plans, CHECK_CONTRASTS, load_plans_from(ROOT / "eval_first"))
+    if plans:
+        success_figure(plans)
+    pred_table()
+
+
+def load_plans_from(
+    eval_dir: Path, arms: dict[str, tuple[str, str]] | None = None
+) -> dict[str, np.ndarray]:
+    """``{arm: [seeds, pairs]}`` evaluator successes of a previous run's primary plans of ``arms``
+    (default ``CHECK_ARMS``) in ``eval_dir`` (arms without all seeds left out; empty if the
+    folder is absent)."""
     out = {}
-    for arm, (family, variant) in CHECK_ARMS.items():
+    for arm, (family, variant) in (CHECK_ARMS if arms is None else arms).items():
         paths = check_paths(eval_dir, family, variant)
         if all(p.exists() for p in paths):
             out[arm] = np.asarray(
@@ -837,12 +866,81 @@ def load_plans_from(eval_dir: Path) -> dict[str, np.ndarray]:
     return out
 
 
+RATIO_ARMS = {
+    "a0-pix": ("a0-pix", "goal"),
+    "fix1-pix": ("fix1-pix", "goal"),
+    "fix1-pix-r50": ("fix1-pix-r50", "goal"),
+    "fix1-pix-r30": ("fix1-pix-r30", "goal"),
+}
+"""The mask-ratio follow-up's arms (fix1-pix: ratio 0.75)."""
+RATIO_CONTRASTS = (
+    ("fix1-pix", "a0-pix"),
+    ("fix1-pix-r50", "a0-pix"),
+    ("fix1-pix-r30", "a0-pix"),
+    ("fix1-pix-r50", "fix1-pix"),
+    ("fix1-pix-r30", "fix1-pix"),
+)
+RATIO_FIX1 = ("fix1-pix", "fix1-pix-r50", "fix1-pix-r30")
+
+
+def ratio_curves_figure() -> None:
+    """``runs/pusht/figures/pusht_ratio_curves.png``: prediction loss, weighted SIGReg and
+    reconstruction against training clips seen, every seed of fix1 at each mask ratio, with
+    a0-pix for reference."""
+    import matplotlib  # noqa: PLC0415
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+
+    keys = ("pred", "reg", "recon")
+    fig, axes = plt.subplots(1, len(keys), figsize=(5 * len(keys), 3.6))
+    for i, arm in enumerate(("a0-pix", *RATIO_FIX1)):
+        for seed in SEEDS:
+            c = our_curve(arm, seed)
+            for ax, key in zip(axes, keys, strict=True):
+                if key in c and not np.isnan(c[key]).all():
+                    label = arm if seed == 0 else None
+                    ax.plot(c["clips"], c[key], color=f"C{i}", lw=0.8, label=label)
+    for ax, key in zip(axes, keys, strict=True):
+        ax.set(title=key, xlabel="training clips seen", yscale="log")
+        ax.grid(alpha=0.25)
+    axes[0].legend(fontsize=7, frameon=False)
+    fig.tight_layout()
+    (ROOT / "figures").mkdir(parents=True, exist_ok=True)
+    fig.savefig(ROOT / "figures" / "pusht_ratio_curves.png", dpi=130)
+    plt.close(fig)
+
+
+def ratio_report() -> None:
+    """The mask-ratio follow-up: success under each rule (with the first run's evaluator
+    successes, if copied to ``runs/pusht/eval_first``), the contrasts with a0-pix and with fix1
+    at 0.75, the bar figure, the prediction losses, the pose probes and the training curves."""
+    plans = check_plans(arms=RATIO_ARMS)
+    rule_tables(plans, RATIO_CONTRASTS, load_plans_from(ROOT / "eval_first", RATIO_ARMS))
+    if plans:
+        success_figure(plans, "pusht_ratio_rules.png")
+    runs = tuple(f"{a}-s{s}" for a in ("a0-pix", *RATIO_FIX1) for s in SEEDS)
+    pred_table(runs)
+    print("\n## Block pose from the state (episode-grouped 5-fold ridge R2)\n")  # noqa: T201
+    print("| model | layer | x | y | sin | cos |\n|---|---|---|---|---|---|")  # noqa: T201
+    for run in runs:
+        path = POSE / f"ours-{run}.json"
+        if path.exists():
+            r = json.loads(path.read_text())
+            for layer in ("state", "pre"):
+                cells = " | ".join(f"{r[layer][k]:.3f}" for k in ("x", "y", "sin", "cos"))
+                print(f"| {r['model']} | {layer} | {cells} |")  # noqa: T201
+    ratio_curves_figure()
+
+
 def main() -> None:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("command", choices=("plan", "pose", "report", "pred", "check-report"))
+    parser.add_argument(
+        "command", choices=("plan", "pose", "report", "pred", "check-report", "ratio-report")
+    )
     parser.add_argument("model", nargs="?", default="")
     parser.add_argument("--pairs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=43)
@@ -858,6 +956,8 @@ def main() -> None:
         pred(args.model)
     elif args.command == "check-report":
         check_report()
+    elif args.command == "ratio-report":
+        ratio_report()
     else:
         report()
 

@@ -70,8 +70,21 @@ ARMS: dict[str, dict[str, object]] = {
     "a0-pix": {"senses": ("vision",), "recon_weight": 0.0},
     "a0-pix-agent": {"senses": ("vision", "proprio_effector"), "recon_weight": 0.0},
     "fix1-pix": {"senses": ("vision",), "recon_weight": 0.5, "recon_input": "masked"},
+    "fix1-pix-r50": {
+        "senses": ("vision",),
+        "recon_weight": 0.5,
+        "recon_input": "masked",
+        "mae_ratio": 0.5,
+    },
+    "fix1-pix-r30": {
+        "senses": ("vision",),
+        "recon_weight": 0.5,
+        "recon_input": "masked",
+        "mae_ratio": 0.3,
+    },
 }
-"""Our arms (ii), (iii), (iv) of the pre-registration."""
+"""Our arms (ii), (iii), (iv) of the pre-registration, and fix1 at mask ratios 0.5 and 0.3 (the
+follow-up; fix1-pix is 0.75, ``ModelConfig``'s default)."""
 
 LEWM_DATASET = "pusht_subset64"
 """The 64 px HDF5 of the subset in LeWM's layout (``$STABLEWM_HOME/<name>.h5``)."""

@@ -295,3 +295,51 @@ def test_check_report_scores_the_rules_and_contrasts(
     assert "| a0-pix-agent-cur | " in out and "| agent | a0-pix-agent - a0-pix |" in out
     assert "| lewm-tiny | 1.000 | 1.000 |" in out  # the full rule is the evaluator's
     assert "| ours:fix1-pix-s0 | eval | 0.1000 | 0.7000 | 0.3000 |" in out
+
+
+def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
+    ev: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ev, "ROOT", tmp_path / "pusht")
+    monkeypatch.setattr(ev, "EVAL", tmp_path / "pusht/eval")
+    monkeypatch.setattr(ev, "CHECK", tmp_path / "pusht/check")
+    monkeypatch.setattr(ev, "POSE", tmp_path / "pusht/pose")
+    for d in ("eval", "check", "pose"):
+        (tmp_path / "pusht" / d).mkdir(parents=True)
+    pairs, _ = ev.PROTOCOLS["primary"]
+    rng = np.random.default_rng(4)
+    goal = np.tile([100.0, 100.0, 200.0, 200.0, 0.1, 0.0, 0.0], (pairs, 1))
+    for family, variant in ev.RATIO_ARMS.values():
+        for s, path in enumerate(ev.check_paths(tmp_path / "pusht/eval", family, variant)):
+            final = goal + rng.normal(0, 12, goal.shape) * [1, 1, 1, 1, 0.01, 1, 1]
+            hits = ev.success_rules(final, goal)["full"].astype(int).tolist()
+            path.write_text(
+                json.dumps(
+                    {"episode_successes": hits, "final_states": final.tolist()}
+                    | {"goal_states": goal.tolist()}
+                )
+            )
+            run = tmp_path / f"pusht/runs/{family}-s{s}"
+            run.mkdir(parents=True)
+            rows = [{"step": k * 50, "pred": 0.5, "reg": 0.2, "recon": 0.01} for k in range(1, 4)]
+            (run / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
+            pose = {"model": f"ours:{family}-s{s}"} | {
+                layer: {"x": 0.9, "y": 0.8, "sin": 0.3, "cos": 0.2} for layer in ("state", "pre")
+            }
+            (tmp_path / f"pusht/pose/ours-{family}-s{s}.json").write_text(json.dumps(pose))
+    pred = {"model": "ours:fix1-pix-r50-s0"} | {
+        bn: dict(zip(ev.MASKS, (0.1, 0.4, 0.3), strict=True)) for bn in ("eval", "batch")
+    }
+    (tmp_path / "pusht/check/pred-fix1-pix-r50-s0.json").write_text(json.dumps(pred))
+    other = pred | {"model": "ours:a0-pix-agent-s0"}  # not a ratio run: left out
+    (tmp_path / "pusht/check/pred-a0-pix-agent-s0.json").write_text(json.dumps(other))
+    ev.ratio_report()
+    out = capsys.readouterr().out
+    assert (tmp_path / "pusht/figures/pusht_ratio_rules.png").exists()
+    assert (tmp_path / "pusht/figures/pusht_ratio_curves.png").exists()
+    assert (
+        "| block | fix1-pix-r30 - fix1-pix |" in out and "| full | fix1-pix-r50 - a0-pix |" in out
+    )
+    assert "| ours:fix1-pix-r50-s0 | eval | 0.1000 | 0.4000 | 0.3000 |" in out
+    assert "a0-pix-agent" not in out
+    assert "| ours:fix1-pix-r30-s2 | pre | 0.900 |" in out
