@@ -3741,6 +3741,117 @@ training computation; a test checks it. Each condition is measured twice:
 * with the projector's running BatchNorm statistics, as planning uses them;
 * with batch statistics, as the training log used them.
 
+### B-pusht-0: follow-up check results (GCP, n2-standard-16 spot; `scripts/pusht_eval.py check-report`)
+
+**Run.** One n2-standard-16 spot VM, 19:13 to 20:45 UTC (about $0.30, estimated):
+
+* setup until 19:40;
+* check 1, 19:40 to 19:44;
+* smoke, 2 pairs per arm, 47 to 71 s each;
+* check 2, 15 plans at once, 19:48 to 20:42.
+
+No stop rule fired. The first run's checkpoints were read, not changed.
+
+**Check 2: success by rule** (200 pairs, `rng(43)`; mean +- sd over 3 seeds):
+
+| arm | full | block | agent |
+|---|---|---|---|
+| (i) LeWM-tiny | 0.088 +- 0.012 | 0.295 +- 0.016 | 0.093 +- 0.012 |
+| (ii) ours A0, pixels | 0.140 +- 0.029 | 0.355 +- 0.046 | 0.153 +- 0.032 |
+| (iii) ours A0, pixels + agent | 0.290 +- 0.011 | 0.380 +- 0.029 | 0.743 +- 0.022 |
+| (iii-cur) goal proprio = current | 0.033 +- 0.010 | 0.347 +- 0.008 | 0.037 +- 0.010 |
+| (iii-mean) goal proprio = mean | 0.033 +- 0.005 | 0.227 +- 0.017 | 0.040 +- 0.007 |
+
+![Success by rule per arm](figures/pusht_check_rules.png)
+
+* **The full rule reproduces the evaluator** on every arm (1.000 agreement per pair and seed).
+* **Against the first run's plans:** agreement is 1.000 for LeWM-tiny and (iii), and 0.993 for (ii).
+  Four of a0-pix's 600 seed-pair outcomes flipped between runs, so its full rate is 0.140 here
+  against 0.143 then. Planning is not bit-reproducible across machines, but close.
+
+Contrasts with (ii), paired by seed and pair (seed SE, pair SE, combined, MDD):
+
+| rule | contrast | value | reading |
+|---|---|---|---|
+| full | (iii) - (ii) | +0.150 (0.014, 0.027, 0.030, 0.085) | better |
+| full | (iii-cur) - (ii) | -0.107 (0.014, 0.017, 0.022, 0.060) | worse |
+| full | (iii-mean) - (ii) | -0.107 (0.024, 0.019, 0.031, 0.086) | worse |
+| block | (iii) - (ii) | +0.025 (0.023, 0.025, 0.034, 0.096) | no difference |
+| block | (iii-cur) - (ii) | -0.008 (0.030, 0.026, 0.040, 0.111) | no difference |
+| block | (iii-mean) - (ii) | -0.128 (0.037, 0.030, 0.047, 0.133) | no difference |
+| agent | (iii) - (ii) | +0.590 (0.038, 0.032, 0.049, 0.139) | better |
+| agent | (iii-cur) - (ii) | -0.117 (0.016, 0.017, 0.023, 0.065) | worse |
+| agent | (iii-mean) - (ii) | -0.113 (0.027, 0.020, 0.034, 0.095) | worse |
+
+**Check 1: prediction loss on 2,048 of LeWM's validation clips** (the training loss's `pred`; BN:
+the projector's BatchNorm statistics, `eval` = running, as planning uses them, `batch` = the batch's
+own, as the training log):
+
+| run | BN | clean | per-frame mask | shared mask |
+|---|---|---|---|---|
+| a0-pix s0 | eval | 0.033 | 0.698 | 0.636 |
+| a0-pix s1 | eval | 0.035 | 0.219 | 0.149 |
+| a0-pix s2 | eval | 0.038 | 0.204 | 0.163 |
+| a0-pix s0 | batch | 0.053 | 1.300 | 0.095 |
+| a0-pix s1 | batch | 0.054 | 1.318 | 0.098 |
+| a0-pix s2 | batch | 0.053 | 1.406 | 0.100 |
+| fix1-pix s0 | eval | 0.806 | 0.747 | 0.748 |
+| fix1-pix s1 | eval | 0.667 | 0.748 | 0.748 |
+| fix1-pix s2 | eval | 0.593 | 0.748 | 0.749 |
+| fix1-pix s0 | batch | 0.153 | 0.746 | 0.744 |
+| fix1-pix s1 | batch | 0.272 | 0.747 | 0.742 |
+| fix1-pix s2 | batch | 0.048 | 0.747 | 0.744 |
+
+fix1's per-frame value with batch statistics (0.746 to 0.747) reproduces its training log's level
+(0.745 over the last 500 steps), so the measurement follows training's computation.
+
+**Reading.**
+
+* **(iii)'s full-rule lead is all on the agent half.**
+  * Its +0.150 on the full rule (resolved) comes with +0.590 on the agent half (resolved) and
+    +0.025 on the block half, below the MDD of 0.096.
+  * With the goal's agent position taken away, its full success falls to 0.033 (current and mean
+    alike), below a0-pix (-0.107, resolved).
+  * With the current proprio its block-only success, 0.347, equals a0-pix's 0.355. With the mean
+    it is lower (0.227; -0.128, not resolved).
+  * **The agent input does not help move the T:** (iii) wins by placing the agent where the goal
+    says it should be. This settles the B-pusht-0 caveat on (iii) - (ii).
+* **The pixel arms place the T more often than they place the agent.**
+  * LeWM-tiny and a0-pix reach the block half at 0.30 to 0.36, but the agent half only at 0.09 to
+    0.15.
+  * So for them the agent half, not the block, is now the main limit on the full rule.
+  * A likely cause, *a hypothesis not tested here*, is that the agent is small in a 64 px frame
+    and the states hold its position poorly.
+* **Check 1: unpredictable per-frame masks are not why fix1's prediction loss stays high.** That
+  was the first hypothesis, and it is not supported.
+  * fix1's loss is about 0.745 under per-frame and shared masks alike, in both BatchNorm modes.
+  * For a0-pix, by contrast, the shared mask is far easier than the per-frame one: 0.10 against
+    1.34 with batch statistics, so independent masks do make a JEPA's target hard when it was
+    not trained on them.
+  * fix1 does not use the difference. Its near-constant 0.745, whatever the mask, suggests a
+    predictor that outputs close to the mean of the masked-frame states rather than tracking
+    dynamics (*an inference, not measured directly*).
+* **On clean frames fix1 depends strongly on its BatchNorm statistics.**
+  * With eval statistics, the ones planning uses, its loss is 0.59 to 0.81; with batch statistics
+    0.05 to 0.27.
+  * Its running statistics were collected on masked frames only, so planning on clean frames
+    runs its projector off-distribution.
+  * That fits its low planning success, alongside the flat masked-frame loss; neither is
+    separated from the other here.
+* a0-pix's eval-statistics numbers under masks vary by seed (s0 0.70 against 0.20 to 0.22
+  per-frame); masks are off-distribution for it too, and this is reference only.
+
+**Caveats.**
+
+* Same protocol and in-distribution pairs as B-pusht-0.
+* The block and agent halves are this check's own split of `PushT.eval_state`. Its full rule
+  uses the 4-vector norm, so it is stricter than both halves together.
+* (iii-cur) encodes the goal frame with the current agent proprio, an input pair the model never
+  saw in training. (iii-mean) uses an agent position no goal had. Both remove the goal's agent
+  position, but neither is a clean "pixels-only goal".
+* Check 1 runs on validation clips in eval and batch BatchNorm modes, not during training. The
+  near-mean predictor is inferred from the loss level, not from the predictions themselves.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
