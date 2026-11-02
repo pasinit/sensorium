@@ -10,7 +10,10 @@ predicted embedding to the goal's. ``SensoryCostModel`` does the same with our l
   frame), so the planner sees what training saw;
 * proprio (the agent arm only): the evaluator z-scores it with its own scaler, which is undone
   here; our layer normalises with its own statistics. The environment gives one observation, so
-  the window of ``substeps`` observations repeats it;
+  the window of ``substeps`` observations repeats it. The goal's proprio is the dataset's, 25
+  steps later (``goal_proprio``); ``goal_proprio="current"`` or ``"mean"`` replaces it by the
+  current observation's or by the dataset mean (``z = 0`` in the evaluator's scaler), so the goal
+  no longer says where the agent should be (B-pusht-0 check 2);
 * actions: candidates are z-scored action blocks ``[B, N, H, action_block * 2]``; undone with the
   evaluator's scaler (our episodes store the actions as they are, Box(-1, 1)) and placed in our
   action columns, one chunk per planning step;
@@ -32,6 +35,9 @@ from sensorium.model.layout import Header
 from sensorium.model.planning import own_rollout, union_actions
 from sensorium.model.sensory_layer import SensoryLayer, _as_batch
 from sensorium.vision import resize
+
+GOAL_PROPRIO = ("goal", "current", "mean")
+"""Where the goal's proprio comes from (``SensoryCostModel``'s ``goal_proprio``)."""
 
 
 class Scaler(Protocol):
@@ -70,6 +76,11 @@ class SensoryCostModel(torch.nn.Module):
         action_scaler: The evaluator's action scaler (``process['action']``).
         proprio_scaler: The evaluator's proprio scaler (``process['proprio']``); needed only if
             the layer reads proprio.
+        goal_proprio: The goal's proprio: ``goal`` (the dataset's, the default), ``current``
+            (the current observation's) or ``mean`` (the dataset mean).
+
+    Raises:
+        ValueError: on an unknown ``goal_proprio``, or a proprio layer without its scaler.
     """
 
     def __init__(
@@ -78,8 +89,12 @@ class SensoryCostModel(torch.nn.Module):
         header: Header,
         action_scaler: Scaler,
         proprio_scaler: Scaler | None = None,
+        goal_proprio: str = "goal",
     ) -> None:
         super().__init__()
+        if goal_proprio not in GOAL_PROPRIO:
+            raise ValueError(f"goal_proprio must be one of {GOAL_PROPRIO}, got {goal_proprio!r}")
+        self.goal_proprio = goal_proprio
         self.layer = layer
         self.model = layer.model.eval()
         self.header = header
@@ -123,14 +138,17 @@ class SensoryCostModel(torch.nn.Module):
         self, info: Mapping[str, object], key: str
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """The last frame of ``info[key]`` (``pixels`` or ``goal``) and its raw proprio, one per
-        environment (the solver repeats every entry over the candidates: the first is taken)."""
+        environment (the solver repeats every entry over the candidates: the first is taken).
+        The goal's proprio follows ``goal_proprio``."""
         pixels = as_numpy(info[key])[:, 0]
         pixels = pixels.reshape(pixels.shape[0], -1, *pixels.shape[-3:])[:, -1]
         proprio = None
         if self.uses_proprio:
-            pkey = "proprio" if key == "pixels" else "goal_proprio"
-            z = as_numpy(info[pkey])[:, 0]
+            own = key == "pixels" or self.goal_proprio == "current"
+            z = as_numpy(info["proprio" if own else "goal_proprio"])[:, 0]
             z = z.reshape(z.shape[0], -1, z.shape[-1])[:, -1]
+            if key == "goal" and self.goal_proprio == "mean":
+                z = np.zeros_like(z)
             assert self.proprio_scaler is not None
             proprio = self.proprio_scaler.inverse_transform(z)
         return pixels, proprio

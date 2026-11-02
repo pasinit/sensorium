@@ -154,3 +154,144 @@ def test_the_launcher_runs_train_py_as_main_with_the_remaining_arguments(
     monkeypatch.setattr(sys, "argv", ["lewm_launch.py", "--run-seed=3", "img_size=64"])
     launch.main()
     assert json.loads((tmp_path / "train.py.ran").read_text()) == ["img_size=64"]
+
+
+def test_success_rules_split_pushts_rule_into_block_and_agent(ev: Any) -> None:
+    goal = np.array([[100.0, 100.0, 200.0, 200.0, 0.1, 0.0, 0.0]] * 5)
+    final = goal.copy()
+    final[1, :2] += [30.0, 0.0]  # the agent far, the block on its goal
+    final[2, 2:4] += [0.0, 25.0]  # the block far, the agent on its goal
+    final[3, 4] = 2 * np.pi - 0.1  # the block turned by 0.2 rad across the wrap: within pi/9
+    final[4, [0, 2]] += 15.0  # each half within 20, the 4-vector at 21.2: not a success
+    rules = ev.success_rules(final, goal)
+    assert rules["full"].tolist() == [True, False, False, True, False]
+    assert rules["block"].tolist() == [True, True, False, True, True]
+    assert rules["agent"].tolist() == [True, False, True, True, True]
+
+
+def test_plan_names_keep_the_first_runs_files_and_mark_the_variants(ev: Any) -> None:
+    assert ev.plan_name("ours:a0-pix-s0", 200, 43) == "ours-a0-pix-s0-200-43"
+    assert (
+        ev.plan_name("lewm224:quentinll/lewm-pusht", 50, 42) == "lewm224-quentinll_lewm-pusht-50-42"
+    )
+    name = ev.plan_name("ours:a0-pix-agent-s1", 200, 43, "current")
+    assert name == "ours-a0-pix-agent-s1-goalcurrent-200-43"
+
+
+def test_val_sample_takes_only_clips_our_windows_reach(
+    ev: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ev, "PRED_CLIPS", 5)
+    lengths = [60, 60]
+    val = [[0, 0], [0, 3], [0, 4], [0, 10], [0, 40], [0, 44], [0, 45], [1, 4], [1, 30]]
+    got = ev.val_sample(val, lengths)  # starts 0-3 and > 44 cannot be taken (span 20)
+    assert len(set(got)) == 5 and got == sorted(got)
+    assert all(4 <= t <= 44 for _, t in got)
+    assert ev.val_sample(val, lengths) == got  # a fixed draw
+    monkeypatch.setattr(ev, "PRED_CLIPS", 7)
+    with pytest.raises(ValueError, match="only 6"):
+        ev.val_sample(val, lengths)
+
+
+def test_pred_loss_with_the_per_frame_mask_is_fix1s_training_pred(ev: Any, tmp_path: Path) -> None:
+    import torch
+
+    from sensorium import pusht
+    from sensorium.model.data import (
+        LoaderConfig,
+        compute_stats,
+        header_of,
+        load_episode,
+        sequence_with_ends,
+    )
+    from sensorium.model.layout import ChannelSpace
+    from sensorium.model.sensory_layer import ModelConfig, SensoryModel
+
+    rng = np.random.default_rng(0)
+    steps = 30
+    ep = pusht.to_episode(
+        0,
+        {
+            "pixels": rng.integers(0, 255, (steps, 224, 224, 3), dtype=np.uint8),
+            "action": rng.uniform(-0.5, 0.5, (steps, 2)),
+            "proprio": rng.normal(0, 1, (steps, 4)),
+            "state": rng.normal(0, 1, (steps, 7)),
+        },
+    )
+    space = ChannelSpace.from_headers([header_of(ep)])
+    path = tmp_path / "pusht-00000.npz"
+    ep.save(path)
+    compute_stats([path], space, 1)
+    cfg = ModelConfig(
+        senses=("vision",),
+        dim=32,
+        fusion_depth=1,
+        predictor_depth=1,
+        heads=2,
+        vision_size=64,
+        vision_patch=8,
+        vision_dim=32,
+        vision_depth=1,
+        vision_heads=2,
+        vision_tokens=2,
+        steps=4,
+        substeps=5,
+        sigreg_proj=64,
+        recon_weight=0.5,
+        recon_input="masked",
+    )
+    torch.manual_seed(0)
+    model = SensoryModel(cfg, space)
+    loader = LoaderConfig(steps=4, substeps=5, view_size=64, crop=1.0)
+    loaded = load_episode(ep, space, model.data_senses)
+    seqs = [
+        sequence_with_ends(loaded, space, model.data_senses, loader, rng, False, start=s)[0]
+        for s in (0, 3, 7, 10)
+    ]
+    batch = {k: torch.as_tensor(np.stack([q[k] for q in seqs])) for k in seqs[0]}
+    model.train()
+    torch.manual_seed(ev.PRED_SEED)
+    with torch.no_grad():
+        want = float(model(batch)["pred"])  # fix1's one masked pass, as in training
+    state = {k: v.clone() for k, v in model.state_dict().items()}
+    got = ev.pred_loss(model, [batch], "per-frame", "batch")
+    assert got == pytest.approx(want, rel=1e-5)
+    assert all(torch.equal(v, model.state_dict()[k]) for k, v in state.items())  # untouched
+    assert model.recon is not None
+    clean = ev.pred_loss(model, [batch], "clean", "eval")
+    shared = ev.pred_loss(model, [batch], "shared", "eval")
+    assert np.isfinite(clean) and np.isfinite(shared) and clean != shared
+
+
+def test_check_report_scores_the_rules_and_contrasts(
+    ev: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ev, "ROOT", tmp_path / "pusht")
+    monkeypatch.setattr(ev, "EVAL", tmp_path / "pusht/eval")
+    monkeypatch.setattr(ev, "CHECK", tmp_path / "pusht/check")
+    for d in ("eval", "eval_first", "check"):
+        (tmp_path / "pusht" / d).mkdir(parents=True)
+    pairs, seed = ev.PROTOCOLS["primary"]
+    rng = np.random.default_rng(3)
+    goal = np.tile([100.0, 100.0, 200.0, 200.0, 0.1, 0.0, 0.0], (pairs, 1))
+    for family, variant in ev.CHECK_ARMS.values():
+        for path in ev.check_paths(tmp_path / "pusht/eval", family, variant):
+            final = goal + rng.normal(0, 12, goal.shape) * [1, 1, 1, 1, 0.01, 1, 1]
+            hits = ev.success_rules(final, goal)["full"].astype(int).tolist()
+            record = {"episode_successes": hits, "final_states": final.tolist()}
+            path.write_text(json.dumps(record | {"goal_states": goal.tolist()}))
+            if variant == "goal":
+                (tmp_path / "pusht/eval_first" / path.name).write_text(json.dumps(record))
+    pred = {"model": "ours:fix1-pix-s0"} | {
+        bn: dict(zip(ev.MASKS, (0.1, 0.7, 0.3), strict=True)) for bn in ("eval", "batch")
+    }
+    (tmp_path / "pusht/check/pred-fix1-pix-s0.json").write_text(json.dumps(pred))
+    plans = ev.check_plans()
+    assert set(plans) == set(ev.CHECK_ARMS)
+    assert plans["a0-pix"]["full"].shape == (3, pairs)
+    ev.check_report()
+    out = capsys.readouterr().out
+    assert (tmp_path / "pusht/figures/pusht_check_rules.png").exists()
+    assert "| a0-pix-agent-cur | " in out and "| agent | a0-pix-agent - a0-pix |" in out
+    assert "| lewm-tiny | 1.000 | 1.000 |" in out  # the full rule is the evaluator's
+    assert "| ours:fix1-pix-s0 | eval | 0.1000 | 0.7000 | 0.3000 |" in out

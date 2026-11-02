@@ -21,6 +21,16 @@ LeWM's configs instantiate le-wm's modules (``jepa.JEPA``), so le-wm's directory
     python scripts/pusht_eval.py pose ours:a0-pix-s0
     python scripts/pusht_eval.py report
 
+Follow-up checks (``docs/model.md``, "B-pusht-0: follow-up checks"): every plan also keeps each
+environment's final state and goal state, so the success rule can be split into its block and
+agent halves (``success_rules``); ``--goal-proprio`` takes the goal's agent proprio away from the
+agent arm (``SensoryCostModel``); ``pred`` measures a run's prediction loss on LeWM's validation
+clips with clean, per-frame-masked and sequence-masked inputs:
+
+    python scripts/pusht_eval.py plan ours:a0-pix-agent-s0 --goal-proprio current
+    python scripts/pusht_eval.py pred ours:fix1-pix-s0
+    python scripts/pusht_eval.py check-report
+
 stable-worldmodel, hydra and le-wm's modules are needed only by ``plan`` and LeWM's ``pose``, on
 the VM; they are imported there.
 """
@@ -46,6 +56,12 @@ CEM = {"num_samples": 300, "var_scale": 1.0, "n_steps": 30, "topk": 30}
 PLAN = {"horizon": 5, "receding_horizon": 5, "action_block": 5}
 PROTOCOLS = {"primary": (200, 43), "published": (50, 42)}
 """``(pairs, seed)``: the pre-registered primary and LeWM's own 50-pair protocol."""
+CHECK = ROOT / "check"
+PRED_CLIPS = 2048
+PRED_SEED = 0
+PRED_BATCH = 128
+MASKS = ("clean", "per-frame", "shared")
+"""Check 1's input conditions: no mask; training's mask (each frame its own); one mask per clip."""
 POSE_EPISODES = 400
 POSE_SEED = 1
 OURS = ("a0-pix", "a0-pix-agent", "fix1-pix")
@@ -104,6 +120,66 @@ def eval_pairs(
     return rows, episode_idx[rows], step_idx[rows]
 
 
+SUCCESS_RADIUS = 20.0
+SUCCESS_ANGLE = np.pi / 9
+RULES = ("full", "block", "agent")
+
+
+def success_rules(final: np.ndarray, goal: np.ndarray) -> dict[str, np.ndarray]:
+    """Push-T's success rule and its two halves on ``[n, 7]`` env states (agent x, y, block x,
+    y, block angle, agent vx, vy; ``PushT._get_obs``):
+
+    * ``full``: ``PushT.eval_state``, the 4-vector of agent and block position within 20 of the
+      goal's and the block angle within pi/9 (the evaluator's success);
+    * ``block``: the block position within 20 and its angle within pi/9;
+    * ``agent``: the agent position within 20.
+    """
+    final, goal = np.asarray(final, dtype=np.float64), np.asarray(goal, dtype=np.float64)
+    angle = np.abs(goal[:, 4] - final[:, 4])
+    angle_ok = np.minimum(angle, 2 * np.pi - angle) < SUCCESS_ANGLE
+
+    def near(cols: slice) -> np.ndarray:
+        return np.linalg.norm(goal[:, cols] - final[:, cols], axis=1) < SUCCESS_RADIUS
+
+    return {
+        "full": near(slice(0, 4)) & angle_ok,
+        "block": near(slice(2, 4)) & angle_ok,
+        "agent": near(slice(0, 2)),
+    }
+
+
+def plan_name(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> str:
+    """The file stem of a plan's result (``<kind>-<name>[-goal<variant>]-<pairs>-<seed>``)."""
+    kind, name = model.split(":", 1)
+    variant = "" if goal_proprio == "goal" else f"-goal{goal_proprio}"
+    return f"{kind}-{name.replace('/', '_')}{variant}-{pairs}-{seed}"
+
+
+def val_sample(val: list[list[int]], lengths: list[int]) -> list[tuple[int, int]]:
+    """``PRED_CLIPS`` of LeWM's validation clips ``(subset position, LeWM start)`` that our
+    windows can take (``pusht_test.our_start`` inside the episode), drawn with
+    ``rng(PRED_SEED)``, sorted.
+
+    Raises:
+        ValueError: if fewer than ``PRED_CLIPS`` can be taken.
+    """
+    import pusht_test as train_script  # noqa: PLC0415
+
+    from sensorium import pusht  # noqa: PLC0415
+    from sensorium.model.data import spacing  # noqa: PLC0415
+
+    span = train_script.SEQ_STEPS * train_script.SUBSTEPS * spacing(pusht.DT)
+    ok = [
+        (int(e), int(t))
+        for e, t in val
+        if 0 <= train_script.our_start(int(t)) <= lengths[int(e)] - span
+    ]
+    if len(ok) < PRED_CLIPS:
+        raise ValueError(f"only {len(ok)} validation clips can be taken")
+    chosen = np.random.default_rng(PRED_SEED).choice(len(ok), PRED_CLIPS, replace=False)
+    return sorted(ok[i] for i in chosen)
+
+
 def pose_targets(state: np.ndarray) -> np.ndarray:
     """``[n, 4]`` block x, y, sin(angle), cos(angle) from Push-T's state ``[n, 7]``
     (``sensorium.pusht.STATE_NAMES``)."""
@@ -144,7 +220,7 @@ def pose_episodes(n_episodes: int, subset: list[int]) -> list[int]:
 # models
 
 
-def our_cost_model(run: str, process: dict[str, ZScore]) -> object:
+def our_cost_model(run: str, process: dict[str, ZScore], goal_proprio: str = "goal") -> object:
     """Our layer of ``runs/pusht/runs/<run>/ckpt-<STEPS>.pt`` as a cost model."""
     import pusht_test as train_script  # noqa: PLC0415 (scripts/ is on sys.path)
 
@@ -153,7 +229,7 @@ def our_cost_model(run: str, process: dict[str, ZScore]) -> object:
 
     layer = load_layer(ROOT / "runs" / run / f"ckpt-{train_script.STEPS}.pt")
     return SensoryCostModel(
-        layer, train_script.push_t_header(), process["action"], process["proprio"]
+        layer, train_script.push_t_header(), process["action"], process["proprio"], goal_proprio
     )
 
 
@@ -228,15 +304,21 @@ def lewm_transform() -> Callable[[object], object]:
 # planning (VM)
 
 
-def plan(model: str, pairs: int, seed: int) -> Path:
+def plan(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> Path:
     """Planning success of one model on ``pairs`` pairs drawn with ``seed``, through
-    stable-worldmodel's World evaluator; writes ``runs/pusht/eval/<model>-<pairs>-<seed>.json``
-    (success rate, per-pair successes, the pairs)."""
+    stable-worldmodel's World evaluator; writes ``runs/pusht/eval/<plan_name>.json`` (success
+    rate, per-pair successes, the pairs, and each environment's final and goal state).
+
+    Raises:
+        ValueError: if ``goal_proprio`` is not ``goal`` for a LeWM model.
+    """
     import stable_worldmodel as swm  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
     kind, name = model.split(":", 1)
-    out = EVAL / f"{kind}-{name.replace('/', '_')}-{pairs}-{seed}.json"
+    if kind != "ours" and goal_proprio != "goal":
+        raise ValueError("--goal-proprio applies to our layers only")
+    out = EVAL / f"{plan_name(model, pairs, seed, goal_proprio)}.json"
     if out.exists():
         return out
     dataset = swm.data.HDF5Dataset(DATASET, keys_to_cache=["action", "proprio", "state"])
@@ -256,7 +338,7 @@ def plan(model: str, pairs: int, seed: int) -> Path:
         max_episode_steps=2 * BUDGET,
     )
     if kind == "ours":
-        cost_model, transform = our_cost_model(name, process), {}
+        cost_model, transform = our_cost_model(name, process, goal_proprio), {}
     else:
         cost_model = load_lewm(kind, name)
         make = lewm_transform if kind == "lewm" else lewm224_transform
@@ -278,11 +360,16 @@ def plan(model: str, pairs: int, seed: int) -> Path:
             {"method": "_set_goal_state", "args": {"goal_state": {"value": "goal_state"}}},
         ],
     )
+    # 'wait' mode freezes an environment once it succeeds, so its final state is the success state
+    envs = [env.unwrapped for env in world.envs.envs]
+    final = np.stack([np.asarray(env._get_obs(), dtype=np.float64) for env in envs])
+    goal = np.stack([np.asarray(env.goal_state, dtype=np.float64) for env in envs])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         json.dumps(
             {
                 "model": model,
+                "goal_proprio": goal_proprio,
                 "pairs": pairs,
                 "seed": seed,
                 "success_rate": float(metrics["success_rate"]),
@@ -290,6 +377,8 @@ def plan(model: str, pairs: int, seed: int) -> Path:
                 "rows": rows.tolist(),
                 "episodes": episodes.tolist(),
                 "starts": starts.tolist(),
+                "final_states": final.tolist(),
+                "goal_states": goal.tolist(),
             }
         )
     )
@@ -366,6 +455,116 @@ def lewm_pose_features(name: str) -> Callable[..., tuple[np.ndarray, np.ndarray]
         return model.projector(cls).numpy(), cls.numpy()
 
     return features
+
+
+# ---------------------------------------------------------------------------------------------
+# check 1: prediction loss with clean and masked inputs (VM)
+
+
+def pred_batches(layer: object, clips: list[tuple[int, int]]) -> list[dict[str, object]]:
+    """Batches of ``PRED_BATCH`` sequences, one per clip, cut as training cut them: the run's
+    loader configuration, its frame cache, our start for LeWM's clip (``pusht_test.our_start``),
+    the centre view (the full frame at crop 1)."""
+    import pusht_test as train_script  # noqa: PLC0415
+    import torch  # noqa: PLC0415
+
+    from sensorium.model.data import SequenceDataset, sequence_with_ends  # noqa: PLC0415
+
+    paths = train_script.subset_paths()
+    model = layer.model  # type: ignore[attr-defined]
+    senses = model.data_senses
+    data = SequenceDataset(paths, layer.space, senses, layer.loader, train=False)  # type: ignore[attr-defined]
+    rng = np.random.default_rng(0)  # unused: no crop, no touch noise, fixed starts
+    seqs = [
+        sequence_with_ends(
+            data.load(paths[e]),
+            layer.space,  # type: ignore[attr-defined]
+            senses,
+            layer.loader,  # type: ignore[attr-defined]
+            rng,
+            train=False,
+            start=train_script.our_start(t),
+        )[0]
+        for e, t in clips
+    ]
+    return [
+        {k: torch.as_tensor(np.stack([q[k] for q in seqs[i : i + PRED_BATCH]])) for k in seqs[0]}
+        for i in range(0, len(seqs), PRED_BATCH)
+    ]
+
+
+def pred_loss(model: object, batches: list[dict[str, object]], mask: str, bn: str) -> float:
+    """Mean ``pred`` of ``SensoryModel.forward`` (the training loss's next-state MSE) over the
+    batches, with the encoder's input ``mask``ed (``MASKS``) by ``reference.mask_batch``, the
+    function training used.
+
+    The decoder is detached for the call, so the forward pass takes its plain path
+    (``states = embed(batch)``). With training's per-frame mask that is the same computation as
+    fix1's one masked pass (``project(summary_token(masked))``); ``tests`` check it.
+    ``bn = "eval"`` uses the projector's running BatchNorm statistics (as planning does),
+    ``"batch"`` each batch's own (as the training log did; the running statistics are kept).
+    """
+    import copy  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+
+    from sensorium.model import reference  # noqa: PLC0415
+
+    net = copy.deepcopy(model)
+    net.recon = None  # type: ignore[attr-defined]
+    net.train(bn == "batch")  # type: ignore[attr-defined]
+    for m in net.modules():  # type: ignore[attr-defined]
+        if isinstance(m, torch.nn.BatchNorm1d):
+            m.momentum = 0.0  # batch statistics in "batch" mode, but running ones unchanged
+    c = net.cfg  # type: ignore[attr-defined]
+    torch.manual_seed(PRED_SEED)  # the same masks for every model
+    total = 0.0
+    with torch.no_grad():
+        for batch in batches:
+            if mask != "clean":
+                batch, _, _ = reference.mask_batch(
+                    batch,
+                    net.senses,  # type: ignore[attr-defined]
+                    c.vision_patch,
+                    c.mae_ratio,
+                    c.mae_proprio_ratio,
+                    shared=mask == "shared",
+                )
+            total += float(net(batch)["pred"])  # type: ignore[operator]
+    return total / len(batches)
+
+
+def pred(model: str) -> Path:
+    """Check 1 for one of our runs: its prediction loss on ``PRED_CLIPS`` of LeWM's validation
+    clips (``val_sample``) under every ``MASKS`` condition, with eval and batch BatchNorm
+    statistics; writes ``runs/pusht/check/pred-<run>.json``.
+
+    Raises:
+        ValueError: if the model is not one of ours.
+    """
+    import pusht_test as train_script  # noqa: PLC0415
+
+    from sensorium.model.pretrain import load_layer  # noqa: PLC0415
+
+    kind, name = model.split(":", 1)
+    if kind != "ours":
+        raise ValueError("pred measures our layers only")
+    out = CHECK / f"pred-{name}.json"
+    if out.exists():
+        return out
+    split = json.loads((ROOT / "clips.json").read_text())
+    lengths = [train_script.episode_length(p) for p in train_script.subset_paths()]
+    clips = val_sample(split["val"], lengths)
+    layer = load_layer(ROOT / "runs" / name / f"ckpt-{train_script.STEPS}.pt")
+    batches = pred_batches(layer, clips)
+    result = {
+        bn: {mask: pred_loss(layer.model, batches, mask, bn) for mask in MASKS}
+        for bn in ("eval", "batch")
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"model": model, "clips": clips, **result}))
+    logging.info("pred %s: %s", model, result)
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -517,22 +716,148 @@ def report() -> None:
     curves_figure()
 
 
+CHECK_ARMS = {
+    "lewm-tiny": ("lewm-tiny", "goal"),
+    "a0-pix": ("a0-pix", "goal"),
+    "a0-pix-agent": ("a0-pix-agent", "goal"),
+    "a0-pix-agent-cur": ("a0-pix-agent", "current"),
+    "a0-pix-agent-mean": ("a0-pix-agent", "mean"),
+}
+"""Check 2's arms: ``(run family, goal_proprio)``."""
+CHECK_CONTRASTS = (
+    ("a0-pix-agent", "a0-pix"),
+    ("a0-pix-agent-cur", "a0-pix"),
+    ("a0-pix-agent-mean", "a0-pix"),
+)
+
+
+def check_paths(eval_dir: Path, family: str, variant: str) -> list[Path]:
+    """The primary plans of every seed of a run family with a ``goal_proprio`` variant."""
+    pairs, seed = PROTOCOLS["primary"]
+    kind = "lewm" if family == "lewm-tiny" else "ours"
+    return [
+        eval_dir / f"{plan_name(f'{kind}:{family}-s{s}', pairs, seed, variant)}.json" for s in SEEDS
+    ]
+
+
+def check_plans(eval_dir: Path | None = None) -> dict[str, dict[str, np.ndarray]]:
+    """``{arm: {rule: [seeds, pairs] successes, "evaluator": the evaluator's own}}`` of check 2's
+    arms on the primary protocol, from ``eval_dir`` (default ``EVAL``; arms with a missing seed
+    left out)."""
+    eval_dir = EVAL if eval_dir is None else eval_dir
+    out: dict[str, dict[str, np.ndarray]] = {}
+    for arm, (family, variant) in CHECK_ARMS.items():
+        paths = check_paths(eval_dir, family, variant)
+        if not all(p.exists() for p in paths):
+            continue
+        runs = [json.loads(p.read_text()) for p in paths]
+        rules = [success_rules(r["final_states"], r["goal_states"]) for r in runs]
+        out[arm] = {k: np.asarray([r[k] for r in rules], dtype=float) for k in RULES}
+        out[arm]["evaluator"] = np.asarray([r["episode_successes"] for r in runs], dtype=float)
+    return out
+
+
+def success_figure(plans: dict[str, dict[str, np.ndarray]]) -> None:
+    """``runs/pusht/figures/pusht_check_rules.png``: success under each rule per arm (bars: mean
+    over seeds; dots: each seed)."""
+    import matplotlib  # noqa: PLC0415
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+
+    arms = list(plans)
+    fig, ax = plt.subplots(figsize=(8, 3.6))
+    width = 0.8 / len(RULES)
+    for j, rule in enumerate(RULES):
+        x = np.arange(len(arms)) + (j - (len(RULES) - 1) / 2) * width
+        per_seed = np.asarray([plans[a][rule].mean(1) for a in arms])  # [arms, seeds]
+        ax.bar(x, per_seed.mean(1), width * 0.9, color=f"C{j}", label=rule)
+        for i in range(len(arms)):
+            ax.plot([x[i]] * per_seed.shape[1], per_seed[i], "k.", ms=3)
+    ax.set_xticks(np.arange(len(arms)), arms, fontsize=8)
+    ax.set(ylabel="success (200 pairs)", ylim=(0, 1))
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(title="rule", fontsize=8, frameon=False)
+    fig.tight_layout()
+    (ROOT / "figures").mkdir(parents=True, exist_ok=True)
+    fig.savefig(ROOT / "figures" / "pusht_check_rules.png", dpi=130)
+    plt.close(fig)
+
+
+def check_report() -> None:
+    """Both checks: success under each rule per arm, the contrasts with a0-pix, the match of the
+    ``full`` rule with the evaluator (and with the first run's plans, if copied to
+    ``runs/pusht/eval_first``), the bar figure, and check 1's prediction losses."""
+    from sensorium.model.paired import contrast_values, describe  # noqa: PLC0415
+
+    pairs, seed = PROTOCOLS["primary"]
+    plans = check_plans()
+    first = load_plans_from(ROOT / "eval_first")
+    print(f"\n## Check 2: success by rule ({pairs} pairs, rng {seed})\n")  # noqa: T201
+    print("| arm | full | block | agent | seeds |\n|---|---|---|---|---|")  # noqa: T201
+    for arm, rules in plans.items():
+        cells = " | ".join(
+            f"{r.mean(1).mean():.3f} +- {r.mean(1).std():.3f}" for r in (rules[k] for k in RULES)
+        )
+        print(f"| {arm} | {cells} | {len(rules['full'])} |")  # noqa: T201
+    print("\n| arm | full rule = evaluator | full rule = first run |\n|---|---|---|")  # noqa: T201
+    for arm, rules in plans.items():
+        same = (rules["full"] == rules["evaluator"]).mean()
+        then = first.get(arm)
+        again = f"{(rules['full'] == then).mean():.3f}" if then is not None else "n/a"
+        print(f"| {arm} | {same:.3f} | {again} |")  # noqa: T201
+    groups = np.arange(pairs)
+    print("\n| rule | contrast | value |\n|---|---|---|")  # noqa: T201
+    for rule in RULES:
+        for a, b in CHECK_CONTRASTS:
+            if a in plans and b in plans:
+                c = contrast_values(plans[a][rule], plans[b][rule], groups, paired=True)
+                print(f"| {rule} | {a} - {b} | {describe(c)} |")  # noqa: T201
+    if plans:
+        success_figure(plans)
+    print("\n## Check 1: prediction loss on LeWM's validation clips\n")  # noqa: T201
+    print("| run | BN | clean | per-frame | shared |\n|---|---|---|---|---|")  # noqa: T201
+    for path in sorted(CHECK.glob("pred-*.json")):
+        r = json.loads(path.read_text())
+        for bn in ("eval", "batch"):
+            cells = " | ".join(f"{r[bn][m]:.4f}" for m in MASKS)
+            print(f"| {r['model']} | {bn} | {cells} |")  # noqa: T201
+
+
+def load_plans_from(eval_dir: Path) -> dict[str, np.ndarray]:
+    """``{arm: [seeds, pairs]}`` evaluator successes of the first run's primary plans in
+    ``eval_dir`` (arms without all seeds left out; empty if the folder is absent)."""
+    out = {}
+    for arm, (family, variant) in CHECK_ARMS.items():
+        paths = check_paths(eval_dir, family, variant)
+        if all(p.exists() for p in paths):
+            out[arm] = np.asarray(
+                [json.loads(p.read_text())["episode_successes"] for p in paths], dtype=float
+            )
+    return out
+
+
 def main() -> None:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("command", choices=("plan", "pose", "report"))
+    parser.add_argument("command", choices=("plan", "pose", "report", "pred", "check-report"))
     parser.add_argument("model", nargs="?", default="")
     parser.add_argument("--pairs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=43)
+    parser.add_argument("--goal-proprio", default="goal", choices=("goal", "current", "mean"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     sys.path.insert(0, str(Path(__file__).parent))
     if args.command == "plan":
-        plan(args.model, args.pairs, args.seed)
+        plan(args.model, args.pairs, args.seed, args.goal_proprio)
     elif args.command == "pose":
         pose(args.model)
+    elif args.command == "pred":
+        pred(args.model)
+    elif args.command == "check-report":
+        check_report()
     else:
         report()
 

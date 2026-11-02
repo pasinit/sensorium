@@ -71,9 +71,15 @@ def proprio_last(batch: Mapping[str, Tensor], senses: Sequence[str]) -> Tensor:
 
 
 def mask_batch(
-    batch: Mapping[str, Tensor], senses: Sequence[str], patch: int, ratio: float, prop_ratio: float
+    batch: Mapping[str, Tensor],
+    senses: Sequence[str],
+    patch: int,
+    ratio: float,
+    prop_ratio: float,
+    shared: bool = False,
 ) -> tuple[dict[str, Tensor], Tensor, Tensor]:
-    """Mask the encoder's inputs MAE-style.
+    """Mask the encoder's inputs MAE-style: each frame's patches and each step's proprio channels
+    drawn independently, or with ``shared`` one draw per sequence, repeated over its steps.
 
     Returns:
         ``(masked batch, patch_mask [B, T, P] bool, channel_mask [B, T, C] bool)``; the masks are
@@ -83,7 +89,8 @@ def mask_batch(
     frames = batch["vision"]
     b, t, h, w, _ = frames.shape
     side = h // patch
-    hidden = torch.rand(b, t, side, side, device=frames.device) < ratio
+    hidden = torch.rand(b, 1 if shared else t, side, side, device=frames.device) < ratio
+    hidden = hidden.expand(b, t, side, side)
     pixels = hidden.repeat_interleave(patch, 2).repeat_interleave(patch, 3)
     out["vision"] = torch.where(pixels[..., None], torch.full_like(frames, GRAY), frames)
     masks = []
@@ -91,7 +98,9 @@ def mask_batch(
         if sense not in PROPRIO_SENSES:
             continue
         x = batch[sense]
-        gone = torch.rand(x.size(0), x.size(1), 1, x.size(3), device=x.device) < prop_ratio
+        steps = 1 if shared else x.size(1)
+        gone = torch.rand(x.size(0), steps, 1, x.size(3), device=x.device) < prop_ratio
+        gone = gone.expand(x.size(0), x.size(1), 1, x.size(3))
         out[sense] = x.masked_fill(gone, 0.0)
         masks.append(gone[:, :, 0, :])
     channels = torch.cat(masks, dim=-1) if masks else hidden.new_zeros(b, t, 0)

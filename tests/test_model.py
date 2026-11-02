@@ -1333,6 +1333,23 @@ def test_mae_masks_the_encoder_input_and_scores_only_masked_entries(
     )
 
 
+def test_a_shared_mask_hides_the_same_patches_and_channels_at_every_step(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    from sensorium.model import reference  # noqa: PLC0415
+
+    senses = check_senses(REF.senses)
+    batch = batch_of(episodes, space, senses)
+    torch.manual_seed(0)
+    _, hidden, channels = reference.mask_batch(batch, senses, 8, 0.75, 0.5, shared=True)
+    assert hidden.shape[1] > 1
+    assert torch.equal(hidden, hidden[:, :1].expand_as(hidden))
+    assert torch.equal(channels, channels[:, :1].expand_as(channels))
+    torch.manual_seed(0)
+    _, own, _ = reference.mask_batch(batch, senses, 8, 0.75, 0.5)  # the default: per frame
+    assert not torch.equal(own, own[:, :1].expand_as(own))
+
+
 def test_the_input_space_objectives_train_the_encoder(
     episodes: dict[str, Episode], space: ChannelSpace
 ) -> None:
