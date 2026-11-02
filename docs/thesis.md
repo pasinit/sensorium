@@ -12,6 +12,11 @@ how the senses change when the body acts. A new task is then learned from a
 handful of examples, by training only a small head on the frozen layer, or by
 a light LoRA adaptation of it.
 
+The layer is meant to work **across senses for one body** (or a comparable
+one, such as the infant version of the same humanoid): which senses are
+present may change, the body does not. Transfer across different bodies is
+not a goal.
+
 The bet: what makes such a layer general is the **variety of sensory
 contact** it was built from, more than the number of skills it was shown.
 Children don't learn to grasp a cup from a million cup grasps, nor from a
@@ -60,8 +65,9 @@ body; hands are where most of the touch happens, not the unit of
 experience. Locomotion, posture, balance and reaching are experience too, and
 the skin covers all of it.
 
-The car and drone sources that already exist remain as an **"alien body"
-ablation**: does adding non-human bodies to the pool help or hurt?
+The car and drone sources built in M1 are not used: the alien-body ablation
+was dropped on 2026-11-02, since the programme works across senses on one
+body, not across bodies.
 
 ## Hypotheses
 
@@ -215,7 +221,8 @@ the infant body.
    k grows; the layer's value is at small k.
 
 ## Out of scope (for now)
-- **Many bodies / embodiment distance:** car and drone are an ablation only.
+- **Many bodies / embodiment distance:** out of scope; the car and drone sources
+  are legacy M1 code and are in no experiment (alien-body ablation dropped 2026-11-02).
 - **Smell:** no simulator renders odour for agents. Revisit with real e-nose
   data in E4.
 - **Fluent text:** text quality is not a goal, only a readout.
@@ -226,7 +233,7 @@ the infant body.
 | Exp | Question | Status |
 |---|---|---|
 | **D0** | Build **Experientia**, a whole-body multisensory experience dataset on one humanoid with controlled senses, experience kinds and sources, plus a held-out few-shot benchmark | **Proposed:** [dataset-proposal.md](dataset-proposal.md) |
-| **E1** | Senses × kind of experience on one humanoid (H1, H2; diversity and end-effector ablations; alien-body ablation) | **Planned:** [experiment-01.md](experiment-01.md) |
+| **E1** | Senses × kind of experience on one humanoid (H1, H2; diversity and end-effector ablations) | **Planned:** [experiment-01.md](experiment-01.md) |
 | E2 | Development: MIMo infant ↔ adult H1 (H3) | Sketch |
 | E3 | Language: readout probe (H4) and reading → sensory prediction (C5) | Sketch |
 | E4 | Real-world grounding from public data: egocentric human video (Ego-Exo4D, EPIC-Kitchens), real tactile datasets, e-nose data | Later |

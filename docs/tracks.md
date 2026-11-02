@@ -57,7 +57,7 @@ the dataset (D0) and the first experiment (E1).
      and LoRA few-shot adaptation, against vision foundation encoders.
   3. Analyses: the H1 question (being reframed; see the roadmap decision log,
      2026-10-14), the end-effector probe,
-     the alien-body ablation, dense vs coarse touch, stereo.
+     dense vs coarse touch, stereo.
 - **Novel because** the benefit of senses beyond vision is established only
   with real sensors within one body, and task-free experience has not been
   tested as pretraining at equal volume in the few-shot regime
@@ -86,7 +86,7 @@ the dataset (D0) and the first experiment (E1).
 | B0 | Pilot, go/no-go | vision vs all senses × expert vs babbling, 1 seed, frozen heads; 4 runs, ≈ $70–150 |
 | B1 × B2 | H1 × H2 | senses (V, V+T, V+S, V+T+S; proprioception and vestibular sense always; approved 2026-10-14) × experience (expert, babbling, mix) at equal volume, 2 seeds; 24 runs |
 | B3 | Comparisons | scratch; frozen and LoRA VC-1, DINOv2, V-JEPA 2; HPT on the same pool; RP1M and BiGym sanity numbers |
-| B4 | Controls and ablations | diversity (8 vs all sources), effector (hands, pincers, both), alien bodies, body-only control, effector probe; ~6 runs |
+| B4 | Controls and ablations | diversity (8 vs all sources), effector (hands, pincers, both), body-only control, effector probe; ~4 runs |
 | B5 | Analyses | which sense helps which task, demonstrations saved, probes |
 
 Split of the dense-vs-coarse touch question (approved 2026-10-14): Track A measures the

@@ -6,7 +6,7 @@ layer should learn from, *before* any GPU time is spent.
 **Note (2026-10-11):** this sample predates the move to one humanoid body
 ([thesis.md](thesis.md#body-one-humanoid-whole-body-all-senses)). The piano
 hands, their touch and the sound synthesis carry over to the H1; the car and
-drone are now the alien-body ablation. The first humanoid sample arrives
+drone are legacy sources, out of scope since 2026-11-02. The first humanoid sample arrives
 with D0.2. Reviewing this one is still useful for the format, the audio and
 the piano replay, but the open decisions below are no longer blocking.
 

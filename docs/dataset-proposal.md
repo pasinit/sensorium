@@ -68,7 +68,7 @@ note audio.
 | Home tasks | **Pincers**, floating base; 32 of BiGym's 40 tasks | BiGym human VR demos (Apache-2.0; 123 MB), replayed from actions, successes kept | expert, noisy, + pincer babbling | 🔧 adapter |
 | Locomotion | hands idle; walk, run, turns, LAFAN1 motions | LocoMuJoCo H1 mocap (code MIT; datasets CC BY-NC-ND), kinematic replay | expert, noisy | 🔧 adapter |
 | Tabletop play | Shadow hands on the parked playground scene: reach, push, grasp, sort, stack, roll | scripted + babbling | all | 🟡 parked branch (gantry gripper): swap in the H1 arm + hand |
-| Alien bodies *(ablation only)* | car (MetaDrive), quadrotor (PyBullet) | bundled PPO expert, PID | expert, noisy, explore | ✅ built |
+| Alien bodies *(out of scope since 2026-11-02)* | car (MetaDrive), quadrotor (PyBullet) | bundled PPO expert, PID | expert, noisy, explore | ✅ built |
 
 Not in E1: HumanoidBench's 27 tasks as *few-shot targets* (no demos exist;
 they serve as privileged-state probes), MIMo (E2), Meta-World, DM Control,
@@ -97,7 +97,6 @@ Experts are reused, never retrained, wherever someone has released them.
   - **Diversity:** 8 sources vs all, nested, defined by a seed.
   - **End effector:** hands-only · pincers-only · both, at equal steps; the
     hand : pincer : body-only ratio is fixed in every other pool.
-  - **Alien bodies:** the pool with and without car + drone.
 
 ## Few-shot evaluation protocol (the benchmark)
 

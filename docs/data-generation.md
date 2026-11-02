@@ -65,7 +65,7 @@ One body, one episode, one compressed `.npz`. Arrays indexed by time share `T`.
 ## Bodies
 
 The humanoid (the H1, `bodies/humanoid.py`, D0.2) is the project's body. The
-car and drone stay as the alien-body ablation, and the piano hands move onto
+car and drone are legacy M1 sources, out of scope since 2026-11-02 (the project works across senses on one body, not across bodies), and the piano hands move onto
 the H1 arms in D0.5.
 
 | | **Humanoid H1** (the body) | Car (ablation) | Drone (ablation) | Piano hands (hand side) |
