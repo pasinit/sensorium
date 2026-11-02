@@ -3696,6 +3696,51 @@ LeWM's (2.0M against about 17.8M clips), at a far smaller size.
   better (by up to 0.03; cos the other way, by 0.01). The pre-registered expectation, z clearly
   above s as for the arm in H1, holds only weakly for ours and not for LeWM's.
 
+### B-pusht-0: follow-up checks (stated before the run)
+
+Two checks of the readings above, on the existing checkpoints (no training), one CPU spot VM. Code:
+`scripts/pusht_eval.py` (`plan --goal-proprio`, `pred`, `check-report`).
+
+**Check 2: does (iii) win on the agent half of the success rule?** Planning is re-run on the
+primary protocol only (200 pairs, `rng(43)`, the same CEM settings), and each environment's final
+state is kept. ('wait' mode freezes an environment once it succeeds, so a success's final state is
+its success state.) Three rules are scored on the same episodes:
+
+* **full:** `PushT.eval_state`, the evaluator's own rule: the 4-vector of agent and block position
+  within 20 of the goal's, and the block angle within pi/9. It must reproduce the evaluator's
+  successes, and the match with the first run's plans is reported.
+* **block:** the block position within 20 and its angle within pi/9;
+* **agent:** the agent position within 20.
+
+Arms, 3 seeds each:
+
+* (i) LeWM-tiny;
+* (ii) ours A0, pixels;
+* (iii) ours A0, pixels + agent, as before;
+* two variants of (iii) that take the goal's agent position away (`SensoryCostModel`'s
+  `goal_proprio`):
+  * **(iii-cur):** the goal encoded with the current observation's proprio;
+  * **(iii-mean):** the goal encoded with the dataset mean proprio (z = 0 in the evaluator's
+    scaler).
+
+**Contrasts, per rule:** (iii) - (ii) and (iii-cur) - (ii), plus (iii-mean) - (ii). They are paired
+by seed and by pair, with MDD = 2.8 x combined SE.
+
+**Check 1: why fix1's prediction loss does not fall.** The test set is 2,048 of LeWM's validation
+clips our windows can take, drawn with `rng(0)`. For each fix1 seed's final checkpoint, and for
+a0-pix as the reference, the training loss's `pred` term is measured under three input conditions:
+
+* **clean:** no mask;
+* **per-frame:** training's mask, 75% of each frame's patches hidden, drawn per frame;
+* **shared:** one mask per clip, the same at every step.
+
+The code path is training's own: `reference.mask_batch` and `SensoryModel.forward`, with the decoder
+detached so the forward pass encodes the given batch. With the per-frame mask that is fix1's
+training computation; a test checks it. Each condition is measured twice:
+
+* with the projector's running BatchNorm statistics, as planning uses them;
+* with batch statistics, as the training log used them.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:

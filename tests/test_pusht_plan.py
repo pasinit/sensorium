@@ -38,7 +38,7 @@ CFG = ModelConfig(
 class Affine:
     """A stand-in for sklearn's ``StandardScaler`` (``x * scale + mean`` back)."""
 
-    def __init__(self, mean: float, scale: float) -> None:
+    def __init__(self, mean: float | np.ndarray, scale: float) -> None:
         self.mean, self.scale = mean, scale
 
     def inverse_transform(self, x: np.ndarray) -> np.ndarray:
@@ -125,3 +125,33 @@ def test_a_proprio_layer_needs_the_evaluators_proprio_scaler(tmp_path: object) -
     layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
     with pytest.raises(ValueError, match="proprio scaler"):
         SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0))
+
+
+@pytest.mark.parametrize("goal_proprio", ["goal", "current", "mean"])
+def test_goal_proprio_picks_the_goals_proprio(goal_proprio: str, tmp_path: object) -> None:
+    ep = pusht.to_episode(0, source())
+    layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
+    scaler = Affine(np.array([100.0, 50.0, 0.0, 1.0]), 2.0)
+    cost = SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), scaler, goal_proprio)
+    rng = np.random.default_rng(2)
+    n = 3  # environments, a history of 1, every entry repeated over 4 candidates
+    z_now, z_goal = rng.normal(0, 1, (n, 4)), rng.normal(0, 1, (n, 4))
+    info = {
+        "pixels": np.repeat(rng.integers(0, 255, (n, 1, 1, 224, 224, 3), np.uint8), 4, 1),
+        "goal": np.repeat(rng.integers(0, 255, (n, 1, 1, 224, 224, 3), np.uint8), 4, 1),
+        "proprio": np.repeat(z_now[:, None, None], 4, 1),
+        "goal_proprio": np.repeat(z_goal[:, None, None], 4, 1),
+    }
+    _, now = cost.observation(info, "pixels")
+    _, goal = cost.observation(info, "goal")
+    want = {"goal": z_goal, "current": z_now, "mean": np.zeros_like(z_goal)}[goal_proprio]
+    assert now is not None and goal is not None
+    assert np.allclose(now, scaler.inverse_transform(z_now))  # the start is never changed
+    assert np.allclose(goal, scaler.inverse_transform(want))
+
+
+def test_an_unknown_goal_proprio_is_refused(tmp_path: object) -> None:
+    ep = pusht.to_episode(0, source())
+    layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
+    with pytest.raises(ValueError, match="goal_proprio"):
+        SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), Affine(0.0, 1.0), "zero")
