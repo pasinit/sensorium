@@ -148,3 +148,25 @@ def test_lewm_command_keeps_lewms_split_seed_and_passes_the_run_seed() -> None:
     assert seed == 2 and rest == cmd[3:]
     with pytest.raises(ValueError, match="run-seed"):
         launch.split_seed(["img_size=64"])
+
+
+def test_the_ratio_arms_are_fix1_with_only_the_mask_ratio_changed(
+    plan: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import fields  # noqa: PLC0415
+
+    monkeypatch.setattr(plan, "subset_paths", lambda: [Path("pusht-00000.npz")])
+
+    fix1 = plan.model_config("fix1-pix")
+    assert fix1.mae_ratio == 0.75
+    for arm, ratio in (("fix1-pix-r50", 0.5), ("fix1-pix-r30", 0.3)):
+        cfg = plan.model_config(arm)
+        changed = [f.name for f in fields(cfg) if getattr(cfg, f.name) != getattr(fix1, f.name)]
+        assert changed == ["mae_ratio"] and cfg.mae_ratio == ratio
+        run, ref = plan.run_config(arm, 1), plan.run_config("fix1-pix", 1)
+        assert (run.train, run.data, run.augment, run.seed) == (
+            ref.train,
+            ref.data,
+            ref.augment,
+            ref.seed,
+        )
