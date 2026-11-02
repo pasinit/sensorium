@@ -28,7 +28,7 @@ in [tracks.md](tracks.md), awaiting your confirmation.
 |---|---|---|---|---|
 | M1 | Episode format, audio synthesis, car/drone/piano pipeline, browsable sample | — | ✅ built | [data-generation.md](data-generation.md), [review-sample.md](review-sample.md) |
 | **D0** | Experientia v0: the H1 body in our format, four sources, three experience kinds, pools at equal volume, held-out suite, benchmark harness | — | **in progress**: D0.1 ✅, D0.2 ✅, manifest task/instance ✅, dense skin ✅, 256 px vision ✅; next D0.3 | [dataset-proposal.md](dataset-proposal.md) |
-| **E1** | Senses × kind of experience → few-shot, on one body | H1, H2 (+ diversity, effector, alien-body ablations) | planned; pilot ≈ $70–150, full ≈ $370–950 | [experiment-01.md](experiment-01.md) |
+| **E1** | Senses × kind of experience → few-shot, on one body | H1, H2 (+ diversity, effector ablations) | planned; pilot ≈ $70–150, full ≈ $370–950 | [experiment-01.md](experiment-01.md) |
 | E2 | Development: MIMo infant ↔ adult H1 | H3 | sketch | [thesis.md](thesis.md#research-roadmap) |
 | E3 | Language: readout probe; reading → sensory prediction | H4, C5 | sketch | [thesis.md](thesis.md#h4-diagnostic-and-c5-language) |
 | E4 | Real-world grounding (egocentric video, real tactile data, e-nose): real data as *training* input. Real data for *comparison* is now in Track A | — | later | [datasets.md](datasets.md#2-later-bodies-and-datasets) |
@@ -118,6 +118,7 @@ held-out task choice (step 7), go/no-go after the pilot (step 9).
 | 2026-10-15 | A1 headline becomes "caused change" (objects displaced, lifted, toppled, stacked, opened after robot contact; own posture change); contact share, forces, falls and view stay as constraints | Follows the experience decision; thresholds fixed in PhD A's design memo before build |
 | 2026-10-14 | Every results report carries tables (mean ± spread, n) and loss curves; PhDs produce them | Supervisor's standing rule |
 | 2026-10-14 | Track B: no tiny SSL encoder beats an untrained one (probe mean 0.22–0.25 vs floor 0.22); the probe battery is sound (supervised ceiling 0.64, gap +0.42); SSL init gives no fine-tune gain at 4 or 16 labelled episodes | B-ctrl-0 ([model.md](model.md)). Next on CPU: proprio dropout, scale curve (25/50/100 episodes, 128 px, width 256); differences under 0.08 (6 seeds) are not claimed |
+| 2026-11-02 | Goal: one model across senses for the same (or a comparable) body, not across bodies; alien-body ablation (car + drone) dropped from E1 | Your call; saves 2 E1 runs |
 
 
 ## Open questions

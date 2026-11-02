@@ -47,7 +47,6 @@ Data: [Experientia](dataset-proposal.md) (D0). Hypotheses H1–H2:
 | **H2** kind of experience | Score vs experience condition at equal steps | babbling > scratch and > vision-only encoders; mix ≥ expert |
 | diversity *(secondary)* | 8 sources vs all, within the all-senses/mix cell | positive, consistent with MyoDex and Lin et al.; H1/H2 effects hold at both levels |
 | end effector *(ablation)* | hands-only · pincers-only · both pools, equal steps, within the all-senses/mix cell | hand experience helps pincer few-shot and vice versa; reported either way |
-| alien bodies *(ablation)* | all-senses/mix/all-sources pool, with and without car + drone | reported either way |
 
 **Not tested** (already answered in the literature): passive vs
 action-conditioned pretraining (V-JEPA 2 and DINO-WM are baselines instead);
@@ -84,8 +83,8 @@ multi-task pretraining helps on a hand (MyoDex); diversity as a scaling law
 | Seeds | 2 for pretraining, 3 for few-shot heads |
 
 Runs: 4 senses × 3 experience × 2 seeds = 24, plus diversity (2 more), the
-end-effector ablation (2 more) and the alien-body ablation (2 more):
-**~30 pretraining runs**. Pilot: 4 runs
+end-effector ablation (2 more):
+**~28 pretraining runs** (the alien-body ablation was dropped on 2026-11-02). Pilot: 4 runs
 (vision vs all senses) × (expert vs babbling), all sources, 1 seed.
 
 Baselines on the same few-shot protocol:

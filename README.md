@@ -14,9 +14,8 @@ skin, head cameras, a vestibular sense, and Shadow hands or Robotiq pincers.
 flowchart LR
   subgraph sims["Simulators (pinned commits)"]
     H1["H1 humanoid<br/>(MuJoCo)"]
-    ALT["car, drone, piano<br/>(alien-body ablation)"]
   end
-  H1 & ALT -->|sensorium-generate| EP["Episodes (.npz)<br/>vision · audio · touch<br/>proprio · actions<br/>+ manifest.json"]
+  H1 -->|sensorium-generate| EP["Episodes (.npz)<br/>vision · audio · touch<br/>proprio · actions<br/>+ manifest.json"]
   EP -->|sensorium-browse| HTML["HTML review pages"]
   EP -->|sensorium-index| IDX["Parquet index"]
   IDX -->|sensorium-pool| POOL["Equal-volume pools<br/>+ frozen split"]
@@ -39,7 +38,7 @@ open data/sample_h1/index.html
 make pretrain-smoke   # 300 steps of the tiny sensory layer on that sample (~40 s)
 ```
 
-To build the car, drone and piano sample, run `make rp1m-toy && make sample && make browse`.
+The car, drone and piano sources from M1 are legacy code, out of scope since 2026-11-02 (the project works across senses on one body, not across bodies). To build their sample, run `make rp1m-toy && make sample && make browse`.
 The [review checklist](docs/review-sample.md) says what to look for in the pages.
 
 ## Code

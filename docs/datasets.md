@@ -15,7 +15,7 @@ Facts marked **verified** were checked against the primary sources that day.
 | **LocoMuJoCo** v1 | H1 mocap: default + LAFAN1 (>22k samples per humanoid), AMASS separately; kinematic only, no actions (**verified**) | 🔧 render | ❌ → 🔧 | 🔧 skin | ✅ | 🔧 position targets | code MIT; data CC BY-NC-ND | locomotion source (kinematic replay); held-out motions |
 | **RoboPianist + RP1M** | 2 Shadow hands + 88-key piano; RP1M ~1M expert trajectories, ~2k pieces (**verified**, see §2) | ✅ | ✅ notes | 🟡 → 🔧 whole-hand taxels | ✅ | ✅ | Apache-2.0 / CC BY 4.0 | hand-side expert source; OOD songs held out; **built** (hands only, to mount on the H1) |
 | Playground scene (ours, parked) | tabletop objects, 4 materials, scripted reach/push/grasp/sort/stack/roll, contact sound | ✅ | 🔧 contact | ✅ taxels | ✅ | ✅ | ours | hand-side play source; *sort*, *roll* held out |
-| **MetaDrive**, **gym-pybullet-drones** | car, quadrotor (**built**) | ✅ | 🔧 synth | n/a | ✅ | ✅ | Apache-2.0, MIT | alien-body ablation only |
+| **MetaDrive**, **gym-pybullet-drones** | car, quadrotor (**built**) | ✅ | 🔧 synth | n/a | ✅ | ✅ | Apache-2.0, MIT | out of scope (2026-11-02) |
 
 Not used in E1 (other bodies or no data): Meta-World, DM Control, TD-MPC2
 checkpoints, Adroit/Minari, MyoSuite/MyoDM, Bi-DexHands (Isaac Gym),

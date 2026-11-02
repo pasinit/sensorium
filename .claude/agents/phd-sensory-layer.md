@@ -27,8 +27,8 @@ your brief names.
 - The study: senses × experience at matched volume and compute, frozen and
   LoRA few-shot adaptation, comparisons with vision foundation encoders,
   confidence intervals over seeds.
-- Analyses: which sense helps which task, end-effector probe, alien-body
-  ablation, dense vs coarse touch, stereo.
+- Analyses: which sense helps which task, end-effector probe,
+  dense vs coarse touch, stereo.
 - **Not yours:** building data sources or the benchmark (that is Track A);
   ask the postdoc for the data you need.
 
