@@ -31,9 +31,11 @@ clips with clean, per-frame-masked and sequence-masked inputs:
     python scripts/pusht_eval.py pred ours:fix1-pix-s0
     python scripts/pusht_eval.py check-report
 
-Mask-ratio follow-up (fix1 at ``mae_ratio`` 0.5 and 0.3, ``pusht_test.ARMS``): the same plans,
-``pred`` and ``pose`` on its runs, then
+Mask-ratio follow-up (fix1 at ``mae_ratio`` 0.5 and 0.3; arm v, ``a0-pix-agent-imggoal``;
+``pusht_test.ARMS``): the same plans, ``pred`` and ``pose`` on its runs, plans with BatchNorm
+re-calibrated (``--recal-bn``, ``recalibrate``), then
 
+    python scripts/pusht_eval.py plan ours:fix1-pix-s0 --recal-bn
     python scripts/pusht_eval.py ratio-report
 
 stable-worldmodel, hydra and le-wm's modules are needed only by ``plan`` and LeWM's ``pose``, on
@@ -65,6 +67,8 @@ CHECK = ROOT / "check"
 PRED_CLIPS = 2048
 PRED_SEED = 0
 PRED_BATCH = 128
+RECAL_BATCHES = 50
+RECAL_SEED = 1
 MASKS = ("clean", "per-frame", "shared")
 """Check 1's input conditions: no mask; training's mask (each frame its own); one mask per clip."""
 POSE_EPISODES = 400
@@ -153,21 +157,28 @@ def success_rules(final: np.ndarray, goal: np.ndarray) -> dict[str, np.ndarray]:
     }
 
 
-def plan_name(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> str:
-    """The file stem of a plan's result (``<kind>-<name>[-goal<variant>]-<pairs>-<seed>``)."""
+def plan_name(model: str, pairs: int, seed: int, variant: str = "goal") -> str:
+    """The file stem of a plan's result (``<kind>-<name>[-<tag>]-<pairs>-<seed>``): ``variant``
+    is a ``goal_proprio`` (``goal``: no tag; ``current``, ``mean``: ``goal<variant>``) or
+    ``recal`` (BatchNorm re-calibrated, ``recalibrate``)."""
     kind, name = model.split(":", 1)
-    variant = "" if goal_proprio == "goal" else f"-goal{goal_proprio}"
-    return f"{kind}-{name.replace('/', '_')}{variant}-{pairs}-{seed}"
+    tag = {"goal": "", "recal": "-recal"}.get(variant, f"-goal{variant}")
+    return f"{kind}-{name.replace('/', '_')}{tag}-{pairs}-{seed}"
 
 
-def val_sample(val: list[list[int]], lengths: list[int]) -> list[tuple[int, int]]:
-    """``PRED_CLIPS`` of LeWM's validation clips ``(subset position, LeWM start)`` that our
-    windows can take (``pusht_test.our_start`` inside the episode), drawn with
-    ``rng(PRED_SEED)``, sorted.
+def val_sample(
+    val: list[list[int]], lengths: list[int], n: int | None = None, seed: int | None = None
+) -> list[tuple[int, int]]:
+    """``n`` (default ``PRED_CLIPS``) of LeWM's clips ``(subset position, LeWM start)`` (its
+    validation clips, or its training clips for ``recalibrate``) that our windows can take
+    (``pusht_test.our_start`` inside the episode), drawn with ``rng(seed)`` (default
+    ``PRED_SEED``), sorted.
 
     Raises:
-        ValueError: if fewer than ``PRED_CLIPS`` can be taken.
+        ValueError: if fewer than ``n`` can be taken.
     """
+    n = PRED_CLIPS if n is None else n
+    seed = PRED_SEED if seed is None else seed
     import pusht_test as train_script  # noqa: PLC0415
 
     from sensorium import pusht  # noqa: PLC0415
@@ -179,9 +190,9 @@ def val_sample(val: list[list[int]], lengths: list[int]) -> list[tuple[int, int]
         for e, t in val
         if 0 <= train_script.our_start(int(t)) <= lengths[int(e)] - span
     ]
-    if len(ok) < PRED_CLIPS:
-        raise ValueError(f"only {len(ok)} validation clips can be taken")
-    chosen = np.random.default_rng(PRED_SEED).choice(len(ok), PRED_CLIPS, replace=False)
+    if len(ok) < n:
+        raise ValueError(f"only {len(ok)} clips can be taken")
+    chosen = np.random.default_rng(seed).choice(len(ok), n, replace=False)
     return sorted(ok[i] for i in chosen)
 
 
@@ -225,14 +236,19 @@ def pose_episodes(n_episodes: int, subset: list[int]) -> list[int]:
 # models
 
 
-def our_cost_model(run: str, process: dict[str, ZScore], goal_proprio: str = "goal") -> object:
-    """Our layer of ``runs/pusht/runs/<run>/ckpt-<STEPS>.pt`` as a cost model."""
+def our_cost_model(
+    run: str, process: dict[str, ZScore], goal_proprio: str = "goal", recal: bool = False
+) -> object:
+    """Our layer of ``runs/pusht/runs/<run>/ckpt-<STEPS>.pt`` as a cost model (with ``recal``,
+    its BatchNorm statistics re-estimated on clean training frames first, ``recal_layer``)."""
     import pusht_test as train_script  # noqa: PLC0415 (scripts/ is on sys.path)
 
     from sensorium.model.pretrain import load_layer  # noqa: PLC0415
     from sensorium.pusht_plan import SensoryCostModel  # noqa: PLC0415
 
     layer = load_layer(ROOT / "runs" / run / f"ckpt-{train_script.STEPS}.pt")
+    if recal:
+        layer.model = recal_layer(layer)
     return SensoryCostModel(
         layer, train_script.push_t_header(), process["action"], process["proprio"], goal_proprio
     )
@@ -309,21 +325,29 @@ def lewm_transform() -> Callable[[object], object]:
 # planning (VM)
 
 
-def plan(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> Path:
+def plan(
+    model: str, pairs: int, seed: int, goal_proprio: str = "goal", recal: bool = False
+) -> Path:
     """Planning success of one model on ``pairs`` pairs drawn with ``seed``, through
     stable-worldmodel's World evaluator; writes ``runs/pusht/eval/<plan_name>.json`` (success
     rate, per-pair successes, the pairs, and each environment's final and goal state).
 
+    With ``recal`` our layer's BatchNorm statistics are re-estimated first (``recal_layer``).
+
     Raises:
-        ValueError: if ``goal_proprio`` is not ``goal`` for a LeWM model.
+        ValueError: if ``goal_proprio`` is not ``goal`` or ``recal`` is set for a LeWM model, or
+            both options are set.
     """
     import stable_worldmodel as swm  # noqa: PLC0415
     import torch  # noqa: PLC0415
 
     kind, name = model.split(":", 1)
-    if kind != "ours" and goal_proprio != "goal":
-        raise ValueError("--goal-proprio applies to our layers only")
-    out = EVAL / f"{plan_name(model, pairs, seed, goal_proprio)}.json"
+    if kind != "ours" and (goal_proprio != "goal" or recal):
+        raise ValueError("--goal-proprio and --recal-bn apply to our layers only")
+    if recal and goal_proprio != "goal":
+        raise ValueError("--recal-bn is run with the dataset's goal proprio only")
+    variant = "recal" if recal else goal_proprio
+    out = EVAL / f"{plan_name(model, pairs, seed, variant)}.json"
     if out.exists():
         return out
     dataset = swm.data.HDF5Dataset(DATASET, keys_to_cache=["action", "proprio", "state"])
@@ -343,7 +367,7 @@ def plan(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> Path:
         max_episode_steps=2 * BUDGET,
     )
     if kind == "ours":
-        cost_model, transform = our_cost_model(name, process, goal_proprio), {}
+        cost_model, transform = our_cost_model(name, process, goal_proprio, recal), {}
     else:
         cost_model = load_lewm(kind, name)
         make = lewm_transform if kind == "lewm" else lewm224_transform
@@ -375,6 +399,7 @@ def plan(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> Path:
             {
                 "model": model,
                 "goal_proprio": goal_proprio,
+                "recal_bn": recal,
                 "pairs": pairs,
                 "seed": seed,
                 "success_rate": float(metrics["success_rate"]),
@@ -398,9 +423,10 @@ def plan(model: str, pairs: int, seed: int, goal_proprio: str = "goal") -> Path:
 
 
 def pose(model: str) -> Path:
-    """Block-pose probes (x, y, sin and cos of the angle) from a model's planning state and the
-    state before its projector, on ``POSE_EPISODES`` episodes outside the training subset, at
-    every model step; writes ``runs/pusht/pose/<model>.json``."""
+    """Block-pose probes (x, y, sin and cos of the angle) from a model's planning state
+    (``state``), the state before its projector (``pre``) and, for our layers that read proprio,
+    the state with proprio masked out (``image``), on ``POSE_EPISODES`` episodes outside the
+    training subset, at every model step; writes ``runs/pusht/pose/<model>.json``."""
     import pusht_test as train_script  # noqa: PLC0415
 
     from sensorium.episode import Episode  # noqa: PLC0415
@@ -412,14 +438,13 @@ def pose(model: str) -> Path:
     subset = json.loads((ROOT / "subset.json").read_text())
     chosen = pose_episodes(train_script.episode_count(), subset)
     encode = our_pose_features(name) if kind == "ours" else lewm_pose_features(name)
-    feats: dict[str, list[np.ndarray]] = {"state": [], "pre": []}
+    feats: dict[str, list[np.ndarray]] = {}
     targets, groups = [], []
     for i, index in enumerate(chosen):
         ep = Episode.load(train_script.episode_path(index))
         ends = np.arange(train_script.SUBSTEPS - 1, ep.length, train_script.SUBSTEPS)
-        s, pre = encode(ep, ends)
-        feats["state"].append(s)
-        feats["pre"].append(pre)
+        for layer, x in encode(ep, ends).items():
+            feats.setdefault(layer, []).append(x)
         targets.append(pose_targets(np.asarray(ep.privileged["state"])[ends]))
         groups.append(np.full(len(ends), i))
     y, g = np.concatenate(targets), np.concatenate(groups)
@@ -429,20 +454,31 @@ def pose(model: str) -> Path:
     return out
 
 
-def our_pose_features(run: str) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
-    """``(s, z)`` of our layer at given window ends of an episode."""
+def our_pose_features(run: str) -> Callable[..., dict[str, np.ndarray]]:
+    """``{state: s, pre: z}`` of our layer at given window ends of an episode, and ``image``
+    (s with every proprio sense masked out of the fusion) if it reads proprio."""
     import pusht_test as train_script  # noqa: PLC0415
 
     from sensorium.model.planning import encode_at  # noqa: PLC0415
     from sensorium.model.pretrain import load_layer  # noqa: PLC0415
+    from sensorium.model.reference import PROPRIO_SENSES  # noqa: PLC0415
 
     layer = load_layer(ROOT / "runs" / run / f"ckpt-{train_script.STEPS}.pt")
-    return lambda ep, ends: encode_at(layer, ep, ends)
+    proprio = [s for s in layer.model.senses if s in PROPRIO_SENSES]
+
+    def features(ep: object, ends: np.ndarray) -> dict[str, np.ndarray]:
+        s, z = encode_at(layer, ep, ends)  # type: ignore[arg-type]
+        out = {"state": s, "pre": z}
+        if proprio:
+            out["image"] = encode_at(layer, ep, ends, drop=proprio)[0]  # type: ignore[arg-type]
+        return out
+
+    return features
 
 
-def lewm_pose_features(name: str) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
-    """``(projected embedding, CLS token)`` of a LeWM checkpoint at given steps of an episode
-    (its 64 px frames, as it was trained)."""
+def lewm_pose_features(name: str) -> Callable[..., dict[str, np.ndarray]]:
+    """``{state: projected embedding, pre: CLS token}`` of a LeWM checkpoint at given steps of an
+    episode (its 64 px frames, as it was trained)."""
     import torch  # noqa: PLC0415
 
     from sensorium import pusht  # noqa: PLC0415
@@ -452,12 +488,12 @@ def lewm_pose_features(name: str) -> Callable[..., tuple[np.ndarray, np.ndarray]
     std = torch.tensor(IMAGENET_STD)[:, None, None]
 
     @torch.no_grad()
-    def features(ep: object, ends: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def features(ep: object, ends: np.ndarray) -> dict[str, np.ndarray]:
         frames = pusht.lewm_frames(ep)[ends]  # type: ignore[arg-type]
         x = torch.as_tensor(frames).permute(0, 3, 1, 2).float() / 255.0
         out = model.encoder((x - mean) / std, interpolate_pos_encoding=True)
         cls = out.last_hidden_state[:, 0]
-        return model.projector(cls).numpy(), cls.numpy()
+        return {"state": model.projector(cls).numpy(), "pre": cls.numpy()}
 
     return features
 
@@ -539,10 +575,43 @@ def pred_loss(model: object, batches: list[dict[str, object]], mask: str, bn: st
     return total / len(batches)
 
 
+def recalibrate(model: object, batches: list[dict[str, object]]) -> object:
+    """A copy of ``model`` whose BatchNorm running statistics are re-estimated (reset, then the
+    cumulative average over ``batches``, encoded in training mode without gradients); every
+    weight is unchanged. Returned in eval mode."""
+    import copy  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+
+    net = copy.deepcopy(model)
+    for m in net.modules():  # type: ignore[attr-defined]
+        if isinstance(m, torch.nn.BatchNorm1d):
+            m.reset_running_stats()
+            m.momentum = None  # a cumulative average over the batches
+    net.train()  # type: ignore[attr-defined]
+    with torch.no_grad():
+        for batch in batches:
+            net.embed(batch)  # type: ignore[attr-defined]
+    net.eval()  # type: ignore[attr-defined]
+    return net
+
+
+def recal_layer(layer: object) -> object:
+    """``recalibrate`` of a layer's model on ``RECAL_BATCHES`` batches of clean training clips
+    (LeWM's training split, ``val_sample`` with ``rng(RECAL_SEED)``), cut as training cut them."""
+    import pusht_test as train_script  # noqa: PLC0415
+
+    split = json.loads((ROOT / "clips.json").read_text())
+    lengths = [train_script.episode_length(p) for p in train_script.subset_paths()]
+    clips = val_sample(split["train"], lengths, RECAL_BATCHES * PRED_BATCH, RECAL_SEED)
+    return recalibrate(layer.model, pred_batches(layer, clips))  # type: ignore[attr-defined]
+
+
 def pred(model: str) -> Path:
     """Check 1 for one of our runs: its prediction loss on ``PRED_CLIPS`` of LeWM's validation
     clips (``val_sample``) under every ``MASKS`` condition, with eval and batch BatchNorm
-    statistics; writes ``runs/pusht/check/pred-<run>.json``.
+    statistics, and with eval statistics after ``recal_layer`` (``recal``); writes
+    ``runs/pusht/check/pred-<run>.json``.
 
     Raises:
         ValueError: if the model is not one of ours.
@@ -566,6 +635,8 @@ def pred(model: str) -> Path:
         bn: {mask: pred_loss(layer.model, batches, mask, bn) for mask in MASKS}
         for bn in ("eval", "batch")
     }
+    recal = recal_layer(layer)
+    result["recal"] = {mask: pred_loss(recal, batches, mask, "eval") for mask in MASKS}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"model": model, "clips": clips, **result}))
     logging.info("pred %s: %s", model, result)
@@ -834,9 +905,10 @@ def pred_table(runs: tuple[str, ...] | None = None) -> None:
         if runs is not None and path.stem.removeprefix("pred-") not in runs:
             continue
         r = json.loads(path.read_text())
-        for bn in ("eval", "batch"):
-            cells = " | ".join(f"{r[bn][m]:.4f}" for m in MASKS)
-            print(f"| {r['model']} | {bn} | {cells} |")  # noqa: T201
+        for bn in ("eval", "batch", "recal"):
+            if bn in r:  # "recal": eval statistics after recal_layer (absent in older files)
+                cells = " | ".join(f"{r[bn][m]:.4f}" for m in MASKS)
+                print(f"| {r['model']} | {bn} | {cells} |")  # noqa: T201
 
 
 def check_report() -> None:
@@ -871,22 +943,35 @@ RATIO_ARMS = {
     "fix1-pix": ("fix1-pix", "goal"),
     "fix1-pix-r50": ("fix1-pix-r50", "goal"),
     "fix1-pix-r30": ("fix1-pix-r30", "goal"),
+    "fix1-pix-recal": ("fix1-pix", "recal"),
+    "fix1-pix-r50-recal": ("fix1-pix-r50", "recal"),
+    "fix1-pix-r30-recal": ("fix1-pix-r30", "recal"),
+    "a0-pix-agent": ("a0-pix-agent", "goal"),
+    "a0-pix-agent-imggoal": ("a0-pix-agent-imggoal", "goal"),
 }
-"""The mask-ratio follow-up's arms (fix1-pix: ratio 0.75)."""
+"""The follow-up's arms: fix1 at mask ratios 0.75 (fix1-pix), 0.5 and 0.3, each before and after
+BatchNorm re-calibration (``recal``); arm (v) a0-pix-agent-imggoal; a0-pix and a0-pix-agent as
+references."""
 RATIO_CONTRASTS = (
     ("fix1-pix", "a0-pix"),
     ("fix1-pix-r50", "a0-pix"),
     ("fix1-pix-r30", "a0-pix"),
     ("fix1-pix-r50", "fix1-pix"),
     ("fix1-pix-r30", "fix1-pix"),
+    ("fix1-pix-recal", "fix1-pix"),
+    ("fix1-pix-r50-recal", "fix1-pix-r50"),
+    ("fix1-pix-r30-recal", "fix1-pix-r30"),
+    ("fix1-pix-recal", "a0-pix"),
+    ("a0-pix-agent-imggoal", "a0-pix"),
+    ("a0-pix-agent-imggoal", "a0-pix-agent"),
 )
 RATIO_FIX1 = ("fix1-pix", "fix1-pix-r50", "fix1-pix-r30")
+IMGGOAL = ("a0-pix", "a0-pix-agent", "a0-pix-agent-imggoal")
 
 
-def ratio_curves_figure() -> None:
-    """``runs/pusht/figures/pusht_ratio_curves.png``: prediction loss, weighted SIGReg and
-    reconstruction against training clips seen, every seed of fix1 at each mask ratio, with
-    a0-pix for reference."""
+def runs_curves_figure(arms: tuple[str, ...], name: str) -> None:
+    """``runs/pusht/figures/<name>``: prediction loss, weighted SIGReg and reconstruction
+    against training clips seen, every seed of our ``arms``."""
     import matplotlib  # noqa: PLC0415
 
     matplotlib.use("Agg")
@@ -894,7 +979,7 @@ def ratio_curves_figure() -> None:
 
     keys = ("pred", "reg", "recon")
     fig, axes = plt.subplots(1, len(keys), figsize=(5 * len(keys), 3.6))
-    for i, arm in enumerate(("a0-pix", *RATIO_FIX1)):
+    for i, arm in enumerate(arms):
         for seed in SEEDS:
             c = our_curve(arm, seed)
             for ax, key in zip(axes, keys, strict=True):
@@ -907,19 +992,21 @@ def ratio_curves_figure() -> None:
     axes[0].legend(fontsize=7, frameon=False)
     fig.tight_layout()
     (ROOT / "figures").mkdir(parents=True, exist_ok=True)
-    fig.savefig(ROOT / "figures" / "pusht_ratio_curves.png", dpi=130)
+    fig.savefig(ROOT / "figures" / name, dpi=130)
     plt.close(fig)
 
 
 def ratio_report() -> None:
-    """The mask-ratio follow-up: success under each rule (with the first run's evaluator
-    successes, if copied to ``runs/pusht/eval_first``), the contrasts with a0-pix and with fix1
-    at 0.75, the bar figure, the prediction losses, the pose probes and the training curves."""
+    """The follow-up (mask ratio, BatchNorm re-calibration, arm v): success under each rule
+    (with the first run's evaluator successes, if copied to ``runs/pusht/eval_first``), the
+    contrasts, the bar figure, the prediction losses, the pose probes and the training curves
+    (fix1 at each ratio with a0-pix; arm v with a0-pix and a0-pix-agent)."""
     plans = check_plans(arms=RATIO_ARMS)
     rule_tables(plans, RATIO_CONTRASTS, load_plans_from(ROOT / "eval_first", RATIO_ARMS))
     if plans:
         success_figure(plans, "pusht_ratio_rules.png")
-    runs = tuple(f"{a}-s{s}" for a in ("a0-pix", *RATIO_FIX1) for s in SEEDS)
+    families = ("a0-pix", *RATIO_FIX1, *IMGGOAL[1:])
+    runs = tuple(f"{a}-s{s}" for a in families for s in SEEDS)
     pred_table(runs)
     print("\n## Block pose from the state (episode-grouped 5-fold ridge R2)\n")  # noqa: T201
     print("| model | layer | x | y | sin | cos |\n|---|---|---|---|---|---|")  # noqa: T201
@@ -927,10 +1014,12 @@ def ratio_report() -> None:
         path = POSE / f"ours-{run}.json"
         if path.exists():
             r = json.loads(path.read_text())
-            for layer in ("state", "pre"):
-                cells = " | ".join(f"{r[layer][k]:.3f}" for k in ("x", "y", "sin", "cos"))
-                print(f"| {r['model']} | {layer} | {cells} |")  # noqa: T201
-    ratio_curves_figure()
+            for layer in ("state", "pre", "image"):
+                if layer in r:
+                    cells = " | ".join(f"{r[layer][k]:.3f}" for k in ("x", "y", "sin", "cos"))
+                    print(f"| {r['model']} | {layer} | {cells} |")  # noqa: T201
+    runs_curves_figure(("a0-pix", *RATIO_FIX1), "pusht_ratio_curves.png")
+    runs_curves_figure(IMGGOAL, "pusht_imggoal_curves.png")
 
 
 def main() -> None:
@@ -945,11 +1034,12 @@ def main() -> None:
     parser.add_argument("--pairs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=43)
     parser.add_argument("--goal-proprio", default="goal", choices=("goal", "current", "mean"))
+    parser.add_argument("--recal-bn", action="store_true", help="re-estimate BatchNorm first")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     sys.path.insert(0, str(Path(__file__).parent))
     if args.command == "plan":
-        plan(args.model, args.pairs, args.seed, args.goal_proprio)
+        plan(args.model, args.pairs, args.seed, args.goal_proprio, args.recal_bn)
     elif args.command == "pose":
         pose(args.model)
     elif args.command == "pred":

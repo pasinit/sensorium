@@ -2126,3 +2126,38 @@ def test_a_2d_agent_s_proprio_is_an_effector() -> None:
     assert proprio_group("q_left_elbow") == "proprio_body"
     assert proprio_group("vest_gyro_x") == "vestibular"
     assert proprio_group("eff_agent_x") == "proprio_body"  # the prefix must lead
+
+
+IMG = replace(TINY, senses=("vision", "proprio_effector"), image_target=True)
+
+
+def test_image_target_needs_proprio_and_no_reconstruction() -> None:
+    with pytest.raises(ValueError, match="image_target"):
+        replace(TINY, senses=("vision",), image_target=True)
+    with pytest.raises(ValueError, match="image_target"):
+        replace(IMG, recon_weight=0.5)
+
+
+def test_image_target_predicts_the_image_only_encoding_of_the_next_step(
+    episodes: dict[str, Episode], space: ChannelSpace
+) -> None:
+    torch.manual_seed(0)
+    model = SensoryModel(IMG, space).eval()
+    batch = batch_of(episodes, space, model.data_senses)
+    shaken = {**batch, "proprio_effector": batch["proprio_effector"] + 3.0}
+    with torch.no_grad():
+        image = model.embed(model.without_proprio(batch))
+        assert torch.allclose(
+            image, model.embed(model.without_proprio(shaken))
+        )  # target: no proprio
+        states = model.embed(batch)
+        assert not torch.allclose(states, model.embed(shaken))  # context: proprio kept
+        cond = model.action(batch["action"].flatten(0, 1)).view(*states.shape[:2], -1)
+        pred = model.predict(states[:, :-1], cond[:, :-1])
+        want = (pred - image[:, 1:]).pow(2).mean()
+        out = model(batch)
+    assert torch.allclose(out["pred"], want, atol=1e-6)
+    plain = SensoryModel(replace(IMG, image_target=False), space).eval()
+    plain.load_state_dict(model.state_dict())
+    with torch.no_grad():
+        assert not torch.allclose(plain(batch)["pred"], want)  # the default is unchanged

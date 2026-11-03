@@ -65,22 +65,26 @@ def states_at(layer: SensoryLayer, episode: Episode, ends: np.ndarray) -> np.nda
 
 
 def encode_at(
-    layer: SensoryLayer, episode: Episode, ends: np.ndarray
+    layer: SensoryLayer, episode: Episode, ends: np.ndarray, drop: Sequence[str] = ()
 ) -> tuple[np.ndarray, np.ndarray]:
     """``[n, dim]`` states s (projector output) and summary tokens z (the projector's input) of
     the windows whose last observation is at ``ends``, from one forward pass (see
-    ``states_at``).
+    ``states_at``); ``drop``: senses masked out of the fusion, as ``SensoryLayer.encode``.
 
     Raises:
         ValueError: if a window starts before the episode.
     """
-    parts = encode_parts(layer, episode, ends, sense=None)
+    parts = encode_parts(layer, episode, ends, sense=None, drop=drop)
     return parts["s"], parts["z"]
 
 
 @torch.no_grad()
 def encode_parts(
-    layer: SensoryLayer, episode: Episode, ends: np.ndarray, sense: str | None = "proprio_body"
+    layer: SensoryLayer,
+    episode: Episode,
+    ends: np.ndarray,
+    sense: str | None = "proprio_body",
+    drop: Sequence[str] = (),
 ) -> dict[str, np.ndarray]:
     """Every stage of one sense on its way to the state, for the windows ending at ``ends``,
     from one forward pass (eval mode, centre crop):
@@ -93,6 +97,7 @@ def encode_parts(
     * ``z`` ``[n, K_s * dim]``: the summary tokens; ``s`` ``[n, K_s * dim]``: the state.
 
     With ``sense=None`` only ``fused_all``, ``z`` and ``s`` (for a layer without that sense).
+    ``drop``: senses masked out of the fusion (their tokens ignored), as ``SensoryLayer.encode``.
 
     Raises:
         ValueError: if a window starts before the episode, or the sense is not configured or
@@ -121,7 +126,8 @@ def encode_parts(
         if "vision" in model.senses
         else None
     )
-    arrays = build(loaded, layer.space, model.senses, np.asarray(ends), k, rgb=rgb)
+    arrays = dict(build(loaded, layer.space, model.senses, np.asarray(ends), k, rgb=rgb))
+    arrays["present"] = arrays["present"] & ~np.isin(model.senses, list(drop))
     hooks = [
         enc.projector.register_forward_pre_hook(lambda m, a: keep("z", a[0])),
         enc.fusion.register_forward_hook(lambda m, a, o: keep("fused_all", o[:, n_summary:])),
