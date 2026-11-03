@@ -4061,6 +4061,104 @@ Training curves, every seed:
   arms. Their throughputs are within-VM only.
 * Same protocol and in-distribution pairs as B-pusht-0.
 
+### B-pusht-0: fix1-pix-sep (the reconstruction on a masked copy)
+
+**Why.** In the second follow-up, fix1's training prediction loss equalled the variance of its
+training states on all 9 fix1 runs (pred / std² = 1.00 over the last logged steps, every ratio),
+from step 50 on. Its predictor never beat outputting the batch mean. The default one-pass
+reconstruction (`recon_input = "masked"`) feeds the JEPA masked frames for both context and target,
+each frame masked independently. The inference was that the masked states are dominated by their
+own random masks, which no context can predict. The proposed fix needed no code:
+`recon_input = "separate"`, B-fix-0's two-pass form. The next-state loss and SIGReg run on the clean
+batch, and the reconstruction on a masked copy, whose pass stops before the projector.
+
+**Arm.** fix1-pix-sep: fix1-pix with `recon_input = "separate"`, everything else identical (mask
+ratio 0.75, reconstruction 0.5, source z, the same data, budget and seeds), 3 seeds. It is planned
+on the 200 primary pairs and scored by the three rules. Check 1's prediction loss now comes with the
+clean states' per-dimension variance (`state_variance`), so pred / variance shows whether a
+predictor beats the mean; it is computed for fix1-pix-sep, a0-pix and fix1-pix.
+
+**Run.** One n2-standard-16 spot VM, 10:12 to 15:50 UTC, about 5.7 h, about $1.1 to $1.3
+(estimated); no preemption, so the training resume went unused. Training took 4.4 h at about 129
+sequences/s per run (the second pass; 145 were estimated).
+
+**Planning by rule** (200 pairs; mean +- sd over 3 seeds):
+
+| arm | full | block | agent |
+|---|---|---|---|
+| a0-pix | 0.140 +- 0.029 | 0.355 +- 0.046 | 0.153 +- 0.032 |
+| fix1-pix (one masked pass) | 0.040 +- 0.011 | 0.250 +- 0.016 | 0.040 +- 0.011 |
+| **fix1-pix-sep** | 0.142 +- 0.052 | 0.385 +- 0.035 | 0.153 +- 0.062 |
+
+| rule | contrast | value (seed SE, pair SE, combined, MDD) | reading |
+|---|---|---|---|
+| full | sep - a0-pix | +0.002 (0.028, 0.016, 0.032, 0.090) | no difference |
+| block | sep - a0-pix | +0.030 (0.026, 0.018, 0.032, 0.090) | no difference |
+| agent | sep - a0-pix | +0.000 (0.035, 0.017, 0.039, 0.109) | no difference |
+| full | sep - fix1-pix | +0.102 (0.043, 0.018, 0.046, 0.129) | no difference |
+| block | sep - fix1-pix | +0.135 (0.016, 0.024, 0.029, 0.082) | better |
+| agent | sep - fix1-pix | +0.113 (0.050, 0.018, 0.053, 0.148) | no difference |
+
+The full rule matches the evaluator on every plan. The rule figure (all follow-up arms, sep
+included) is updated:
+
+![Success by rule per arm](figures/pusht_ratio_rules.png)
+
+**pred against the clean states' variance** (2,048 validation clips; clean frames):
+
+| run | BN | clean pred | clean state variance | pred / variance |
+|---|---|---|---|---|
+| sep s0 | eval | 0.0351 | 0.976 | 0.036 |
+| sep s1 | eval | 0.0349 | 1.054 | 0.033 |
+| sep s2 | eval | 0.0336 | 0.894 | 0.038 |
+| sep s0 | batch | 0.0569 | 0.963 | 0.059 |
+| sep s1 | batch | 0.0516 | 0.966 | 0.053 |
+| sep s2 | batch | 0.0536 | 0.969 | 0.055 |
+| a0-pix s0-s2 | eval | 0.033 to 0.038 | 0.954 to 0.986 | 0.035 to 0.038 |
+| a0-pix s0-s2 | batch | 0.053 to 0.054 | 0.964 to 0.967 | 0.055 to 0.056 |
+| fix1-pix s0 | batch | 0.1534 | 0.147 | 1.046 |
+| fix1-pix s1 | batch | 0.2719 | 0.268 | 1.013 |
+| fix1-pix s2 | batch | 0.0477 | 0.044 | 1.081 |
+| fix1-pix s0-s2 | eval | 0.59 to 0.81 | 0.0000 | (meaningless) |
+
+fix1's clean-state variance with eval statistics is 0.0000. Its running BatchNorm statistics were
+collected on masked frames, and on clean frames they map every state to nearly the same point. The
+eval-mode ratio is therefore a division by about zero, which is why `ratio_report.txt` shows
+values of 1e4 to 1e5 there. Only fix1's batch-statistics ratio is read.
+
+Block pose (R²) from sep's state: x 0.85 to 0.88, y 0.87 to 0.90, angle 0.20 to 0.31; a0-pix's is
+x 0.87 to 0.88, y 0.86 to 0.90.
+
+Training curves, every seed (fix1-pix-sep with a0-pix and fix1 at each ratio):
+
+![fix1 at each mask ratio and fix1-pix-sep](figures/pusht_ratio_curves.png)
+
+**Reading.**
+
+* **The diagnosis is confirmed.** With the JEPA on clean frames, fix1-pix-sep's predictor beats the
+  mean as a0-pix's does: pred / variance 0.033 to 0.038 (eval) and 0.053 to 0.059 (batch), against
+  a0-pix's 0.035 to 0.038 and 0.055 to 0.056. One-pass fix1's is 1.01 to 1.08 (batch): its
+  clean-frame "prediction loss" of 0.05 to 0.27 was the small spread of its clean states, not learnt
+  dynamics.
+* Its training curves agree. sep's prediction loss lies on a0-pix's from the start, and its SIGReg
+  term ends like a0-pix's (about 0.19), below one-pass fix1's (about 0.23). Its reconstruction
+  converges to the one-pass level.
+* **Planning: fix1-pix-sep equals a0-pix** on every rule (+0.002 full, +0.030 block, +0.000
+  agent, none resolved). Against one-pass fix1 it is better on the block half (+0.135, resolved).
+  On the full rule (+0.102) it falls short of the MDD (0.129), because its seed spread is large
+  (seed SE 0.043; full per seed 0.10 to 0.21).
+* Its state holds the block as a0-pix's does (x 0.85 to 0.88).
+* **Bottom line: the reconstruction term, wired correctly, neither helps nor hurts Push-T
+  planning at this budget.** B-pusht-0's fix1 deficit (-0.100) came from the one-pass wiring,
+  not from reconstruction.
+
+**Caveats.**
+
+* One budget (2.0M clips) and one size; the in-distribution protocol of B-pusht-0.
+* The fix1-pix and a0-pix plans compared here come from the follow-up runs (re-planned, with final
+  states); a0-pix's full rate is 0.140 there against 0.143 in the first run.
+* fix1-pix-sep trained alone on its VM (3 runs on 16 vCPUs), so its throughput is within-VM only.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
