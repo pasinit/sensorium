@@ -846,7 +846,7 @@ def success_figure(
     import matplotlib.pyplot as plt  # noqa: PLC0415
 
     arms = list(plans)
-    fig, ax = plt.subplots(figsize=(8, 3.6))
+    fig, ax = plt.subplots(figsize=(max(8, 1.1 * len(arms)), 4.2))
     width = 0.8 / len(RULES)
     for j, rule in enumerate(RULES):
         x = np.arange(len(arms)) + (j - (len(RULES) - 1) / 2) * width
@@ -854,7 +854,7 @@ def success_figure(
         ax.bar(x, per_seed.mean(1), width * 0.9, color=f"C{j}", label=rule)
         for i in range(len(arms)):
             ax.plot([x[i]] * per_seed.shape[1], per_seed[i], "k.", ms=3)
-    ax.set_xticks(np.arange(len(arms)), arms, fontsize=8)
+    ax.set_xticks(np.arange(len(arms)), arms, fontsize=8, rotation=25, ha="right")
     ax.set(ylabel="success (200 pairs)", ylim=(0, 1))
     ax.grid(axis="y", alpha=0.25)
     ax.legend(title="rule", fontsize=8, frameon=False)
@@ -977,11 +977,17 @@ def runs_curves_figure(arms: tuple[str, ...], name: str) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt  # noqa: PLC0415
 
-    keys = ("pred", "reg", "recon")
-    fig, axes = plt.subplots(1, len(keys), figsize=(5 * len(keys), 3.6))
+    curves = {(arm, seed): our_curve(arm, seed) for arm in arms for seed in SEEDS}
+    keys = tuple(  # the panels some run has data for (no reconstruction panel for A0 runs)
+        k
+        for k in ("pred", "reg", "recon")
+        if any(k in c and not np.isnan(c[k]).all() for c in curves.values())
+    )
+    fig, axes = plt.subplots(1, len(keys), figsize=(5 * len(keys), 3.6), squeeze=False)
+    axes = axes[0]
     for i, arm in enumerate(arms):
         for seed in SEEDS:
-            c = our_curve(arm, seed)
+            c = curves[arm, seed]
             for ax, key in zip(axes, keys, strict=True):
                 if key in c and not np.isnan(c[key]).all():
                     label = arm if seed == 0 else None

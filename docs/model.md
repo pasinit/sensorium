@@ -3852,6 +3852,215 @@ fix1's per-frame value with batch statistics (0.746 to 0.747) reproduces its tra
 * Check 1 runs on validation clips in eval and batch BatchNorm modes, not during training. The
   near-mean predictor is inferred from the loss level, not from the predictions themselves.
 
+### B-pusht-0: second follow-up (mask ratio, BatchNorm re-calibration, arm v)
+
+**Design** (written before the results of the trained arms; the BatchNorm part was in by then).
+Three questions on the checkpoints and on six new runs, all planned on the primary protocol (200
+pairs, `rng(43)`) and scored by the three rules of the first follow-up. Code:
+`scripts/pusht_eval.py` (`plan --recal-bn`, `pred`, `pose`, `ratio-report`); arms in
+`scripts/pusht_test.py`.
+
+* **BatchNorm re-calibration** (no training). For every fix1 model, the projector's BatchNorm
+  running statistics are re-estimated on 50 batches of 128 clean training clips (LeWM's training
+  split, `rng(1)`), without gradients; every weight is unchanged (`recalibrate`). Each model is
+  scored before and after: the training `pred` term on the 2,048 validation clips, eval
+  statistics, and planning by rule.
+* **Mask ratio.** fix1-pix retrained with `mae_ratio` 0.5 and 0.3 (arms fix1-pix-r50,
+  fix1-pix-r30), everything else as fix1-pix (0.75), 3 seeds each. Contrasts against a0-pix and
+  against fix1 at 0.75.
+* **Arm (v), a0-pix-agent-imggoal** (`ModelConfig.image_target`). The input at every step is image
+  + agent proprio, as (iii). The next-state target is the next step's state with every proprio
+  sense masked out of the fusion, and planning encodes the goal from its image only (no goal
+  proprio); the current observation keeps its proprio. SIGReg is the mean over the context
+  states and the image-only targets. 3 seeds, (iii)'s data and budget. Main contrast:
+  (v) - a0-pix on the block rule; also the full and agent rules. Pose probes from the
+  image+proprio state and from the image-only state.
+
+**Run.** One n2-standard-32 spot VM, from 00:07 UTC; preempted at 00:45 and 02:04 UTC, the second
+time 2,150 steps into the trainings, all lost (training could not resume then). Relaunched at
+03:19 UTC with training resume (`train.resume_every`, PR #65), which started the trainings
+afresh (nothing had been saved to resume from). Stage A (fix1 at 0.75, no training) had finished
+before the second preemption and was kept. The third VM:
+
+* trained 03:38 to 08:15 UTC: the 9 runs took 3.3 to 3.7 h (fix1 at 0.5 and 0.3, 153 to 170
+  sequences/s) and 4.4 to 4.6 h (arm v, 125 to 129 sequences/s: two encoder passes);
+* evaluated 08:15 to 08:56 UTC.
+
+That is about 7.3 h of n2-standard-32 spot in all, about $2.6 to $2.9 (estimated). Training was
+slower than the 2.6 h estimated from the first run.
+
+#### BatchNorm re-calibration of fix1 at 0.75
+
+Planning by rule (200 pairs; mean +- sd over 3 seeds):
+
+| arm | full | block | agent |
+|---|---|---|---|
+| a0-pix | 0.140 +- 0.029 | 0.355 +- 0.046 | 0.153 +- 0.032 |
+| fix1-pix, as trained | 0.040 +- 0.011 | 0.250 +- 0.016 | 0.040 +- 0.011 |
+| fix1-pix, re-calibrated | 0.043 +- 0.005 | 0.240 +- 0.012 | 0.043 +- 0.005 |
+
+| rule | contrast | value (seed SE, pair SE, combined, MDD) | reading |
+|---|---|---|---|
+| full | re-calibrated - as trained | +0.003 (0.010, 0.009, 0.013, 0.037) | no difference |
+| block | re-calibrated - as trained | -0.010 (0.003, 0.019, 0.019, 0.054) | no difference |
+| agent | re-calibrated - as trained | +0.003 (0.010, 0.009, 0.013, 0.037) | no difference |
+| full | re-calibrated - a0-pix | -0.097 (0.019, 0.018, 0.026, 0.073) | worse |
+| block | re-calibrated - a0-pix | -0.115 (0.033, 0.026, 0.042, 0.118) | no difference |
+| agent | re-calibrated - a0-pix | -0.110 (0.020, 0.019, 0.028, 0.077) | worse |
+
+The re-planned fix1 at 0.75 agrees with the first run's plans on 0.993 of seed-pair outcomes
+(full 0.040 here against 0.043 then); the full rule matches the evaluator on every plan.
+
+Prediction loss on clean validation frames (eval statistics), per seed:
+
+| seed | as trained | re-calibrated | batch statistics (first follow-up) |
+|---|---|---|---|
+| s0 | 0.806 | 0.163 | 0.153 |
+| s1 | 0.667 | 0.300 | 0.272 |
+| s2 | 0.593 | 0.052 | 0.048 |
+
+(a0-pix: 0.033 to 0.038.) With masked inputs the re-calibrated models' losses are in the tens of
+thousands: the statistics now describe clean frames only, so masked frames are far outside them.
+Only the clean column is read.
+
+**Reading.**
+
+* **Re-calibration does what it should to the prediction loss**: on clean frames it brings each
+  seed to its batch-statistics value (0.05 to 0.30 from 0.59 to 0.81), so the running statistics
+  collected on masked frames were the whole of fix1's clean-frame eval-mode gap.
+* **It does not change planning**: full 0.043 against 0.040, block and agent within 0.01, none
+  resolved (MDD 0.037 to 0.054). The BatchNorm mismatch is not why fix1 plans poorly.
+* Seed 2 shows it most plainly: after re-calibration its clean one-step loss (0.052) is close to
+  a0-pix's (0.033 to 0.038), but it plans at 0.040 full, against a0-pix's 0.10 to 0.17 per seed.
+  A one-step prediction loss on clean frames near A0's does not give A0's planning.
+* fix1's deficit against a0-pix is on the agent half (0.04 against 0.15, resolved) more than the
+  block half (0.24 to 0.25 against 0.36, not resolved).
+
+#### Mask ratio 0.5 and 0.3
+
+Planning by rule (200 pairs; mean +- sd over 3 seeds; "recal": BatchNorm re-calibrated):
+
+| arm | full | block | agent |
+|---|---|---|---|
+| a0-pix | 0.140 +- 0.029 | 0.355 +- 0.046 | 0.153 +- 0.032 |
+| fix1, ratio 0.75 | 0.040 +- 0.011 | 0.250 +- 0.016 | 0.040 +- 0.011 |
+| fix1, ratio 0.5 | 0.045 +- 0.018 | 0.297 +- 0.006 | 0.045 +- 0.018 |
+| fix1, ratio 0.3 | 0.047 +- 0.021 | 0.248 +- 0.020 | 0.053 +- 0.021 |
+| fix1, 0.75, recal | 0.043 +- 0.005 | 0.240 +- 0.012 | 0.043 +- 0.005 |
+| fix1, 0.5, recal | 0.050 +- 0.011 | 0.278 +- 0.012 | 0.052 +- 0.013 |
+| fix1, 0.3, recal | 0.043 +- 0.010 | 0.252 +- 0.008 | 0.045 +- 0.008 |
+
+![Success by rule per arm](figures/pusht_ratio_rules.png)
+
+Contrasts (seed SE, pair SE, combined, MDD):
+
+| rule | contrast | value | reading |
+|---|---|---|---|
+| full | 0.5 - a0-pix | -0.095 (0.026, 0.016, 0.030, 0.085) | worse |
+| full | 0.3 - a0-pix | -0.093 (0.036, 0.017, 0.039, 0.110) | no difference |
+| full | 0.5 - 0.75 | +0.005 (0.020, 0.010, 0.023, 0.064) | no difference |
+| full | 0.3 - 0.75 | +0.007 (0.017, 0.012, 0.021, 0.059) | no difference |
+| full | 0.5 recal - 0.5 | +0.005 (0.013, 0.010, 0.016, 0.046) | no difference |
+| full | 0.3 recal - 0.3 | -0.003 (0.012, 0.009, 0.015, 0.042) | no difference |
+| block | 0.5 - a0-pix | -0.058 (0.037, 0.024, 0.044, 0.122) | no difference |
+| block | 0.3 - a0-pix | -0.107 (0.047, 0.023, 0.053, 0.147) | no difference |
+| block | 0.5 - 0.75 | +0.047 (0.015, 0.019, 0.024, 0.067) | no difference |
+| block | 0.3 - 0.75 | -0.002 (0.019, 0.018, 0.027, 0.075) | no difference |
+| agent | 0.5 - a0-pix | -0.108 (0.027, 0.017, 0.032, 0.090) | worse |
+| agent | 0.3 - a0-pix | -0.100 (0.036, 0.018, 0.040, 0.113) | no difference |
+| agent | 0.5 - 0.75 | +0.005 (0.020, 0.010, 0.023, 0.064) | no difference |
+| agent | 0.3 - 0.75 | +0.013 (0.014, 0.013, 0.019, 0.054) | no difference |
+
+Prediction loss on the 2,048 validation clips (each run masked at its own training ratio):
+
+| run | clean, eval BN | clean, batch BN | clean, recal | per-frame (eval / batch) | shared (eval / batch) |
+|---|---|---|---|---|---|
+| 0.5 s0 | 0.735 | 0.063 | 0.068 | 0.749 / 0.748 | 0.747 / 0.741 |
+| 0.5 s1 | 0.785 | 0.042 | 0.045 | 0.749 / 0.748 | 0.751 / 0.746 |
+| 0.5 s2 | 0.779 | 0.029 | 0.031 | 0.746 / 0.744 | 0.746 / 0.739 |
+| 0.3 s0 | 0.703 | 0.437 | 0.487 | 0.749 / 0.748 | 0.746 / 0.743 |
+| 0.3 s1 | 0.695 | 0.169 | 0.190 | 0.749 / 0.746 | 0.749 / 0.742 |
+| 0.3 s2 | 0.757 | 0.088 | 0.094 | 0.748 / 0.746 | 0.748 / 0.741 |
+
+Block pose from the state (R², x and y; mean over seeds, range in brackets): 0.75 x 0.600 (0.465
+to 0.688), y 0.863; 0.5 x 0.644 (0.566 to 0.690), y 0.858; 0.3 x 0.571 (0.496 to 0.680), y 0.858
+(a0-pix 0.873 and 0.876). The angle stays at 0.11 to 0.15 for every ratio.
+
+Training curves, every seed (a0-pix for reference):
+
+![fix1 at each mask ratio](figures/pusht_ratio_curves.png)
+
+**Reading.**
+
+* **Lowering the mask ratio does nothing for planning.**
+  * Full-rule success is 0.045 at 0.5 and 0.047 at 0.3, against 0.040 at 0.75.
+  * None is resolved against fix1 at 0.75. Against a0-pix (0.140) they are resolved below it
+    (0.75, 0.5) or within its MDD (0.3, -0.093 against an MDD of 0.110).
+  * The block-half gain at 0.5, +0.047, is below its MDD (0.067).
+  * Re-calibration does nothing at any ratio (-0.003 to +0.005).
+* **The curves show why.** At every ratio the training prediction loss rises from about 0.45 to
+  0.74 within the first ~50k clips and stays flat, while reconstruction and SIGReg converge as
+  at 0.75. Under masking its predictor never learns; that does not depend on how much is masked.
+  The masked losses on validation clips sit at 0.74 to 0.75 for every ratio, mask and BatchNorm
+  mode.
+* Clean frames with batch statistics give 0.03 to 0.44 (0.5: 0.03 to 0.06, a0-pix-like; 0.3:
+  0.09 to 0.44), and re-calibration reaches the same values, yet planning stays at fix1's level.
+  As at 0.75, an A0-like one-step loss on clean frames does not give A0-like planning.
+
+#### Arm (v): image + agent input, image-only target and goal
+
+Planning by rule (200 pairs):
+
+| arm | full | block | agent |
+|---|---|---|---|
+| a0-pix | 0.140 +- 0.029 | 0.355 +- 0.046 | 0.153 +- 0.032 |
+| (iii) a0-pix-agent | 0.290 +- 0.011 | 0.380 +- 0.029 | 0.743 +- 0.022 |
+| (v) a0-pix-agent-imggoal | 0.077 +- 0.018 | 0.288 +- 0.014 | 0.078 +- 0.016 |
+
+| rule | contrast | value (seed SE, pair SE, combined, MDD) | reading |
+|---|---|---|---|
+| block | (v) - a0-pix (main) | -0.067 (0.035, 0.019, 0.040, 0.112) | no difference |
+| full | (v) - a0-pix | -0.063 (0.034, 0.016, 0.037, 0.105) | no difference |
+| agent | (v) - a0-pix | -0.075 (0.034, 0.017, 0.038, 0.107) | no difference |
+| block | (v) - (iii) | -0.092 (0.028, 0.026, 0.039, 0.109) | no difference |
+| full | (v) - (iii) | -0.213 (0.020, 0.025, 0.032, 0.089) | worse |
+| agent | (v) - (iii) | -0.665 (0.005, 0.028, 0.028, 0.080) | worse |
+
+Block pose (R²; mean over seeds): (v)'s image+proprio state x 0.837 (0.824 to 0.845), y 0.863,
+angle 0.23 to 0.27. Its image-only state: x 0.885, y 0.913, angle 0.17 to 0.23. For comparison,
+a0-pix's state is x 0.873, y 0.876, and (iii)'s x 0.453, y 0.410.
+
+Prediction loss of (v) on clean validation frames (eval statistics; the target is image-only):
+0.040 to 0.045 (a0-pix 0.033 to 0.038).
+
+Training curves, every seed:
+
+![Arm v with a0-pix and a0-pix-agent](figures/pusht_imggoal_curves.png)
+
+**Reading.**
+
+* **With an image-only target and goal, the agent sensors in the input give no measurable
+  planning gain over pixels alone.** (v) - a0-pix is -0.063 full and -0.067 block, neither
+  resolved (MDDs 0.105 and 0.112).
+* Against (iii), (v) loses -0.213 full and -0.665 on the agent half (both resolved), and the block
+  half is not resolved (-0.092). **(iii)'s lead came from its goal holding the agent's position**,
+  which the first follow-up's (iii-cur) and (iii-mean) already suggested.
+* (v)'s states hold the block like a0-pix's (x 0.84 with proprio, 0.89 image-only, against
+  a0-pix's 0.87), well above (iii)'s 0.45. The image-only target keeps the block in the state.
+  Its clean one-step loss is a0-pix-like (0.040 to 0.045). Neither turns into better planning
+  than a0-pix.
+
+**Caveats.**
+
+* (v)'s rollout feeds its own predicted states, image-only by training, back as predictor
+  context, while training context was always image + proprio states. This mismatch from the
+  second planning step on may cost (v) planning success; it is not separated here.
+* (v)'s BatchNorm statistics mix image+proprio and image-only encodings (both pass the projector
+  in training).
+* The (v) and ratio runs trained on a different VM and with a different load than the first run's
+  arms. Their throughputs are within-VM only.
+* Same protocol and in-distribution pairs as B-pusht-0.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
