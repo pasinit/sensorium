@@ -49,6 +49,7 @@ from sensorium.model.pretrain import (  # noqa: E402
     TrainConfig,
     ema_at,
     load_layer,
+    lr_at,
     parse_config,
     pick_device,
     save_checkpoint,
@@ -2161,3 +2162,62 @@ def test_image_target_predicts_the_image_only_encoding_of_the_next_step(
     plain.load_state_dict(model.state_dict())
     with torch.no_grad():
         assert not torch.allclose(plain(batch)["pred"], want)  # the default is unchanged
+
+
+def test_a_stopped_run_resumes_from_its_last_resume_point(tmp_path: Path) -> None:
+    pytest.importorskip("h5py", reason="needs the pusht extra")
+    from sensorium import pusht  # noqa: PLC0415
+
+    (tmp_path / "data").mkdir()
+    rng = np.random.default_rng(0)
+    for i in range(2):  # two small Push-T episodes on disk (vision and the agent's proprio)
+        arrays = {
+            "pixels": rng.integers(0, 255, (40, 224, 224, 3), dtype=np.uint8),
+            "action": rng.uniform(-0.5, 0.5, (40, 2)),
+            "proprio": rng.normal(0, 1, (40, 4)),
+            "state": rng.normal(0, 1, (40, 7)),
+        }
+        pusht.to_episode(i, arrays).save(tmp_path / "data" / f"pusht-{i:05d}.npz")
+    cfg = RunConfig(
+        name="r",
+        data=parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data,
+        model=replace(TINY, senses=("vision", "proprio_effector")),
+        train=TrainConfig(
+            steps=20,
+            batch_size=2,
+            warmup=4,
+            out_dir=str(tmp_path / "runs"),
+            log_every=1,
+            resume_every=5,
+            eval_windows=0,
+            device="cpu",
+        ),
+    )
+    out = tmp_path / "runs" / "r"
+
+    def preempt(metrics: dict[str, float]) -> dict[str, float]:
+        if metrics["step"] == 12:
+            raise KeyboardInterrupt  # killed after step 12's update, before its log line
+        return {}
+
+    with pytest.raises(KeyboardInterrupt):
+        train(cfg, on_log=preempt)
+    first = torch.load(out / "resume.pt", weights_only=False)
+    assert first["step"] == 10
+    assert all(s["step"] == 10 for s in first["optimizer"]["state"].values())  # Adam's count
+    seen: dict[str, Any] = {}
+
+    def peek(metrics: dict[str, float]) -> dict[str, float]:
+        if metrics["step"] == 16:  # the resumed run's own resume point at 15
+            seen.update(torch.load(out / "resume.pt", weights_only=False))
+        return {}
+
+    metrics = train(cfg, on_log=peek)
+    assert metrics["step"] == 20 and (out / "ckpt.pt").exists()
+    assert not (out / "resume.pt").exists()  # removed once the run is complete
+    steps = [json.loads(x)["step"] for x in (out / "log.jsonl").read_text().splitlines()]
+    assert steps == list(range(1, 21))  # earlier lines kept, line 11 rewritten, no duplicates
+    assert seen["step"] == 15
+    assert all(s["step"] == 15 for s in seen["optimizer"]["state"].values())  # continuous
+    lr = seen["optimizer"]["param_groups"][0]["lr"]
+    assert lr == pytest.approx(lr_at(14, cfg.train))  # the schedule continues
