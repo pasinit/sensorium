@@ -331,6 +331,7 @@ def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
     pred = {"model": "ours:fix1-pix-r50-s0"} | {
         bn: dict(zip(ev.MASKS, (0.1, 0.4, 0.3), strict=True)) for bn in ("eval", "batch")
     }
+    pred["clean_var"] = {"eval": 0.5, "batch": 0.2}
     (tmp_path / "pusht/check/pred-fix1-pix-r50-s0.json").write_text(json.dumps(pred))
     other = pred | {"model": "ours:other-arm-s0"}  # not a follow-up run: left out
     (tmp_path / "pusht/check/pred-other-arm-s0.json").write_text(json.dumps(other))
@@ -342,6 +343,7 @@ def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
         "| block | fix1-pix-r30 - fix1-pix |" in out and "| full | fix1-pix-r50 - a0-pix |" in out
     )
     assert "| ours:fix1-pix-r50-s0 | eval | 0.1000 | 0.4000 | 0.3000 |" in out
+    assert "| ours:fix1-pix-r50-s0 | batch | 0.1000 | 0.2000 | 0.500 |" in out  # pred / var
     assert "other-arm" not in out and "| block | a0-pix-agent-imggoal - a0-pix |" in out
     assert (tmp_path / "pusht/figures/pusht_imggoal_curves.png").exists()
     assert "| ours:fix1-pix-r30-s2 | pre | 0.900 |" in out
@@ -361,3 +363,28 @@ def test_recalibrate_reestimates_only_the_batchnorm_statistics(ev: Any) -> None:
     bn = net[1]
     assert torch.allclose(bn.running_mean, x.mean(0), atol=1e-5)
     assert torch.equal(net.state_dict()["0.weight"], before["0.weight"]) and not net.training
+
+
+def test_state_variance_is_what_a_mean_predictor_would_score(ev: Any) -> None:
+    import torch
+
+    class Encoder(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.norm = torch.nn.BatchNorm1d(3)
+
+        def embed(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+            x = batch["x"]
+            y: torch.Tensor = self.norm(x.flatten(0, 1))
+            return y.view(x.shape)
+
+    torch.manual_seed(0)
+    model = Encoder()
+    mean = model.norm.running_mean
+    assert mean is not None
+    mean.fill_(1.0)  # eval statistics differ from the batch's own
+    batches = [{"x": torch.randn(4, 2, 3) * 3 + 2} for _ in range(2)]
+    want = np.mean([float(b["x"].flatten(0, 1).var(0, unbiased=False).mean()) for b in batches])
+    assert ev.state_variance(model, batches, "eval") == pytest.approx(want, rel=1e-4)  # BN eps
+    assert ev.state_variance(model, batches, "batch") == pytest.approx(1.0, rel=1e-3)
+    assert float(mean[0]) == 1.0 and model.training  # the model is untouched

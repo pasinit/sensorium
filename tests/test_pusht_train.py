@@ -178,3 +178,13 @@ def test_arm_v_is_the_agent_arm_with_an_image_only_target(plan: Any) -> None:
     agent, v = plan.model_config("a0-pix-agent"), plan.model_config("a0-pix-agent-imggoal")
     changed = [f.name for f in fields(v) if getattr(v, f.name) != getattr(agent, f.name)]
     assert changed == ["image_target"] and v.image_target
+
+
+def test_fix1_sep_is_fix1_with_the_two_pass_reconstruction(plan: Any) -> None:
+    from dataclasses import fields  # noqa: PLC0415
+
+    fix1, sep = plan.model_config("fix1-pix"), plan.model_config("fix1-pix-sep")
+    changed = [f.name for f in fields(sep) if getattr(sep, f.name) != getattr(fix1, f.name)]
+    assert changed == ["recon_input"] and sep.recon_input == "separate"
+    resolved = sep.resolved()
+    assert (resolved.recon_weight, resolved.mae_ratio, resolved.recon_source) == (0.5, 0.75, "z")

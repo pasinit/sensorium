@@ -607,10 +607,32 @@ def recal_layer(layer: object) -> object:
     return recalibrate(layer.model, pred_batches(layer, clips))  # type: ignore[attr-defined]
 
 
+def state_variance(model: object, batches: list[dict[str, object]], bn: str) -> float:
+    """Mean over dimensions of the per-dimension variance of the clean states over each batch's
+    ``B * T`` windows, averaged over the batches: what ``pred`` would be if the predictor output
+    each batch's mean state. ``bn`` as in ``pred_loss``; the model is not changed."""
+    import copy  # noqa: PLC0415
+
+    import torch  # noqa: PLC0415
+
+    net = copy.deepcopy(model)
+    net.train(bn == "batch")  # type: ignore[attr-defined]
+    for m in net.modules():  # type: ignore[attr-defined]
+        if isinstance(m, torch.nn.BatchNorm1d):
+            m.momentum = 0.0
+    total = 0.0
+    with torch.no_grad():
+        for batch in batches:
+            states = net.embed(batch).flatten(0, 1)  # type: ignore[attr-defined]
+            total += float(states.var(0, unbiased=False).mean())
+    return total / len(batches)
+
+
 def pred(model: str) -> Path:
     """Check 1 for one of our runs: its prediction loss on ``PRED_CLIPS`` of LeWM's validation
     clips (``val_sample``) under every ``MASKS`` condition, with eval and batch BatchNorm
-    statistics, and with eval statistics after ``recal_layer`` (``recal``); writes
+    statistics, and with eval statistics after ``recal_layer`` (``recal``); and the clean
+    states' variance (``clean_var``, ``state_variance``) with eval and batch statistics; writes
     ``runs/pusht/check/pred-<run>.json``.
 
     Raises:
@@ -637,6 +659,7 @@ def pred(model: str) -> Path:
     }
     recal = recal_layer(layer)
     result["recal"] = {mask: pred_loss(recal, batches, mask, "eval") for mask in MASKS}
+    result["clean_var"] = {bn: state_variance(layer.model, batches, bn) for bn in ("eval", "batch")}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"model": model, "clips": clips, **result}))
     logging.info("pred %s: %s", model, result)
@@ -909,6 +932,16 @@ def pred_table(runs: tuple[str, ...] | None = None) -> None:
             if bn in r:  # "recal": eval statistics after recal_layer (absent in older files)
                 cells = " | ".join(f"{r[bn][m]:.4f}" for m in MASKS)
                 print(f"| {r['model']} | {bn} | {cells} |")  # noqa: T201
+    print("\n| run | BN | clean pred | clean state variance | pred / variance |")  # noqa: T201
+    print("|---|---|---|---|---|")  # noqa: T201
+    for path in sorted(CHECK.glob("pred-*.json")):
+        if runs is not None and path.stem.removeprefix("pred-") not in runs:
+            continue
+        r = json.loads(path.read_text())
+        for bn in ("eval", "batch"):
+            if "clean_var" in r:  # absent in files written before it
+                p, v = r[bn]["clean"], r["clean_var"][bn]
+                print(f"| {r['model']} | {bn} | {p:.4f} | {v:.4f} | {p / v:.3f} |")  # noqa: T201
 
 
 def check_report() -> None:
@@ -946,6 +979,7 @@ RATIO_ARMS = {
     "fix1-pix-recal": ("fix1-pix", "recal"),
     "fix1-pix-r50-recal": ("fix1-pix-r50", "recal"),
     "fix1-pix-r30-recal": ("fix1-pix-r30", "recal"),
+    "fix1-pix-sep": ("fix1-pix-sep", "goal"),
     "a0-pix-agent": ("a0-pix-agent", "goal"),
     "a0-pix-agent-imggoal": ("a0-pix-agent-imggoal", "goal"),
 }
@@ -962,10 +996,12 @@ RATIO_CONTRASTS = (
     ("fix1-pix-r50-recal", "fix1-pix-r50"),
     ("fix1-pix-r30-recal", "fix1-pix-r30"),
     ("fix1-pix-recal", "a0-pix"),
+    ("fix1-pix-sep", "a0-pix"),
+    ("fix1-pix-sep", "fix1-pix"),
     ("a0-pix-agent-imggoal", "a0-pix"),
     ("a0-pix-agent-imggoal", "a0-pix-agent"),
 )
-RATIO_FIX1 = ("fix1-pix", "fix1-pix-r50", "fix1-pix-r30")
+RATIO_FIX1 = ("fix1-pix", "fix1-pix-r50", "fix1-pix-r30", "fix1-pix-sep")
 IMGGOAL = ("a0-pix", "a0-pix-agent", "a0-pix-agent-imggoal")
 
 
