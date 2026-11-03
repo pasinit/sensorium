@@ -3922,7 +3922,7 @@ Only the clean column is read.
 * **It does not change planning**: full 0.043 against 0.040, block and agent within 0.01, none
   resolved (MDD 0.037 to 0.054). The BatchNorm mismatch is not why fix1 plans poorly.
 * Seed 2 shows it most plainly: after re-calibration its clean one-step loss (0.052) is close to
-  a0-pix's (0.033 to 0.038), but it plans at 0.040 full, against a0-pix's 0.105 to 0.175 per seed.
+  a0-pix's (0.033 to 0.038), but it plans at 0.040 full, against a0-pix's 0.10 to 0.17 per seed.
   A one-step prediction loss on clean frames near A0's does not give A0's planning.
 * fix1's deficit against a0-pix is on the agent half (0.04 against 0.15, resolved) more than the
   block half (0.24 to 0.25 against 0.36, not resolved).
