@@ -7,12 +7,19 @@ The config is a TOML file (``configs/model/``); see ``docs/model.md``. A run wri
 ``<out_dir>/<name>/`` with ``config.toml``, ``log.jsonl`` (one line per logged step) and
 ``ckpt.pt``. Everything is seeded: the same config and seed give the same run when
 ``num_workers = 0``.
+
+A run also keeps a rolling ``resume.pt`` (every ``train.resume_every`` steps: weights, optimiser,
+step, RNG states), so that ``train`` on the same config continues a run stopped by a spot
+preemption from its last resume point; it is removed when the run ends. A resumed run follows the
+same config, seed and learning-rate schedule but is not bit-identical to an uninterrupted one (its
+loader is re-seeded at the resumed step).
 """
 
 import argparse
 import json
 import logging
 import math
+import random
 import time
 import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -97,6 +104,8 @@ class TrainConfig:
             1e-6 differences within tens of steps (``run.json`` records the count used).
         probes: Also fit the privileged-label probes of ``probes.py`` on the final states
             (evaluation only; H1 episodes with privileged contacts).
+        resume_every: Steps between writes of the rolling ``resume.pt`` (0 = never; see the
+            module docstring).
     """
 
     steps: int = 300
@@ -116,6 +125,7 @@ class TrainConfig:
     eval_windows: int = 256
     probes: bool = False
     threads: int = 0
+    resume_every: int = 500
 
 
 @dataclass(frozen=True)
@@ -278,6 +288,75 @@ def load_layer(path: Path) -> SensoryLayer:
     return SensoryLayer(model, space, LoaderConfig(**raw["loader_config"]))
 
 
+RESUME = "resume.pt"
+
+
+def save_resume(
+    out: Path, model: SensoryModel, opt: torch.optim.Optimizer, step: int, elapsed: float
+) -> None:
+    """Write ``<out>/resume.pt`` atomically (a temporary file, then a rename): weights, optimiser
+    state, step, elapsed training time and the torch, numpy and Python RNG states."""
+    tmp = out / f"{RESUME}.tmp"
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": opt.state_dict(),
+            "step": step,
+            "elapsed": elapsed,
+            "torch_rng": torch.get_rng_state(),
+            "numpy_rng": np.random.get_state(),
+            "python_rng": random.getstate(),
+        },
+        tmp,
+    )
+    tmp.replace(out / RESUME)
+
+
+def load_resume(out: Path, model: SensoryModel, opt: torch.optim.Optimizer) -> tuple[int, float]:
+    """Restore a run from ``<out>/resume.pt`` (weights, optimiser, RNG states); returns its
+    ``(step, elapsed seconds)``, or ``(0, 0.0)`` if there is none."""
+    path = out / RESUME
+    if not path.exists():
+        return 0, 0.0
+    raw = torch.load(path, weights_only=False)  # our own file: numpy and Python RNG states
+    model.load_state_dict(raw["model"])
+    opt.load_state_dict(raw["optimizer"])
+    torch.set_rng_state(raw["torch_rng"])
+    np.random.set_state(raw["numpy_rng"])
+    random.setstate(raw["python_rng"])
+    return int(raw["step"]), float(raw["elapsed"])
+
+
+def start_or_resume(
+    out: Path,
+    model: SensoryModel,
+    opt: torch.optim.Optimizer,
+    dataset: SequenceDataset,
+    space: ChannelSpace,
+    cfg: RunConfig,
+) -> tuple[int, float]:
+    """Resume the run in ``out`` if it has a ``resume.pt`` (``load_resume``; ``log.jsonl``
+    trimmed to the resumed step; the dataset re-seeded at it), else start it (``ckpt-0.pt``);
+    returns the ``(step, elapsed seconds)`` to continue from."""
+    done, before = load_resume(out, model, opt)
+    if done:
+        log.info("resuming %s from step %d", out, done)
+        keep_log(out / "log.jsonl", done)
+        dataset.seed = cfg.seed + 7919 * done  # a fresh sample stream from the resumed step
+    else:
+        save_step(0, out, model, space, cfg)  # the untrained encoder (the floor of this seed)
+    return done, before
+
+
+def keep_log(path: Path, step: int) -> None:
+    """Drop the lines of ``log.jsonl`` past ``step`` (written after the resume point)."""
+    if not path.exists():
+        return
+    lines = [x for x in path.read_text().splitlines() if x.strip()]
+    kept = [x for x in lines if json.loads(x).get("step", 0) <= step]
+    path.write_text("".join(x + "\n" for x in kept))
+
+
 def pick_device(name: str) -> torch.device:
     """``auto`` -> CUDA when available, else CPU; otherwise the named device.
 
@@ -415,12 +494,13 @@ def train(
         model_cfg.objective,
     )
     dataset = make_dataset(cfg, paths, space, model.data_senses)
-    batches = _batches(dataset, tc, cfg.seed, device)
     opt = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=tc.lr, weight_decay=tc.weight_decay
     )
     out = Path(tc.out_dir) / cfg.name
     out.mkdir(parents=True, exist_ok=True)
+    done, before = start_or_resume(out, model, opt, dataset, space, cfg)
+    batches = _batches(dataset, tc, dataset.seed, device)
     (out / "config.toml").write_text(_dump_config(cfg))
     (out / "run.json").write_text(
         json.dumps(
@@ -434,12 +514,11 @@ def train(
         )
     )
     metrics: dict[str, float] = {}
-    save_step(0, out, model, space, cfg)  # the untrained encoder (the floor of this seed)
     model.train()
-    start = time.perf_counter()
+    start = time.perf_counter() - before
     amp = torch.autocast(device.type, dtype=torch.bfloat16, enabled=tc.precision == "bf16")
-    with (out / "log.jsonl").open("w") as journal:
-        for step in range(1, tc.steps + 1):
+    with (out / "log.jsonl").open("a" if done else "w") as journal:
+        for step in range(done + 1, tc.steps + 1):
             for group in opt.param_groups:
                 group["lr"] = lr_at(step - 1, tc)
             batch = {k: v.to(device, non_blocking=True) for k, v in next(batches).items()}
@@ -462,7 +541,10 @@ def train(
             save_step(step, out, model, space, cfg)
             if last:
                 break
+            if step % (tc.resume_every or tc.steps + 1) == 0:  # resume_every = 0: never
+                save_resume(out, model, opt, step, elapsed)
         save_checkpoint(out / "ckpt.pt", model, space, cfg, int(metrics["step"]))
+        (out / RESUME).unlink(missing_ok=True)  # the run is complete
         if tc.eval_windows:
             layer = SensoryLayer(model, space, cfg.loader())
             metrics |= state_statistics(layer, paths, tc.eval_windows)
