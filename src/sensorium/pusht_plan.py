@@ -13,7 +13,9 @@ predicted embedding to the goal's. ``SensoryCostModel`` does the same with our l
   the window of ``substeps`` observations repeats it. The goal's proprio is the dataset's, 25
   steps later (``goal_proprio``); ``goal_proprio="current"`` or ``"mean"`` replaces it by the
   current observation's or by the dataset mean (``z = 0`` in the evaluator's scaler), so the goal
-  no longer says where the agent should be (B-pusht-0 check 2);
+  no longer says where the agent should be (B-pusht-0 check 2). A layer trained with
+  ``image_target`` (arm v) encodes the goal from its image only: proprio masked out of the
+  fusion, ``goal_proprio`` never read;
 * actions: candidates are z-scored action blocks ``[B, N, H, action_block * 2]``; undone with the
   evaluator's scaler (our episodes store the actions as they are, Box(-1, 1)) and placed in our
   action columns, one chunk per planning step;
@@ -102,13 +104,18 @@ class SensoryCostModel(torch.nn.Module):
         self.proprio_scaler = proprio_scaler
         self.senses = self.model.senses
         self.uses_proprio = any(s != "vision" for s in self.senses)
+        self.image_goal = self.model.cfg.image_target
         if self.uses_proprio and proprio_scaler is None:
             raise ValueError("this layer reads proprio: give the evaluator's proprio scaler")
 
     @torch.no_grad()
-    def encode(self, pixels: np.ndarray, proprio: np.ndarray | None = None) -> torch.Tensor:
+    def encode(
+        self, pixels: np.ndarray, proprio: np.ndarray | None = None, image_only: bool = False
+    ) -> torch.Tensor:
         """States ``[n, D]`` of ``n`` observations: 224 px frames ``[n, 224, 224, 3]`` and, for a
-        layer that reads it, the raw agent proprio ``[n, 4]`` (held over the window)."""
+        layer that reads it, the raw agent proprio ``[n, 4]`` (held over the window); with
+        ``image_only`` every proprio sense is masked out of the fusion
+        (``SensoryModel.without_proprio``)."""
         n, k = len(pixels), self.model.cfg.substeps
         rgb = frames64(pixels, self.model.cfg.vision_size)
         width = len(self.header.proprio_names)
@@ -123,7 +130,10 @@ class SensoryCostModel(torch.nn.Module):
         loaded = Loaded(self.header, inputs, self.layer.space.columns(self.header))
         ends = np.arange(n) * k + (k - 1)  # one window of k observations per frame
         arrays = build(loaded, self.layer.space, self.senses, ends, k, rgb=rgb)
-        return self.model.embed(_as_batch(arrays, n)).squeeze(1)
+        batch = _as_batch(arrays, n)
+        if image_only:
+            batch = self.model.without_proprio(batch)
+        return self.model.embed(batch).squeeze(1)
 
     def chunks(self, candidates: torch.Tensor) -> np.ndarray:
         """Candidate action blocks ``[M, H, block * a]`` (z-scored) -> our action chunks
@@ -139,11 +149,11 @@ class SensoryCostModel(torch.nn.Module):
     ) -> tuple[np.ndarray, np.ndarray | None]:
         """The last frame of ``info[key]`` (``pixels`` or ``goal``) and its raw proprio, one per
         environment (the solver repeats every entry over the candidates: the first is taken).
-        The goal's proprio follows ``goal_proprio``."""
+        The goal's proprio follows ``goal_proprio`` (none for an ``image_target`` layer)."""
         pixels = as_numpy(info[key])[:, 0]
         pixels = pixels.reshape(pixels.shape[0], -1, *pixels.shape[-3:])[:, -1]
         proprio = None
-        if self.uses_proprio:
+        if self.uses_proprio and not (key == "goal" and self.image_goal):
             own = key == "pixels" or self.goal_proprio == "current"
             z = as_numpy(info["proprio" if own else "goal_proprio"])[:, 0]
             z = z.reshape(z.shape[0], -1, z.shape[-1])[:, -1]
@@ -159,7 +169,7 @@ class SensoryCostModel(torch.nn.Module):
         distance of the state our predictor reaches after the ``H`` blocks to the goal's state."""
         b, n, h, _ = candidates.shape
         start = self.encode(*self.observation(info, "pixels"))  # [B, D]
-        goal = self.encode(*self.observation(info, "goal"))
+        goal = self.encode(*self.observation(info, "goal"), image_only=self.image_goal)
         chunks = self.chunks(candidates.reshape(b * n, h, -1))
         start_rep = np.repeat(start.numpy(), n, axis=0)
         final = own_rollout(self.layer, start_rep, chunks)[:, -1]  # [B * N, D]

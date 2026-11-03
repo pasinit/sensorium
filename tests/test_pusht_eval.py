@@ -174,6 +174,7 @@ def test_plan_names_keep_the_first_runs_files_and_mark_the_variants(ev: Any) -> 
     assert (
         ev.plan_name("lewm224:quentinll/lewm-pusht", 50, 42) == "lewm224-quentinll_lewm-pusht-50-42"
     )
+    assert ev.plan_name("ours:fix1-pix-s2", 200, 43, "recal") == "ours-fix1-pix-s2-recal-200-43"
     name = ev.plan_name("ours:a0-pix-agent-s1", 200, 43, "current")
     assert name == "ours-a0-pix-agent-s1-goalcurrent-200-43"
 
@@ -320,7 +321,7 @@ def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
                 )
             )
             run = tmp_path / f"pusht/runs/{family}-s{s}"
-            run.mkdir(parents=True)
+            run.mkdir(parents=True, exist_ok=True)
             rows = [{"step": k * 50, "pred": 0.5, "reg": 0.2, "recon": 0.01} for k in range(1, 4)]
             (run / "log.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
             pose = {"model": f"ours:{family}-s{s}"} | {
@@ -331,8 +332,8 @@ def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
         bn: dict(zip(ev.MASKS, (0.1, 0.4, 0.3), strict=True)) for bn in ("eval", "batch")
     }
     (tmp_path / "pusht/check/pred-fix1-pix-r50-s0.json").write_text(json.dumps(pred))
-    other = pred | {"model": "ours:a0-pix-agent-s0"}  # not a ratio run: left out
-    (tmp_path / "pusht/check/pred-a0-pix-agent-s0.json").write_text(json.dumps(other))
+    other = pred | {"model": "ours:other-arm-s0"}  # not a follow-up run: left out
+    (tmp_path / "pusht/check/pred-other-arm-s0.json").write_text(json.dumps(other))
     ev.ratio_report()
     out = capsys.readouterr().out
     assert (tmp_path / "pusht/figures/pusht_ratio_rules.png").exists()
@@ -341,5 +342,22 @@ def test_ratio_report_scores_fix1_at_each_ratio_against_a0_and_fix1(
         "| block | fix1-pix-r30 - fix1-pix |" in out and "| full | fix1-pix-r50 - a0-pix |" in out
     )
     assert "| ours:fix1-pix-r50-s0 | eval | 0.1000 | 0.4000 | 0.3000 |" in out
-    assert "a0-pix-agent" not in out
+    assert "other-arm" not in out and "| block | a0-pix-agent-imggoal - a0-pix |" in out
+    assert (tmp_path / "pusht/figures/pusht_imggoal_curves.png").exists()
     assert "| ours:fix1-pix-r30-s2 | pre | 0.900 |" in out
+
+
+def test_recalibrate_reestimates_only_the_batchnorm_statistics(ev: Any) -> None:
+    import torch
+
+    torch.manual_seed(0)
+    model = torch.nn.Sequential(torch.nn.Linear(3, 4), torch.nn.BatchNorm1d(4))
+    model.embed = model.forward  # type: ignore[assignment]  # the one call recalibrate makes
+    batches = [torch.randn(16, 3) * 2 + 1 for _ in range(3)]
+    before = {k: v.clone() for k, v in model.state_dict().items()}
+    net = ev.recalibrate(model, batches)
+    assert all(torch.equal(v, model.state_dict()[k]) for k, v in before.items())  # a copy
+    x = torch.cat([model[0](b) for b in batches]).detach()
+    bn = net[1]
+    assert torch.allclose(bn.running_mean, x.mean(0), atol=1e-5)
+    assert torch.equal(net.state_dict()["0.weight"], before["0.weight"]) and not net.training

@@ -97,6 +97,13 @@ class ModelConfig:
             ``W`` and ``b`` start at zero (no random draw, so every other parameter initialises
             as without the option and step 0 is the same model).
         skip_projector: B-skip-0: ``s = projector(z) + z`` (a residual around the projector).
+        image_target: ``sigreg`` without reconstruction only (B-pusht-0 arm v): the next-state
+            target is the encoding of the next step with every proprio sense masked out of the
+            fusion (``without_proprio``: the ``present`` mask that ``proprio_dropout`` and
+            ``SensoryLayer.encode(drop=...)`` use), so the predictor maps image + proprio
+            context to an image-only state. SIGReg is the mean of its value on the context
+            states and on the image-only targets (neither may collapse). Planning encodes the
+            goal image-only (``pusht_plan``).
         summary_tokens: Summary tokens ``K`` of the fusion (default 1). With ``K > 1`` every
             token is projected by the shared projector and the state is their concatenation
             (``K * dim``); the predictor maps it to ``dim`` and back, SIGReg is applied per token
@@ -165,6 +172,7 @@ class ModelConfig:
     summary_tokens: int = 1
     skip_tokens: bool = False
     skip_projector: bool = False
+    image_target: bool = False
 
     def __post_init__(self) -> None:
         check_senses(self.senses)
@@ -203,6 +211,17 @@ class ModelConfig:
             raise ValueError(f"summary_tokens must be >= 1, got {self.summary_tokens}")
         if self.summary_tokens > 1 and (self.objective != "sigreg" or self.teacher != "none"):
             raise ValueError("summary_tokens > 1 needs the sigreg objective without a teacher")
+        if self.image_target and (
+            self.objective != "sigreg"
+            or self.recon
+            or self.teacher != "none"
+            or not any(s in PROPRIO_SENSES for s in self.senses)
+            or "vision" not in self.senses
+        ):
+            raise ValueError(
+                "image_target needs the sigreg objective without reconstruction or teacher, "
+                "with vision and a proprio sense"
+            )
 
     @property
     def state_dim(self) -> int:
@@ -469,6 +488,13 @@ class SensoryModel(nn.Module):
         cols = [self.data_senses.index(s) for s in self.senses]
         return {**batch, "present": batch["present"][:, cols]}
 
+    def without_proprio(self, batch: Mapping[str, Tensor]) -> dict[str, Tensor]:
+        """The batch with every proprio sense marked absent (``present``), so the fusion ignores
+        its tokens: the image-only view of ``image_target``."""
+        gone = torch.tensor([s in PROPRIO_SENSES for s in self.data_senses])
+        present = batch["present"] & ~gone.to(batch["present"].device)
+        return {**batch, "present": present}
+
     def embed(self, batch: Mapping[str, Tensor]) -> Tensor:
         """States ``[B, T, dim]`` of the online encoder (sense dropout only while training)."""
         return self.encoder(self._view(batch), drop=self.training)
@@ -610,11 +636,16 @@ class SensoryModel(nn.Module):
         else:
             extra_loss = torch.zeros((), device=states.device)
         if self.target is None:
-            nxt = states[:, 1:] if c.target_grad else states[:, 1:].detach()
+            target = states
+            if c.image_target:
+                target = self.embed(self.without_proprio(batch))
+            nxt = target[:, 1:] if c.target_grad else target[:, 1:].detach()
             err = (pred - nxt).pow(2).mean(-1)  # [B, T-1]
             mse = err.mean()
             weighted = (surprise_weights(c.surprise, err, batch) * err).mean()
             reg = self.regulariser(states)
+            if c.image_target:
+                reg = (reg + self.regulariser(target)) / 2
             if self.recon is not None:
                 if single is not None:
                     pix, prop_loss = self._recon_loss(batch, self.recon, *single)

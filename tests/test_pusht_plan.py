@@ -155,3 +155,57 @@ def test_an_unknown_goal_proprio_is_refused(tmp_path: object) -> None:
     layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
     with pytest.raises(ValueError, match="goal_proprio"):
         SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), Affine(0.0, 1.0), "zero")
+
+
+def test_an_image_target_layer_plans_to_an_image_only_goal(tmp_path: object) -> None:
+    arrays = source()
+    ep = pusht.to_episode(0, arrays)
+    space = ChannelSpace.from_headers([header_of(ep)])
+    path = Path(f"{tmp_path}") / "pusht-00000.npz"
+    ep.save(path)
+    compute_stats([path], space, 1)
+    torch.manual_seed(0)
+    cfg = replace(CFG, senses=("vision", "proprio_effector"), image_target=True)
+    layer = SensoryLayer(
+        SensoryModel(cfg, space), space, LoaderConfig(steps=4, substeps=5, view_size=64, crop=1.0)
+    )
+    cost = SensoryCostModel(layer, header_of(ep), Affine(0.0, 1.0), Affine(0.0, 1.0))
+    rng = np.random.default_rng(3)
+    n = 2
+    frames = rng.integers(0, 255, (n, 224, 224, 3), np.uint8)
+    goals = rng.integers(0, 255, (n, 224, 224, 3), np.uint8)
+    info = {  # no goal_proprio at all: the goal path must not read it
+        "pixels": np.repeat(frames[:, None, None], 3, 1),
+        "goal": np.repeat(goals[:, None, None], 3, 1),
+        "proprio": np.repeat(rng.normal(0, 1, (n, 1, 1, 4)), 3, 1),
+    }
+    pixels, proprio = cost.observation(info, "goal")
+    assert proprio is None
+    goal = cost.encode(pixels, None, image_only=True)
+    other = np.full((n, 4), 50.0)
+    assert torch.allclose(goal, cost.encode(pixels, other, image_only=True))  # proprio ignored
+    now, held = cost.observation(info, "pixels")
+    assert held is not None
+    assert not torch.allclose(cost.encode(now, held), cost.encode(now, held + 10.0))  # kept
+    cand = torch.as_tensor(rng.normal(0, 1, (n, 3, 5, 10)), dtype=torch.float32)
+    costs = cost.get_cost(info, cand)
+    chunks = cost.chunks(cand.reshape(n * 3, 5, -1))
+    final = own_rollout(layer, np.repeat(cost.encode(now, held).numpy(), 3, 0), chunks)[:, -1]
+    want = ((torch.as_tensor(final, dtype=torch.float32).view(n, 3, -1) - goal[:, None]) ** 2).sum(
+        -1
+    )
+    assert torch.allclose(costs, want, atol=1e-4)
+
+
+def test_encode_at_can_mask_proprio_out(tmp_path: object) -> None:
+    from sensorium.model.planning import encode_at
+
+    arrays = source()
+    ep = pusht.to_episode(0, arrays)
+    layer = layer_for(("vision", "proprio_effector"), ep, tmp_path)
+    moved = dict(arrays, proprio=arrays["proprio"] + 40.0)
+    ep2 = pusht.to_episode(0, moved)
+    ends = np.array([4, 9, 17])
+    drop = ("proprio_effector",)
+    assert np.allclose(encode_at(layer, ep, ends, drop)[0], encode_at(layer, ep2, ends, drop)[0])
+    assert not np.allclose(encode_at(layer, ep, ends)[0], encode_at(layer, ep2, ends)[0])

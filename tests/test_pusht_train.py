@@ -170,3 +170,11 @@ def test_the_ratio_arms_are_fix1_with_only_the_mask_ratio_changed(
             ref.augment,
             ref.seed,
         )
+
+
+def test_arm_v_is_the_agent_arm_with_an_image_only_target(plan: Any) -> None:
+    from dataclasses import fields  # noqa: PLC0415
+
+    agent, v = plan.model_config("a0-pix-agent"), plan.model_config("a0-pix-agent-imggoal")
+    changed = [f.name for f in fields(v) if getattr(v, f.name) != getattr(agent, f.name)]
+    assert changed == ["image_target"] and v.image_target
