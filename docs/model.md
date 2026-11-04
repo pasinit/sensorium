@@ -4159,6 +4159,35 @@ Training curves, every seed (fix1-pix-sep with a0-pix and fix1 at each ratio):
   states); a0-pix's full rate is 0.140 there against 0.143 in the first run.
 * fix1-pix-sep trained alone on its VM (3 runs on 16 vCPUs), so its throughput is within-VM only.
 
+### B-pusht-0: closed
+
+**Closed on 2026-11-04 (supervisor's call).** Push-T trains one task from scratch, with no
+pretraining and no few-shot step, so it does not test our paradigm. Its proprio is 4-D (the agent's
+position and velocity), too few senses to test the thesis, and the action largely determines the
+agent's motion. Evaluation moves to E1's pretrain → few-shot protocol (`docs/experiment-01.md`).
+
+**What it established**, kept for E1:
+
+* **The LeWM reproduction:** LeWM's published checkpoint gives its published 96.0% through our
+  driver.
+* **The one-pass fix1 bug:** `recon_input = "masked"` feeds the JEPA masked frames for both
+  context and target, and its predictor outputs the mean (pred / std² = 1.00 on 9 runs).
+  `"separate"` plans like A0. The reconstruction default is unchanged for now (with the supervisor).
+* **The BatchNorm-statistics rule:** running statistics must come from the inputs the model is
+  used on. Masked-frame statistics collapse clean states; re-calibration is `recalibrate`.
+* **The goal-content rule:** (iii)'s lead came from its goal holding the agent's position. With an
+  image-only goal, arm (v), it fell to a0-pix's level.
+* **The tools:** pred / clean-state variance as a standard check (`state_variance`), scoring split
+  by rule halves (`success_rules`), and training resume after preemption (`train.resume_every`).
+
+**Carried to E1 as a candidate arm: per-sense state slots with multi-step rollouts.** Each sense
+keeps its own state slot, the predictor predicts every slot, and the planning cost reads the image
+slot only, so the body's state shapes the dynamics without entering the goal. Variants:
+
+* a body-state target for the body slot;
+* an image-only loss with k-step unrolled training, so the body slot is learnt from future-image
+  error. This also removes (v)'s train/plan context mismatch.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
