@@ -40,9 +40,6 @@ from sensorium.vision import eval_view
 REFERENCE = ("mae", "nextobs")
 OBJECTIVES = ("sigreg", "ema_vicreg", "mae", "nextobs")
 TEACHERS = ("none", "touch", "touch_placebo")
-DEFAULT_RECON = 0.5
-"""Reconstruction weight of the default ``sigreg`` model (B-fix-0 / B-fix-1: one masked pass,
-the decoder on the pre-projector state). ``recon_weight = 0`` gives the plain JEPA ("A0")."""
 
 
 @dataclass(frozen=True)
@@ -81,8 +78,8 @@ class ModelConfig:
         ema_momentum, ema_momentum_end: EMA momentum of the target encoder, linearly
             annealed over the run (``ema_vicreg`` only).
         recon_weight: ``sigreg`` only: weight of an MAE-style reconstruction term. ``None`` (the
-            default) means ``DEFAULT_RECON`` for ``sigreg`` with vision and 0 otherwise (``recon``);
-            0 is the plain JEPA of B-variety-0 ("A0"). A
+            default) means 0 for every objective: the plain JEPA ("A0"). Reconstruction was the
+            ``sigreg`` default from B-fix-1 until B-pusht-0 (0.5); turned off since. A
             decoder reads the *pre-projector* state of a masked copy of the batch and reconstructs
             the masked patches and proprio channels (``mae_ratio``, ``mae_proprio_ratio``; the
             ``mae`` objective's targets), so the encoder must keep what next-state prediction can
@@ -110,12 +107,14 @@ class ModelConfig:
             and averaged, and the reconstruction decoder reads the sum of the tokens (a linear map
             on the concatenation with weights tied across tokens). ``sigreg`` without a teacher
             only.
-        recon_input: ``masked`` (the default, B-fix-1: one pass; the batch is masked once and
-            the encoder runs once on it; the next-state loss and SIGReg use its projected
-            states, the decoder reads its pre-projector states, scored on the hidden entries) or
-            ``separate`` (B-fix-0: two encoder passes, the next-state objective on the clean
-            batch and the reconstruction on a masked copy). Training objective only: ``embed``
-            and ``encode`` always see clean inputs.
+        recon_input: ``separate`` (the default, B-fix-0: two encoder passes, the next-state
+            objective on the clean batch and the reconstruction on a masked copy) or ``masked``
+            (B-fix-1's one pass: the batch is masked once and the encoder runs once on it; the
+            next-state loss and SIGReg use its projected states, the decoder reads its
+            pre-projector states, scored on the hidden entries). The one pass failed on Push-T
+            pixels (B-pusht-0: its predictor outputs the mean of masked-frame states); kept as an
+            explicit option. Training objective only: ``embed`` and ``encode`` always see clean
+            inputs.
         target_grad: ``sigreg`` only: gradients flow into the next-state targets (LeWM). False
             stops them (the encoder is then shaped by the prediction only through its inputs).
         vicreg_var_weight, vicreg_cov_weight: Weights of VICReg's variance and covariance
@@ -166,7 +165,7 @@ class ModelConfig:
     vicreg_cov_weight: float = 0.04
     target_grad: bool = True
     recon_weight: float | None = None
-    recon_input: str = "masked"
+    recon_input: str = "separate"
     recon_source: str = "z"
     recon_proprio: str = "hidden"
     summary_tokens: int = 1
@@ -230,11 +229,8 @@ class ModelConfig:
 
     @property
     def recon(self) -> float:
-        """The reconstruction weight in use: ``recon_weight`` if set, else the default
-        (``DEFAULT_RECON`` for the ``sigreg`` objective with vision, 0 otherwise)."""
-        if self.recon_weight is not None:
-            return self.recon_weight
-        return DEFAULT_RECON if self.objective == "sigreg" and "vision" in self.senses else 0.0
+        """The reconstruction weight in use: ``recon_weight`` if set, else 0 (no reconstruction)."""
+        return 0.0 if self.recon_weight is None else self.recon_weight
 
     def resolved(self) -> "ModelConfig":
         """This config with ``recon_weight`` written out (what checkpoints store, so a later

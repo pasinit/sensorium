@@ -84,7 +84,7 @@ TINY = ModelConfig(
     steps=4,
     substeps=4,
     sigreg_proj=64,
-    recon_weight=0.0,  # the plain JEPA ("A0"): most tests here predate the reconstruction default
+    recon_weight=0.0,  # the plain JEPA ("A0"), written out (the default since B-pusht-0)
 )
 LOADER = LoaderConfig(steps=4, substeps=4, view_size=32)
 
@@ -1888,26 +1888,33 @@ def test_single_masked_pass_runs_the_encoder_once_and_decodes_the_summary(
     assert calls == {"separate": 2, "masked": 1}
 
 
-def test_the_default_sigreg_model_reconstructs_in_one_masked_pass(
+def test_the_default_model_has_no_reconstruction_and_reconstructs_in_two_passes(
     space: ChannelSpace, tmp_path: Path
 ) -> None:
     senses = ("vision", "proprio_body", "vestibular", "proprio_effector")
     default = ModelConfig(senses=senses)
-    assert default.recon_weight is None and default.recon == 0.5
-    assert default.recon_input == "masked"
-    assert ModelConfig(senses=senses, objective="mae").recon == 0.0  # other objectives: none
-    assert ModelConfig(senses=("proprio_body",)).recon == 0.0  # nothing to reconstruct
+    assert default.recon_weight is None and default.recon == 0.0  # A0, since B-pusht-0
+    assert default.recon_input == "separate"  # turning reconstruction on gets two passes
+    assert ModelConfig(senses=senses, objective="mae").recon == 0.0
     small = replace(TINY, recon_weight=None, senses=senses)
-    assert SensoryModel(small, space).recon is not None
-    a0 = replace(small, recon_weight=0.0)  # the explicit flag for the plain JEPA
-    assert SensoryModel(a0, space).recon is None
-    assert small.resolved().recon_weight == 0.5 and a0.resolved().recon_weight == 0.0
-    # checkpoints store the resolved weight; a checkpoint from before the options loads as A0
-    model = SensoryModel(a0, space)
+    assert SensoryModel(small, space).recon is None
+    on = replace(small, recon_weight=0.5)
+    assert SensoryModel(on, space).recon is not None and on.recon_input == "separate"
+    assert small.resolved().recon_weight == 0.0 and on.resolved().recon_weight == 0.5
+    model = SensoryModel(on, space)
     path = tmp_path / "ckpt.pt"
-    save_checkpoint(path, model, space, RunConfig(model=small), 0)
-    assert torch.load(path, weights_only=True)["model_config"]["recon_weight"] == 0.5
-    save_checkpoint(path, model, space, RunConfig(model=a0), 0)
+    # a B-fix-1 checkpoint stores its pass: it loads as one masked pass
+    save_checkpoint(path, model, space, RunConfig(model=replace(on, recon_input="masked")), 0)
+    layer = load_layer(path)
+    assert layer.model.cfg.recon == 0.5 and layer.model.cfg.recon_input == "masked"
+    # a checkpoint from before the options: no reconstruction, or B-fix-0's two passes
+    save_checkpoint(path, model, space, RunConfig(model=on), 0)
+    raw = torch.load(path, weights_only=True)
+    del raw["model_config"]["recon_input"]
+    torch.save(raw, path)
+    assert load_layer(path).model.cfg.recon_input == "separate"
+    a0 = SensoryModel(replace(small, recon_weight=0.0), space)
+    save_checkpoint(path, a0, space, RunConfig(model=replace(small, recon_weight=0.0)), 0)
     raw = torch.load(path, weights_only=True)
     for key in ("recon_weight", "recon_input"):
         del raw["model_config"][key]
