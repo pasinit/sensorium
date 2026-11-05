@@ -46,6 +46,7 @@ slide, hover, and a grasp-lift-drop with a pincer or a power closure with a hand
 
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
@@ -391,8 +392,19 @@ class HumanoidRecorder:
             self.model.actuator_gainprm[a, 0] = gain[a, 0] * scale
             self.model.actuator_biasprm[a, 1:3] = bias[a, 1:3] * scale
 
-    def record(self, seed: int, policy: str, steps: int) -> Episode:
+    def record(
+        self,
+        seed: int,
+        policy: str,
+        steps: int,
+        wrap: Callable[[Policy], Policy] | None = None,
+    ) -> Episode:
         """Run one episode of at most ``steps`` steps.
+
+        ``wrap`` replaces the policy made for ``policy`` by ``wrap(policy)``, with the same seeds:
+        a learned controller judged by a task program (``bodies.h1_closed_loop``). A policy with
+        ``needs_observation`` sees each step's senses before it acts: ``see(log)`` is called after
+        they are logged and before ``act``.
 
         Raises:
             ValueError: unknown policy, or ``seated_babble`` outside the seated posture.
@@ -407,6 +419,8 @@ class HumanoidRecorder:
         self.appearance = draw_appearance(look_rng)
         apply_appearance(self.model, self.appearance)
         actor = self.make_policy(policy, policy_rng)
+        if wrap is not None:
+            actor = wrap(actor)
         stance = STANDING_LEG_GAIN_SCALE if self.posture == "standing" else 1.0
         self.scale_leg_gains(getattr(actor, "leg_gain_scale", stance))
         self.reset(actor, layout_rng)
@@ -425,8 +439,17 @@ class HumanoidRecorder:
             fell = self.posture == "standing" and (
                 self.data.xpos[self.pelvis][2] < FALL_HEIGHT or -gravity[2] < FALL_UPRIGHT
             )
-            action = actor.act(step, self.data)
-            self.observe(log, contacts, gravity, bool(fell), action, sound)
+            if getattr(actor, "needs_observation", False):
+                # the senses of this step first (with a placeholder action), then the action
+                self.observe(
+                    log, contacts, gravity, bool(fell), np.zeros(len(self.space.names)), sound
+                )
+                actor.see(log)  # type: ignore[attr-defined]
+                action = actor.act(step, self.data)
+                log.action[-1] = action.astype(np.float32)
+            else:
+                action = actor.act(step, self.data)
+                self.observe(log, contacts, gravity, bool(fell), action, sound)
             self.note_phase(log, actor)
             stop = self.stop_reason(actor, bool(fell))
             if stop:
@@ -829,6 +852,26 @@ class HumanoidRecorder:
             privileged=privileged,
             text=log.text,
             meta=meta,
+        )
+
+    def recent_episode(self, log: Log, steps: int) -> Episode:
+        """The model inputs of the last ``steps`` logged steps as an ``Episode`` (no privileged
+        state, no text): what a learned controller encodes while the episode runs."""
+        n = min(steps, len(log.rgb))
+        audio = np.stack(log.audio[-n:])
+        return Episode(
+            body="humanoid",
+            dt=DT,
+            rgb=np.stack(log.rgb[-n:]).astype(np.uint8),
+            audio=audio,
+            audio_logmel=logmel(audio),
+            proprio=np.stack(log.proprio[-n:]),
+            touch=np.stack(log.touch[-n:]),
+            action=np.stack(log.action[-n:]),
+            proprio_names=self.proprio_names,
+            touch_names=self.touch_names,
+            action_names=self.space.names,
+            text=[""] * n,
         )
 
     def close(self) -> None:
