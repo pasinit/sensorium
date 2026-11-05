@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -213,6 +214,9 @@ class PoolSpec:
         seed: Seed of the source ranking and the episode order.
         split: Section of the split file the sources come from (e.g. ``"pretrain"``).
         tolerance: Allowed relative deviation of the total and of every stratum.
+        heldout_fraction: Share of each stratum's candidate episodes set aside first (seeded) as
+            the pool's held-out pretraining split, never trained on (early stopping, held-out
+            loss); the strata are filled from the rest. 0 = none.
     """
 
     name: str
@@ -224,6 +228,7 @@ class PoolSpec:
     seed: int
     split: str = "pretrain"
     tolerance: float = 0.02
+    heldout_fraction: float = 0.0
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, object]) -> "PoolSpec":
@@ -244,6 +249,7 @@ class PoolSpec:
                 seed=int(raw["seed"]),  # type: ignore[call-overload]
                 split=str(raw.get("split", "pretrain")),
                 tolerance=float(raw.get("tolerance", 0.02)),  # type: ignore[arg-type]
+                heldout_fraction=float(raw.get("heldout_fraction", 0.0)),  # type: ignore[arg-type]
             )
         except KeyError as error:
             raise PoolError(f"pool spec: missing field {error}") from None
@@ -274,6 +280,8 @@ class PoolSpec:
             raise PoolError(f'n_sources must be a positive int or "all", got {self.n_sources!r}')
         if not 0 < self.tolerance < 0.5:
             raise PoolError(f"tolerance must be in (0, 0.5), got {self.tolerance}")
+        if not 0 <= self.heldout_fraction < 0.5:
+            raise PoolError(f"heldout_fraction must be in [0, 0.5), got {self.heldout_fraction}")
         if self.split == HELDOUT:
             raise PoolError("a pool cannot be drawn from the held-out split")
 
@@ -309,9 +317,11 @@ class Stratum:
 class Pool:
     """A built pool. ``episodes`` is the ordered list of whole episodes.
 
-    ``content_hash`` covers the ordered episode content hashes and the senses, so it
-    does not depend on where the data lives. ``excluded_instances`` is, per task, the
-    number of held-out instances that were present in the index and left out.
+    ``content_hash`` covers the ordered episode content hashes and the senses (and the held-out
+    split's, when there is one), so it does not depend on where the data lives.
+    ``excluded_instances`` is, per task, the number of held-out instances that were present in
+    the index and left out. ``heldout`` is the pool's own held-out pretraining split
+    (``PoolSpec.heldout_fraction``): episodes of the same strata, never in ``episodes``.
     """
 
     spec: PoolSpec
@@ -322,6 +332,7 @@ class Pool:
     episodes: tuple[IndexRecord, ...]
     content_hash: str = field(default="")
     excluded_instances: dict[str, int] = field(default_factory=dict)
+    heldout: tuple[IndexRecord, ...] = ()
 
     @property
     def paths(self) -> list[Path]:
@@ -431,12 +442,16 @@ def build_pool(records: Sequence[IndexRecord], spec: PoolSpec, splits: Splits) -
     chosen = choose_sources([r.source for r in eligible], spec.n_sources, spec.seed)
     strata: dict[str, Stratum] = {}
     episodes: list[IndexRecord] = []
+    heldout: list[IndexRecord] = []
     for effector, kind in ((e, k) for e in effectors for k in kinds):
         label = f"{effector}/{kind}"
         target = spec.total_steps * effectors[effector] * kinds[kind]
         candidates = [
             r for r in eligible if r.source in chosen and r.effector == effector and r.kind == kind
         ]
+        held = set_aside(candidates, spec.heldout_fraction, label, spec.seed)
+        heldout += held
+        candidates = [c for c in candidates if c not in set(held)]
         picked = fill_stratum(
             interleave(candidates, [s for s in ranked if s in chosen], label, spec.seed),
             target,
@@ -453,6 +468,7 @@ def build_pool(records: Sequence[IndexRecord], spec: PoolSpec, splits: Splits) -
         strata,
         tuple(episodes),
         excluded_instances=count_excluded_instances(excluded),
+        heldout=tuple(heldout),
     )
     _check_total(pool)
     pool = replace(pool, content_hash=pool_hash(pool))
@@ -466,6 +482,22 @@ def build_pool(records: Sequence[IndexRecord], spec: PoolSpec, splits: Splits) -
         pool.content_hash,
     )
     return pool
+
+
+def set_aside(
+    candidates: Sequence[IndexRecord], fraction: float, key: str, seed: int
+) -> list[IndexRecord]:
+    """The ``round(fraction * n)`` candidates first in a seeded order of their content hashes
+    (the held-out pretraining split of one stratum), in that order."""
+    n = round(fraction * len(candidates))
+    order = sorted(
+        candidates,
+        key=lambda c: (
+            hashlib.sha256(f"{seed}/heldout/{key}/{c.content_hash}".encode()).hexdigest(),
+            c.path,
+        ),
+    )
+    return order[:n]
 
 
 def count_excluded_instances(excluded: Iterable[IndexRecord]) -> dict[str, int]:
@@ -500,9 +532,13 @@ def _check_total(pool: Pool) -> None:
 
 def pool_hash(pool: Pool) -> str:
     """SHA-256 (16 hex chars) over the senses and the ordered episode content hashes."""
-    payload = json.dumps(
-        {"senses": pool.senses, "episodes": [e.content_hash for e in pool.episodes]}
-    )
+    content: dict[str, object] = {
+        "senses": pool.senses,
+        "episodes": [e.content_hash for e in pool.episodes],
+    }
+    if pool.heldout:  # pools without a held-out split keep their hashes
+        content["heldout"] = [e.content_hash for e in pool.heldout]
+    payload = json.dumps(content)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
@@ -512,14 +548,17 @@ def validate_pool(pool: Pool, splits: Splits) -> None:
     Raises:
         PoolError: naming the offending sources.
     """
-    used = {e.source for e in pool.episodes}
+    overlap = {e.content_hash for e in pool.episodes} & {e.content_hash for e in pool.heldout}
+    if overlap:
+        raise PoolError(f"{len(overlap)} episodes both in the pool and in its held-out split")
+    used = {e.source for e in (*pool.episodes, *pool.heldout)}
     leaked = sorted(used & set(splits.heldout))
     if leaked:
         raise PoolError(f"held-out sources in pool: {leaked}")
     leaked_instances = sorted(
         {
             (e.task, e.instance)
-            for e in pool.episodes
+            for e in (*pool.episodes, *pool.heldout)
             if splits.is_heldout_instance(e.task, e.instance)
         }
     )
@@ -542,19 +581,23 @@ def pool_to_dict(pool: Pool) -> dict[str, object]:
         "total_steps": pool.total_steps,
         "content_hash": pool.content_hash,
         "excluded_instances": pool.excluded_instances,
-        "episodes": [
-            {
-                "path": e.path,
-                "source": e.source,
-                "task": e.task,
-                "instance": e.instance,
-                "kind": e.kind,
-                "effector": e.effector,
-                "steps": e.steps,
-                "content_hash": e.content_hash,
-            }
-            for e in pool.episodes
-        ],
+        "episodes": [record_to_dict(e) for e in pool.episodes],
+        "heldout_steps": sum(e.steps for e in pool.heldout),
+        "heldout": [record_to_dict(e) for e in pool.heldout],
+    }
+
+
+def record_to_dict(e: IndexRecord) -> dict[str, object]:
+    """The fields of one pool episode in the pool JSON."""
+    return {
+        "path": e.path,
+        "source": e.source,
+        "task": e.task,
+        "instance": e.instance,
+        "kind": e.kind,
+        "effector": e.effector,
+        "steps": e.steps,
+        "content_hash": e.content_hash,
     }
 
 
@@ -575,24 +618,7 @@ def read_pool(path: Path) -> Pool:
     """
     raw = json.loads(path.read_text())
     spec = PoolSpec.from_dict(raw["spec"])
-    episodes = tuple(
-        IndexRecord(
-            path=e["path"],
-            body="",
-            effector=e["effector"],
-            source=e["source"],
-            family="",
-            task=e["task"],
-            instance=e["instance"],
-            policy="",
-            kind=e["kind"],
-            seed=0,
-            steps=e["steps"],
-            content_hash=e["content_hash"],
-            tags=(),
-        )
-        for e in raw["episodes"]
-    )
+    episodes = tuple(record_from_dict(e) for e in raw["episodes"])
     strata = {k: Stratum(**v) for k, v in raw["strata"].items()}
     return Pool(
         spec,
@@ -603,7 +629,46 @@ def read_pool(path: Path) -> Pool:
         episodes,
         raw["content_hash"],
         raw["excluded_instances"],
+        tuple(record_from_dict(e) for e in raw.get("heldout", [])),
     )
+
+
+def record_from_dict(e: Mapping[str, object]) -> IndexRecord:
+    """An index record from a pool JSON episode (index-only columns empty)."""
+    return IndexRecord(
+        path=str(e["path"]),
+        body="",
+        effector=str(e["effector"]),
+        source=str(e["source"]),
+        family="",
+        task=str(e["task"]),
+        instance=str(e["instance"]),
+        policy="",
+        kind=str(e["kind"]),
+        seed=0,
+        steps=int(e["steps"]),  # type: ignore[call-overload]
+        content_hash=str(e["content_hash"]),
+        tags=(),
+    )
+
+
+def link_heldout(pool: Pool, directory: Path) -> list[Path]:
+    """Symlink the held-out split's episode files into ``directory`` (relative links; existing
+    links replaced), for a training config's ``data.heldout_paths = ["<directory>/*.npz"]``.
+
+    Returns:
+        The links, in held-out order.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    links = []
+    for e in pool.heldout:
+        target = Path(e.path)
+        link = directory / target.name
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(os.path.relpath(target.resolve(), directory.resolve()))
+        links.append(link)
+    return links
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -614,6 +679,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("out", type=Path, help="pool JSON to write")
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS_PATH)
     parser.add_argument("--sources", type=Path, default=DEFAULT_REGISTRY_PATH)
+    parser.add_argument(
+        "--heldout-dir", type=Path, help="symlink the held-out split's episodes into this directory"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     splits = load_splits(args.splits, load_registry(args.sources))
@@ -622,6 +690,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     for label, stratum in pool.strata.items():
         log.info(
             "  %-16s %9d steps (target %.0f)", label, stratum.actual_steps, stratum.target_steps
+        )
+    if pool.heldout:
+        steps = sum(e.steps for e in pool.heldout)
+        log.info("  held-out split   %9d steps, %d episodes", steps, len(pool.heldout))
+    if args.heldout_dir is not None:
+        log.info(
+            "linked %d held-out episodes in %s",
+            len(link_heldout(pool, args.heldout_dir)),
+            args.heldout_dir,
         )
     log.info("wrote %s", args.out)
 

@@ -14,6 +14,7 @@ from sensorium.pool import (
     PoolSpec,
     Splits,
     build_pool,
+    link_heldout,
     load_pool_spec,
     load_splits,
     read_pool,
@@ -255,3 +256,35 @@ def test_instance_split_validation(tmp_path: Path) -> None:
         world.splits.write_text(broken)
         with pytest.raises(PoolError, match=message):
             load_splits(world.splits, registry)
+
+
+def test_heldout_split_is_stratified_disjoint_hashed_and_linked(
+    records_and_splits: tuple[list[IndexRecord], Splits], tmp_path: Path
+) -> None:
+    records, splits = records_and_splits
+    plain = build_pool(records, spec(total_steps=900), splits)
+    pool = build_pool(records, spec(total_steps=900, heldout_fraction=0.2), splits)
+    assert plain.heldout == () and pool.heldout
+    assert not {e.content_hash for e in pool.heldout} & {e.content_hash for e in pool.episodes}
+    assert {e.kind for e in pool.heldout} == {"expert", "noisy", "babbling"}  # every stratum
+    assert abs(pool.total_steps - 900) <= 0.02 * 900  # the strata are filled from the rest
+    assert pool.content_hash != build_pool(records, spec(total_steps=900), splits).content_hash
+    assert pool.heldout == build_pool(list(reversed(records)), pool.spec, splits).heldout
+    write_pool(pool, tmp_path / "pool.json")
+    loaded = read_pool(tmp_path / "pool.json")
+    assert loaded.heldout == tuple(
+        dataclasses.replace(e, body="", family="", policy="", seed=0, tags=()) for e in pool.heldout
+    )
+    links = link_heldout(loaded, tmp_path / "heldout")
+    assert [link.resolve() for link in links] == [Path(e.path).resolve() for e in pool.heldout]
+    assert all(link.is_symlink() for link in links)
+    with pytest.raises(PoolError, match="heldout_fraction"):
+        spec(heldout_fraction=0.5)
+
+
+def test_shipped_pool_specs_load() -> None:
+    root = Path(__file__).resolve().parents[1] / "configs" / "pools"
+    specs = {p.stem: load_pool_spec(p) for p in sorted(root.glob("*.toml"))}
+    pilot = specs["e1-pilot-babble"]
+    assert pilot.kinds == {"babbling": 1.0} and pilot.effector_ratio == {"hand": 1.0, "pincer": 1.0}
+    assert pilot.heldout_fraction == 0.05
