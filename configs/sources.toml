@@ -316,7 +316,7 @@ task = "place_on_target"
 family = "humanoid"
 tags = ["contact_rich"]
 programs = ["place_on_target"]
-props = ["target_disc"]
+props = ["target_disc", "place_block"]
 
 [[source]]
 name = "humanoid/hand/turn_reach"

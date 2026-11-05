@@ -10,7 +10,14 @@ pytest.importorskip("mujoco", reason="needs the simulator extra: make setup")
 
 import mujoco  # noqa: E402
 
-from sensorium.bodies.h1_experiments import PINCER_PROGRAMS, PROGRAMS, ExperimentPolicy  # noqa: E402
+from sensorium.bodies.h1_experiments import (  # noqa: E402
+    PINCER_PROGRAMS,
+    PLACE_FAR_M,
+    PROGRAMS,
+    SUCCESS_STEPS,
+    ExperimentPolicy,
+)
+from sensorium.bodies.h1_props import STACK_X, STACK_Y  # noqa: E402
 from sensorium.bodies.h1_scene import assets_available  # noqa: E402
 from sensorium.bodies.humanoid import HumanoidRecorder  # noqa: E402
 from sensorium.registry import load_registry  # noqa: E402
@@ -24,7 +31,7 @@ PROPS = {
     "stack": ["stack_blocks", "target_disc"],
     "drawer_open": ["drawer"],
     "push_to_target": ["target_disc"],
-    "place_on_target": ["target_disc"],
+    "place_on_target": ["target_disc", "place_block"],
 }
 
 
@@ -232,29 +239,54 @@ def test_push_to_target_layout_is_split_v3_1_and_pushes_are_short_and_re_aimed()
 
 
 @needs_assets
-def test_place_on_target_counts_an_object_set_down_on_the_disc_and_let_go() -> None:
+def test_place_on_target_starts_t1s_block_on_the_disc_side_10_cm_or_more_away() -> None:
+    with HumanoidRecorder({**settings("pincer", "place_on_target"), "task": True}) as recorder:
+        assert [recorder.model.body(b).name for b in recorder.objects] == ["obj_wood_stackbox_a"]
+        for seed in range(6):
+            policy = recorder.make_policy("experiment", np.random.default_rng(seed))
+            recorder.reset(policy, np.random.default_rng(seed))
+            xy = recorder.data.xpos[recorder.objects[0]][:2]
+            target = recorder.target[:2]
+            assert np.sign(xy[1]) == np.sign(target[1])
+            assert STACK_X[0] <= xy[0] <= STACK_X[1] and STACK_Y[0] <= abs(xy[1]) <= STACK_Y[1]
+            assert np.linalg.norm(xy - target) >= PLACE_FAR_M
+
+
+@needs_assets
+def test_place_on_target_needs_a_lift_then_a_second_at_rest_on_the_disc() -> None:
     with HumanoidRecorder({**settings("pincer", "place_on_target"), "task": True}) as recorder:
         policy = recorder.make_policy("experiment", np.random.default_rng(0))
         assert isinstance(policy, ExperimentPolicy)
         recorder.reset(policy, np.random.default_rng(0))
         model, data = recorder.model, recorder.data
-        assert not policy.succeeded(data)  # the far object starts 17 cm or more away
+        assert not policy.succeeded(data)
         assert policy.milestones == dict.fromkeys(
             ("grasped", "lifted", "at_target", "released"), False
         )
         body = recorder.objects[0]
         adr = model.jnt_qposadr[model.body_jntadr[body]]
+        start = data.qpos[adr : adr + 3].copy()
         target = policy.target_xy(data)
-        data.qpos[adr : adr + 2] = target  # set down on the disc
-        data.qvel[:] = 0.0
-        mujoco.mj_forward(model, data)
-        policy.robot_touches = lambda data, geoms: True  # type: ignore[method-assign]  # still held
-        assert not policy.succeeded(data) and policy.milestones["at_target"]
-        policy.robot_touches = lambda data, geoms: False  # type: ignore[method-assign]  # let go
-        assert policy.succeeded(data) and policy.milestones["released"]
+        policy.robot_touches = lambda data, geoms: False  # type: ignore[method-assign]
+
+        def put(xy: np.ndarray, dz: float = 0.0) -> None:
+            data.qpos[adr : adr + 3] = [xy[0], xy[1], start[2] + dz]
+            data.qvel[:] = 0.0
+            mujoco.mj_forward(model, data)
+
+        put(target)  # dragged onto the disc, never lifted: not at the target, not a success
+        assert not policy.succeeded(data) and not policy.milestones["at_target"]
+        policy.pinched = lambda data, geoms: True  # type: ignore[method-assign]
+        put(start[:2], 0.03)  # risen 3 cm in the pads
+        assert not policy.succeeded(data) and policy.milestones["lifted"]
+        policy.pinched = lambda data, geoms: False  # type: ignore[method-assign]
+        put(target)  # set down on the disc and let go
+        assert policy.succeeded(data) and policy.milestones["at_target"]
+        assert not policy.milestones["released"]  # only once the test has held 1 s
+        held = [policy.done(data) for _ in range(SUCCESS_STEPS)]
+        assert held[-1] and not any(held[:-1]) and policy.milestones["released"]
+        put(start[:2])
         side = "left" if target[1] > 0 else "right"
-        data.qpos[adr : adr + 2] = target + np.array([0.0, np.sign(target[1]) * 0.18])
-        mujoco.mj_forward(model, data)
         policy.milestones["released"] = False
         queue = policy.plan_place_on_target(side, data)
         assert queue is None or len(queue) > 3  # a plan, if this layout has one, is a full move

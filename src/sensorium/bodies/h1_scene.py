@@ -507,7 +507,11 @@ def seated_props(
         )
     extra = TALL_OBJECTS if "tall_block" in props else ()
     hand_sized = HAND_SIZED_OBJECTS if "hand_sized" in props else ()
-    base = STACK_OBJECTS if "stack_blocks" in props else OBJECTS  # two cubes instead of the six
+    base: tuple[tuple[str, str, str, str], ...] = OBJECTS
+    if "stack_blocks" in props:
+        base = STACK_OBJECTS  # two cubes instead of the six
+    elif "place_block" in props:
+        base = STACK_OBJECTS[:1]  # one of them
     objects = [(*o, None) for o in (*base, *extra)] + list(hand_sized)
     for name, material, shape, size, mass in objects:
         rgba, friction, density, solref = MATERIALS[material]

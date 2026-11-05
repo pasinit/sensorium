@@ -59,7 +59,8 @@ each closed-loop outcome, for split scoring:
 - T1 `picked` -> `placed`;
 - T2 `pinched` -> `opened`;
 - T3 `reached` -> `at_target`;
-- T3b `grasped` -> `lifted` -> `at_target` -> `released` (the success).
+- T3b `grasped` -> `lifted` -> `at_target` (only after the lift) -> `released` (the success,
+  held 1 s).
 
 T3 also records its pushes per episode in `meta["task_counts"]`: a multi-push demonstration is
 harder to imitate from one example.
@@ -71,7 +72,7 @@ harder to imitate from one example.
 | T1 stack two blocks | pincers | 15/29 = 52% [34, 69] (check of 2026-11-05) | demonstrations being generated |
 | T2 open the drawer | pincers | the 30/30 of the check were shoves; fixed: the arm keeps clear of the cabinets, success needs the knob pinched | re-check pending |
 | T3 push to the target | hands, pincers | post-fix re-check 6/30 (hands) and 0/30 (pincers): under the agreed 30% | kept held out under its own name, not used in the pilot |
-| T3b place on the target | pincers | new (split v3.2): pick an object that began 17 cm or more away, set it down on the disc, let go | check pending |
+| T3b place on the target | pincers | v3.2 check 3/30 (the 7 cm wood box: no plan or slips); v3.3 carries T1's block, alone, 10 cm or more from the disc | check pending |
 
 k ∈ {1, 5, 10, 50} needs at least 51 successful demonstrations per task and effector (one to
 score). The closed-loop runs need their own start states: 50 per task gives Wilson intervals of
