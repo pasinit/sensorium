@@ -74,11 +74,14 @@ class RestoredScene:
             return
         self.seed = int(episode.meta["seed"])  # type: ignore[call-overload]
         self.policy = str(episode.meta["policy"])
-        streams = np.random.SeedSequence(self.seed).spawn(7)  # as HumanoidRecorder.record
+        streams = np.random.SeedSequence(self.seed).spawn(8)  # as HumanoidRecorder.record
         layout_rng, policy_rng, sound_rng, look_rng, rec.props_rng, rec.effort_rng = (
             np.random.default_rng(child) for child in streams[:6]
         )
         rec.director_rng = np.random.default_rng(streams[6])
+        if rec.table_jitter:
+            jitter = np.random.default_rng(streams[7]).uniform(-rec.table_jitter, rec.table_jitter)
+            rec.set_table(rec.nominal_top + float(jitter))
         rec.appearance = draw_appearance(look_rng)
         apply_appearance(rec.model, rec.appearance)
         actor = rec.make_policy(self.policy, policy_rng)

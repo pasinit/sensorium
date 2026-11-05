@@ -4,6 +4,11 @@
 # (sensorium.pool.validate_pool).
 #
 # Changelog:
+#   v3.4 (2026-11-05): T2, open the drawer: small low cabinets (8 x 10 x 3 cm, a 2.4 cm knob post),
+#      each drawn per episode by its knob over 20 x 20 cm per side (x 0.42-0.62, |y| 0.10-0.30,
+#      yaw +-15 deg) clear of the resting pincers and of each other, and the table height drawn
+#      within +-3 cm (table_jitter). At v3.3 (cabinets at the reach edge) the demonstrator was 7/30
+#      (no plan in 20) and a replayed successful demonstration opened a drawer in 14/50.
 #   v3.3 (2026-11-05): T3b, place on target, carries T1's 4 cm block (the new prop place_block), not
 #      the 7 cm wood box: alone, in T1's start region on the disc's side, 10 cm or more from the disc.
 #      Its check at v3.2 was 3/30 (no plan for the wood box at the reach edge in 17, slips in the
@@ -36,7 +41,7 @@
 # Every source in configs/sources.toml must be listed in exactly one section;
 # sensorium.pool.load_splits checks this. Changing this file changes its hash,
 # which every pool records.
-version = "v3.3"
+version = "v3.4"
 
 [pretrain]
 sources = [

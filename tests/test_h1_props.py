@@ -12,19 +12,24 @@ import mujoco  # noqa: E402
 
 from sensorium.bodies.h1_babble import BabblePolicy  # noqa: E402
 from sensorium.bodies.h1_props import (  # noqa: E402
-    DRAWER_FRONT_X,
-    DRAWER_SIZE,
-    DRAWER_Y,
+    DRAWER_KNOB_X,
+    DRAWER_KNOB_Y,
     DRAWER_YAW_DEG,
     EXCLUSION,
     FRICTION,
     HAND_SIZED_OBJECTS,
     HIDDEN_COLUMNS,
     MASS_KG,
+    REST_CLEARANCE_M,
+    REST_PINCER_XY,
     SOLREF_S,
+    cabinet_corners,
+    cabinet_from_knob,
+    draw_cabinets,
     draw_hidden,
     in_cabinet,
     in_exclusion,
+    knob_of,
     prop_xml,
 )
 from sensorium.bodies.h1_scene import assets_available  # noqa: E402
@@ -63,7 +68,7 @@ def test_unknown_prop_is_rejected_and_zones_cover_the_big_props() -> None:
     pose = (0.50, 0.27, np.radians(15.0))
     assert in_cabinet(np.array([0.50, 0.27]), pose)
     assert in_cabinet(
-        np.array([0.50 + 0.08 * np.cos(pose[2]), 0.27 + 0.08 * np.sin(pose[2])]), pose
+        np.array([0.50 + 0.07 * np.cos(pose[2]), 0.27 + 0.07 * np.sin(pose[2])]), pose
     )
     assert not in_cabinet(np.array([0.50, 0.13]), pose)
 
@@ -227,30 +232,74 @@ def test_hand_sized_objects_spawn_settle_and_are_within_the_hands_reach() -> Non
             assert found, name
 
 
+def test_cabinets_spread_their_knobs_and_keep_clear_of_the_pincers_and_each_other() -> None:
+    """Split v3.4: knobs over 20 x 20 cm per side, yaw within 15 degrees, each footprint clear of
+    its side's resting pincer and of the other cabinet."""
+    rng = np.random.default_rng(0)
+    knobs: dict[float, list[np.ndarray]] = {1.0: [], -1.0: []}
+    for _ in range(400):
+        left, right = draw_cabinets(rng)
+        for pose, sign in ((left, 1.0), (right, -1.0)):
+            knob = knob_of(pose)
+            assert DRAWER_KNOB_X[0] <= knob[0] <= DRAWER_KNOB_X[1]
+            assert DRAWER_KNOB_Y[0] <= sign * knob[1] <= DRAWER_KNOB_Y[1]
+            assert abs(np.degrees(pose[2])) <= DRAWER_YAW_DEG + 1e-9
+            rest = np.array([REST_PINCER_XY[0], sign * REST_PINCER_XY[1]])
+            assert not in_cabinet(rest, pose, margin=REST_CLEARANCE_M)
+            np.testing.assert_allclose(cabinet_from_knob(tuple(knob), pose[2]), pose, atol=1e-12)
+            knobs[sign].append(knob)
+        assert not any(in_cabinet(c, left, margin=REST_CLEARANCE_M) for c in cabinet_corners(right))
+    for sign, points in knobs.items():
+        spread = np.ptp(np.array(points), axis=0)
+        assert (spread > 0.17).all(), (sign, spread)  # close to the 20 x 20 cm ranges
+
+
+def test_table_jitter_is_only_for_a_drawer_scene() -> None:
+    for props in (["drawer", "button"], ["target_disc"]):
+        with pytest.raises(ValueError, match="table_jitter"):
+            HumanoidRecorder({**SETTINGS, "props": props, "table_jitter": 0.03})
+
+
 @needs_assets
-def test_the_cabinets_are_posed_per_episode_and_objects_keep_off_them() -> None:
-    """Split v3.3: each cabinet's front, side offset and yaw are drawn per episode, the drawer
-    slides along its own (yawed) axis, and no object starts on a cabinet."""
-    settings = {**SETTINGS, "props": ["drawer"], "program": "drawer_open"}
+def test_the_cabinets_and_the_table_are_posed_per_episode_clear_of_the_robot() -> None:
+    """Split v3.4: each episode draws the cabinets and the table height; the knobs, the cabinets
+    and the objects follow the table, no robot part touches a cabinet at the start (at v3.3 one
+    held a drawer shut), no object starts on one, and a drawer slides along its yawed axis."""
+    settings = {**SETTINGS, "props": ["drawer"], "program": "drawer_open", "table_jitter": 0.03}
     with HumanoidRecorder(settings) as recorder:
         model, data = recorder.model, recorder.data
-        knobs = []
+        cabinet = {
+            g for g in range(model.ngeom) if (model.geom(g).name or "").startswith("table_drawer_")
+        }
+        tops, knobs = [], []
         for seed in range(6):
             episode = recorder.record(seed, "experiment", 1)
+            top = float(cast(float, episode.meta["table_top"]))
+            assert abs(top - recorder.nominal_top) <= 0.03 and top == recorder.table_top
+            tops.append(top)
             poses = cast(list[list[float]], episode.meta["cabinet_poses"])
-            assert len(poses) == 2
-            for (x, y, yaw), sign in zip(poses, (1.0, -1.0), strict=True):
-                front = x - DRAWER_SIZE[0] / 2
-                assert DRAWER_FRONT_X[0] <= front <= DRAWER_FRONT_X[1]
-                assert DRAWER_Y[0] <= sign * y <= DRAWER_Y[1]
-                assert abs(np.degrees(yaw)) <= DRAWER_YAW_DEG
-            knobs.append(data.geom_xpos[model.geom("table_drawer_l_knob").id][:2].copy())
-            for xy in episode.privileged["object_pose"][0, :, :2]:
-                assert not any(in_cabinet(xy, (p[0], p[1], p[2]), margin=0.0) for p in poses), (
-                    seed,
-                    xy,
+            for side, pose in zip("lr", poses, strict=True):
+                knob = data.geom_xpos[model.geom(f"table_drawer_{side}_knob").id]
+                np.testing.assert_allclose(
+                    knob[:2], knob_of((pose[0], pose[1], pose[2])), atol=2e-3
                 )
-        assert np.ptp(np.array(knobs), axis=0).min() > 0.01  # the knob moves between episodes
+                assert top < knob[2] < top + 0.08  # the knob follows the table
+            knobs.append(data.geom_xpos[model.geom("table_drawer_l_knob").id][:2].copy())
+            touching = [
+                (int(c.geom1), int(c.geom2))
+                for c in data.contact[: data.ncon]
+                if ({int(c.geom1), int(c.geom2)} & cabinet)
+                and (recorder.classes.robot[c.geom1] or recorder.classes.robot[c.geom2])
+            ]
+            assert not touching, (seed, poses)
+            for xy, z in zip(
+                episode.privileged["object_pose"][0, :, :2],
+                episode.privileged["object_pose"][0, :, 2],
+                strict=True,
+            ):
+                assert not any(in_cabinet(xy, (p[0], p[1], p[2]), margin=0.0) for p in poses)
+                assert z > top  # on this episode's table
+        assert np.ptp(tops) > 0.01 and np.ptp(np.array(knobs), axis=0).min() > 0.02
         joint = model.joint("prop_drawer_l")
         body = model.body("prop_drawer_l").id
         start = data.xpos[body].copy()

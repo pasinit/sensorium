@@ -98,7 +98,7 @@ from sensorium.bodies.h1_props import (  # noqa: E402
     STACK_Y,
     TARGET_X,
     TARGET_Y,
-    draw_cabinet,
+    draw_cabinets,
     draw_hidden,
     in_cabinet,
     in_exclusion,
@@ -223,6 +223,15 @@ class HumanoidRecorder:
         self.director_settings = (
             DirectorSettings.from_setting(director) if director and self.has_table else None
         )
+        # m: the table's surface is drawn per episode within +-this of ``table_top`` (T2, split
+        # v3.4: a replayed pinch then misses the knob in height too). The robot stays put. Only
+        # for a drawer scene without a director: the other props and the director are built at
+        # the nominal height.
+        self.table_jitter = float(settings.get("table_jitter", 0.0))  # type: ignore[arg-type]
+        self.nominal_top = self.table_top
+        jitter_ok = set(self.props) <= {"drawer"} and self.director_settings is None
+        if self.table_jitter and not (self.has_table and jitter_ok):
+            raise ValueError("table_jitter needs a table posture, the drawer only, no director")
         library = settings.get("grasp_library")
         self.grasp_library_paths = [str(p) for p in library] if isinstance(library, list) else None
         self.grasp_library = (
@@ -318,6 +327,11 @@ class HumanoidRecorder:
         self.target_geom = (
             int(self.model.geom("target_disc").id) if "target_disc" in self.props else None
         )
+        self.table_geoms = [
+            int(self.model.geom(name).id)
+            for name in ("table_top", *(f"table_leg{i}" for i in range(4)))
+            if self.has_table
+        ]
         self.cabinets = (
             [
                 (int(self.model.body(f"cabinet_{s}").id), sign)
@@ -390,6 +404,7 @@ class HumanoidRecorder:
             "program": self.program,
             "task": True if self.task else None,
             "director": director if self.director_settings is not None else None,
+            "table_jitter": self.table_jitter or None,
             "plan_tries": self.plan_tries,
             "grasp_library": self.grasp_library_paths,
             "grasp_explore": None if self.grasp_explore else False,
@@ -444,11 +459,16 @@ class HumanoidRecorder:
         """
         self.check_policy(policy)
         # Later streams are new; the first ones are unchanged by adding them.
-        streams = np.random.SeedSequence(seed).spawn(7)
+        streams = np.random.SeedSequence(seed).spawn(8)
         layout_rng, policy_rng, sound_rng, look_rng, self.props_rng, self.effort_rng = (
             np.random.default_rng(child) for child in streams[:6]
         )
         self.director_rng = np.random.default_rng(streams[6])
+        if self.table_jitter:  # before the policy: its planner works at this episode's height
+            jitter = np.random.default_rng(streams[7]).uniform(
+                -self.table_jitter, self.table_jitter
+            )
+            self.set_table(self.nominal_top + float(jitter))
         self.appearance = draw_appearance(look_rng)
         apply_appearance(self.model, self.appearance)
         actor = self.make_policy(policy, policy_rng)
@@ -610,6 +630,15 @@ class HumanoidRecorder:
         self.monitor.reset(data)
         self.dynamics.reset(data)
 
+    def set_table(self, top: float) -> None:
+        """Put the table's surface at height ``top`` (its top slab and legs; ``table_top``)."""
+        model = self.model
+        slab, *legs = self.table_geoms
+        model.geom_pos[slab, 2] = top - 0.02
+        for leg in legs:
+            model.geom_pos[leg, 2] = model.geom_size[leg, 2] = (top - 0.04) / 2
+        self.table_top = top
+
     def apply_pose(self, ctrl: np.ndarray) -> None:
         """Set the position-controlled joints to ``ctrl`` and make it the target."""
         driven = self.space.qpos_adr >= 0
@@ -707,12 +736,10 @@ class HumanoidRecorder:
             model.body_inertia[self.objects] = self.nominal["inertia"] * scale[:, None]
             model.geom_friction[self.object_geoms, 0] = self.hidden[:, 1]
             model.geom_solref[self.object_geoms, 0] = self.hidden[:, 2]
-        self.cabinet_poses = []
-        for body, sign in self.cabinets:  # last, so that the draws above are as before
-            pose = draw_cabinet(self.props_rng, sign)
-            model.body_pos[body, :2] = pose[:2]
+        self.cabinet_poses = draw_cabinets(self.props_rng) if self.cabinets else []
+        for (body, _), pose in zip(self.cabinets, self.cabinet_poses, strict=True):
+            model.body_pos[body] = (pose[0], pose[1], self.table_top)  # last: the draws above hold
             model.body_quat[body] = (np.cos(pose[2] / 2), 0.0, 0.0, np.sin(pose[2] / 2))
-            self.cabinet_poses.append(pose)
         if self.hidden_properties or self.mass_dirty:  # masses changed: refresh the constants
             mujoco.mj_setConst(model, self.data)
         self.mass_dirty = self.hidden_properties and n > 0
