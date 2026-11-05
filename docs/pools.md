@@ -19,6 +19,11 @@ make index        # data/sample/manifest.json -> data/sample/index.parquet
 make pool         # configs/pools/example.toml -> data/sample/pool.json
 ```
 
+Episode paths in the index and the pool are relative to the directory `sensorium-index`
+runs from (`--root`, default `.`: the repo root, where training runs), never absolute: an
+absolute path names a local directory, which must not reach the repo, the docs or shared data.
+Writing an index or a pool with an absolute path fails.
+
 Override with `make index MANIFESTS="a/manifest.json b/manifest.json" INDEX=...`
 and `make pool POOL_SPEC=... POOL=...`.
 

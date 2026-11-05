@@ -336,7 +336,7 @@ class Pool:
 
     @property
     def paths(self) -> list[Path]:
-        """Episode files in pool order."""
+        """Episode files in pool order (relative to the root the index was built from)."""
         return [Path(e.path) for e in self.episodes]
 
     @property
@@ -602,7 +602,14 @@ def record_to_dict(e: IndexRecord) -> dict[str, object]:
 
 
 def write_pool(pool: Pool, path: Path) -> None:
-    """Write the pool JSON (parent directories are created)."""
+    """Write the pool JSON (parent directories are created).
+
+    Raises:
+        PoolError: if an episode path is absolute (it would name a local directory).
+    """
+    absolute = [e.path for e in (*pool.episodes, *pool.heldout) if Path(e.path).is_absolute()]
+    if absolute:
+        raise PoolError(f"{len(absolute)} absolute episode paths, e.g. {absolute[0]}")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(pool_to_dict(pool), indent=2))
 
@@ -652,9 +659,10 @@ def record_from_dict(e: Mapping[str, object]) -> IndexRecord:
     )
 
 
-def link_heldout(pool: Pool, directory: Path) -> list[Path]:
-    """Symlink the held-out split's episode files into ``directory`` (relative links; existing
-    links replaced), for a training config's ``data.heldout_paths = ["<directory>/*.npz"]``.
+def link_heldout(pool: Pool, directory: Path, root: Path = Path()) -> list[Path]:
+    """Symlink the held-out split's episode files (paths relative to ``root``, the directory
+    the index was built from) into ``directory`` (relative links; existing links replaced),
+    for a training config's ``data.heldout_paths = ["<directory>/*.npz"]``.
 
     Returns:
         The links, in held-out order.
@@ -662,7 +670,7 @@ def link_heldout(pool: Pool, directory: Path) -> list[Path]:
     directory.mkdir(parents=True, exist_ok=True)
     links = []
     for e in pool.heldout:
-        target = Path(e.path)
+        target = root / e.path
         link = directory / target.name
         if link.is_symlink() or link.exists():
             link.unlink()

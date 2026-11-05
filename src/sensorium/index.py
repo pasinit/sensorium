@@ -53,7 +53,7 @@ class IndexRecord:
     """One episode in the index (one parquet row).
 
     Attributes:
-        path: Absolute path of the episode ``.npz``.
+        path: The episode ``.npz``, relative to the index's root (never absolute).
         body, effector, source, family, task: From the registry (``source`` is its name).
         instance: The specific content of the task (song id, mocap clip, demo id, ...);
             ``"default"`` when the manifest has no ``instance`` field.
@@ -80,15 +80,23 @@ class IndexRecord:
 
 
 def entries_to_records(
-    manifest_path: Path, entries: Sequence[dict[str, object]], registry: Registry
+    manifest_path: Path,
+    entries: Sequence[dict[str, object]],
+    registry: Registry,
+    root: Path | None = None,
 ) -> list[IndexRecord]:
     """Turn the ``episodes`` list of one manifest into index records.
 
+    Paths are stored relative to ``root`` (default: the working directory, where training
+    runs), never absolute: an absolute path names a local directory, which must not reach
+    the repo, the docs or shared data.
+
     Raises:
-        ValueError: on an entry with a missing field, an unregistered ``(body, task)``
-            or an unknown policy.
+        ValueError: on an entry with a missing field, an unregistered ``(body, task)``,
+            an unknown policy, or an episode file outside ``root``.
         FileNotFoundError: if an episode file listed in the manifest does not exist.
     """
+    base = (root if root is not None else Path.cwd()).resolve()
     records = []
     for entry in entries:
         missing = {"file", "body", "policy", "seed", "steps", "content_hash"} - set(entry)
@@ -103,10 +111,12 @@ def entries_to_records(
         path = (manifest_path.parent / str(entry["file"])).resolve()
         if not path.is_file():
             raise FileNotFoundError(f"{manifest_path}: episode file {path} does not exist")
+        if not path.is_relative_to(base):
+            raise ValueError(f"{manifest_path}: episode file {path} is outside the root {base}")
         policy = str(entry["policy"])
         records.append(
             IndexRecord(
-                path=str(path),
+                path=str(path.relative_to(base)),
                 body=body,
                 effector=source.effector,
                 source=source.name,
@@ -124,8 +134,11 @@ def entries_to_records(
     return records
 
 
-def build_index(manifests: Sequence[Path], registry: Registry) -> list[IndexRecord]:
-    """Read every manifest and return the records, sorted by path.
+def build_index(
+    manifests: Sequence[Path], registry: Registry, root: Path | None = None
+) -> list[IndexRecord]:
+    """Read every manifest and return the records, sorted by path (relative to ``root``,
+    default the working directory; see ``entries_to_records``).
 
     Raises:
         ValueError: if an entry is invalid (see ``entries_to_records``) or the same
@@ -135,7 +148,7 @@ def build_index(manifests: Sequence[Path], registry: Registry) -> list[IndexReco
     records: list[IndexRecord] = []
     for manifest_path in manifests:
         manifest = json.loads(manifest_path.read_text())
-        records += entries_to_records(manifest_path, manifest["episodes"], registry)
+        records += entries_to_records(manifest_path, manifest["episodes"], registry, root)
     records.sort(key=lambda r: r.path)
     paths = [r.path for r in records]
     duplicates = sorted({p for p in paths if paths.count(p) > 1})
@@ -145,7 +158,14 @@ def build_index(manifests: Sequence[Path], registry: Registry) -> list[IndexReco
 
 
 def write_index(records: Sequence[IndexRecord], path: Path) -> None:
-    """Write the records to a parquet file (parent directories are created)."""
+    """Write the records to a parquet file (parent directories are created).
+
+    Raises:
+        ValueError: if a record's path is absolute (it would name a local directory).
+    """
+    absolute = [r.path for r in records if Path(r.path).is_absolute()]
+    if absolute:
+        raise ValueError(f"{len(absolute)} absolute episode paths, e.g. {absolute[0]}")
     columns = {f.name: [getattr(r, f.name) for r in records] for f in fields(IndexRecord)}
     columns["tags"] = [list(r.tags) for r in records]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,9 +192,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("out", type=Path, help="parquet file to write")
     parser.add_argument("manifests", type=Path, nargs="+", help="manifest.json files")
     parser.add_argument("--sources", type=Path, default=DEFAULT_REGISTRY_PATH)
+    parser.add_argument(
+        "--root", type=Path, default=Path(), help="paths are stored relative to this directory"
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    records = build_index(args.manifests, load_registry(args.sources))
+    records = build_index(args.manifests, load_registry(args.sources), args.root)
     write_index(records, args.out)
     log.info(
         "wrote %d episodes (%d steps) to %s", len(records), sum(r.steps for r in records), args.out
