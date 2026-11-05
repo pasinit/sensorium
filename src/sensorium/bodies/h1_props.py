@@ -54,17 +54,24 @@ HAND_SIZED_OBJECTS = (
 )
 
 # Where each prop stands (m, in front of and to the side of the pelvis; the table's surface is z).
-# The cabinets' poses are drawn per episode (split v3.3; at v3.2 the left front stood at x 0.45,
-# y 0.30, square to the table, and an unrelated demonstration replayed open loop opened it in
-# 19 of 21 replays): each cabinet's front x, |y| of its centre line and yaw about its centre.
-DRAWER_FRONT_X = (0.38, 0.54)
-DRAWER_Y = (0.26, 0.33)
+# The cabinets (split v3.4): small and low, each drawn per episode on its side by its knob's
+# position (x, |y|) and its yaw about the knob. At v3.2 they stood still and an unrelated successful
+# demonstration replayed open loop opened a drawer in 19 of 21 replays; at v3.3 they moved at the
+# reach edge (|y| 0.28-0.33), where 20 of 30 episodes found no plan, and replays still opened 14 of
+# 50 (a blind pinch caught knobs within ~2-4 cm). Here the knobs spread over 20 x 20 cm per side
+# in the region where the pincers plan T1 and T3b (3 of 30 without a plan), and the table height
+# varies (``table_jitter``), so a replayed pinch rarely meets the knob.
+DRAWER_KNOB_X = (0.42, 0.62)
+DRAWER_KNOB_Y = (0.10, 0.30)
 DRAWER_YAW_DEG = 15.0
-# m: a cabinet's inner edge stays at least this far from the midline (redrawn otherwise): the
-# pincers rest at |y| ~0.12 and a cabinet reaching ~0.15 held a drawer shut against one of them
-DRAWER_INNER_Y = 0.19
-DRAWER_SIZE = (0.12, 0.08, 0.05)  # depth, half width, height of a drawer
-DRAWER_TRAVEL = 0.08  # it opens towards the robot by this much: its knob stays within reach
+DRAWER_SIZE = (0.08, 0.05, 0.03)  # depth, half width, height of a drawer (8 x 10 x 3 cm)
+DRAWER_TRAVEL = 0.06  # it opens towards the robot by this much
+DRAWER_KNOB_X_LOCAL = -DRAWER_SIZE[0] / 2 + 0.015  # m: the knob post, behind the drawer's front
+# The resting pincers' pinch points (x, |y|; the first tips of the v3.2 T2 demos, spread < 1.1 cm).
+# A cabinet's footprint keeps REST_CLEARANCE_M from them (at v3.3 a cabinet edge 3 cm from a
+# resting pincer held a drawer shut against it), and the two cabinets keep it from each other.
+REST_PINCER_XY = (0.495, 0.12)
+REST_CLEARANCE_M = 0.04
 FLAP_POS = (0.50, 0.34)  # the left hinge; the right one mirrors it. The flap extends towards the
 FLAP_LENGTH = (
     0.06  # m from the hinge to the free end: it stays clear of an open pincer at its start
@@ -161,17 +168,17 @@ def patches_xml(top: float) -> str:
 
 
 def drawer_xml(top: float) -> str:
-    """Two cabinets (left and right), each a drawer on a slide joint with a pinchable knob.
+    """Two cabinets (left and right), each a drawer on a slide joint with a pinchable knob post.
 
-    Each cabinet is a static body ``cabinet_<l|r>`` at the drawer's closed centre: its pose (front,
-    side offset and yaw, ``DRAWER_FRONT_X``, ``DRAWER_Y``, ``DRAWER_YAW_DEG``) is drawn per episode
-    by ``HumanoidRecorder.apply_props``; this places them at the middle of those ranges.
+    Each cabinet is a static body ``cabinet_<l|r>`` at the drawer's closed centre: its pose is
+    drawn per episode by ``HumanoidRecorder.apply_props`` (``draw_cabinets``); this places them
+    at the middle of the knob ranges, square to the table.
     """
     depth, half_w, high = DRAWER_SIZE
-    x = sum(DRAWER_FRONT_X) / 2 + depth / 2
+    x = sum(DRAWER_KNOB_X) / 2 - DRAWER_KNOB_X_LOCAL
     parts = []
     for side, sign in (("l", 1.0), ("r", -1.0)):
-        y = sign * sum(DRAWER_Y) / 2
+        y = sign * sum(DRAWER_KNOB_Y) / 2
         wall_z = 0.010 + high / 2
         parts.append(
             f'    <body name="cabinet_{side}" pos="{x} {y} {top}">\n'
@@ -194,7 +201,7 @@ def drawer_xml(top: float) -> str:
             f'size="{depth / 2 - 0.003} {half_w} {high / 2 - 0.002}" mass="0.3" '
             'material="metal"/>\n'
             f'        <geom name="table_drawer_{side}_knob" type="cylinder" '
-            f'pos="{-depth / 2 + 0.02} 0 {high / 2 + 0.018}" size="0.012 0.02" mass="0.02" '
+            f'pos="{DRAWER_KNOB_X_LOCAL} 0 {high / 2 + 0.012}" size="0.01 0.012" mass="0.02" '
             'material="metal"/>\n'
             "      </body>\n"
             "    </body>\n"
@@ -202,17 +209,55 @@ def drawer_xml(top: float) -> str:
     return "".join(parts)
 
 
-def draw_cabinet(rng: np.random.Generator, sign: float) -> tuple[float, float, float]:
-    """One cabinet's pose (centre x, centre y, yaw in radians) on the side ``sign`` (+1 left),
-    redrawn until its inner edge is ``DRAWER_INNER_Y`` or more from the midline."""
+def cabinet_from_knob(knob: tuple[float, float], yaw: float) -> tuple[float, float, float]:
+    """The cabinet pose (centre x, centre y, yaw) whose closed drawer's knob is at ``knob``."""
+    return (
+        knob[0] - DRAWER_KNOB_X_LOCAL * np.cos(yaw),
+        knob[1] - DRAWER_KNOB_X_LOCAL * np.sin(yaw),
+        yaw,
+    )
+
+
+def knob_of(pose: tuple[float, float, float]) -> np.ndarray:
+    """The knob (x, y) of the closed drawer of the cabinet at ``pose``."""
+    x, y, yaw = pose
+    return np.array([x + DRAWER_KNOB_X_LOCAL * np.cos(yaw), y + DRAWER_KNOB_X_LOCAL * np.sin(yaw)])
+
+
+def cabinet_corners(pose: tuple[float, float, float], margin: float = 0.0) -> np.ndarray:
+    """The four corners (x, y) of a cabinet's footprint at ``pose``, grown by ``margin``."""
+    x, y, yaw = pose
     depth, half_w, _ = DRAWER_SIZE
-    while True:
-        x = rng.uniform(*DRAWER_FRONT_X) + depth / 2
-        y = rng.uniform(*DRAWER_Y)
-        yaw = np.radians(rng.uniform(-DRAWER_YAW_DEG, DRAWER_YAW_DEG))
-        reach = (half_w + 0.012) * np.cos(yaw) + (depth / 2 + 0.01) * abs(np.sin(yaw))
-        if y - reach >= DRAWER_INNER_Y:
-            return float(x), float(sign * y), float(yaw)
+    u, v = depth / 2 + 0.01 + margin, half_w + 0.012 + margin
+    c, s = np.cos(yaw), np.sin(yaw)
+    local = np.array([[u, v], [u, -v], [-u, v], [-u, -v]])
+    corners: np.ndarray = np.array([x, y]) + local @ np.array([[c, s], [-s, c]])
+    return corners
+
+
+def draw_cabinets(rng: np.random.Generator) -> list[tuple[float, float, float]]:
+    """The left and the right cabinet's poses (centre x, centre y, yaw in radians), drawn by their
+    knobs (``DRAWER_KNOB_X``, ``DRAWER_KNOB_Y`` on each side, yaw within ``DRAWER_YAW_DEG``) and
+    redrawn until each footprint keeps ``REST_CLEARANCE_M`` from that side's resting pincer and
+    the two footprints keep it from each other."""
+    poses: list[tuple[float, float, float]] = []
+    for sign in (1.0, -1.0):
+        rest = np.array([REST_PINCER_XY[0], sign * REST_PINCER_XY[1]])
+        while True:
+            knob = (rng.uniform(*DRAWER_KNOB_X), sign * rng.uniform(*DRAWER_KNOB_Y))
+            yaw = float(np.radians(rng.uniform(-DRAWER_YAW_DEG, DRAWER_YAW_DEG)))
+            pose = cabinet_from_knob(knob, yaw)
+            if in_cabinet(rest, pose, margin=REST_CLEARANCE_M):
+                continue
+            if any(
+                in_cabinet(corner, other, margin=REST_CLEARANCE_M)
+                for other in poses
+                for corner in cabinet_corners(pose)
+            ):
+                continue
+            poses.append((float(pose[0]), float(pose[1]), yaw))
+            break
+    return poses
 
 
 def in_cabinet(xy: np.ndarray, pose: tuple[float, float, float], margin: float = 0.03) -> bool:

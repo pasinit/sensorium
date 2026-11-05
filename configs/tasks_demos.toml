@@ -15,4 +15,4 @@ settings = { effector = "pincer", posture = "seated", program = "stack", props =
 policies = ["experiment"]
 episodes_per_policy = 12
 steps = 600
-settings = { effector = "pincer", posture = "seated", program = "drawer_open", props = ["drawer"], task = true, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", program = "drawer_open", props = ["drawer"], task = true, hidden_properties = true, effort = true, table_jitter = 0.03 }

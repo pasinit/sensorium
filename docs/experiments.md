@@ -115,6 +115,14 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
     of a pincer hold its knob.
   - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
     stack block picked then placed.
+* **T2 redesigned: low cabinets in comfortable reach, and the table height (split v3.4).**
+  - v3.3 (cabinets at the reach edge, |y| 0.28-0.33): demonstrator 7/30 (no plan in 20), replay of
+    a successful demonstration 14/50. A blind pinch caught a knob within ~2 cm (7/7), sometimes
+    within 2-5 cm (7/22), never beyond 5 cm (0/21).
+  - Now each cabinet (8 x 10 x 3 cm, a 2.4 cm knob post) is drawn by its knob over x 0.42-0.62,
+    |y| 0.10-0.30 on its side, yaw +-15 deg, its footprint 4 cm clear of the resting pincer and of
+    the other cabinet; the table's height is drawn within +-3 cm (`table_jitter`, drawer scenes
+    only), and the planners, the objects and the cabinets follow it.
 * **T2's cabinets are posed per episode (split v3.3).**
   - At v3.2 the cabinets stood still: the replay floor (an unrelated demonstration played open
     loop) opened the drawer in 19 of 50 start states, 19 of the 21 whose demonstration was a
