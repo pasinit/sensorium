@@ -768,8 +768,10 @@ class ExperimentPolicy(BabblePolicy):
         opened = (data.qpos[joint.qposadr[0]] - low) / (high - low) > 0.5
         if opened and self.task_mode:
             return None  # the job is done
-        direction = 1.0 if opened else -1.0  # push shut (+x) or pull open (-x)
-        target = knob + np.array([direction * PULL_M, 0.0, 0.0])
+        # push shut or pull open along the drawer's slide (its cabinet is yawed, split v3.3)
+        direction = 1.0 if opened else -1.0
+        inward = data.xmat[self.model.body(f"prop_drawer_{letter}").id].reshape(3, 3)[:, 0]
+        target = knob + direction * PULL_M * inward
         grazed = [int(self.model.geom(f"table_drawer_{letter}_knob").id)]
         # the cabinets are table geoms, which an effector may touch: keep it off them on the way,
         # or the arm's travel shoves a drawer open (2026-11-05: every "success" of the check run)

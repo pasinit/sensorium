@@ -54,8 +54,17 @@ HAND_SIZED_OBJECTS = (
 )
 
 # Where each prop stands (m, in front of and to the side of the pelvis; the table's surface is z).
-DRAWER_POS = (0.45, 0.30)  # the left drawer's front (the right one mirrors it); it opens towards
-DRAWER_TRAVEL = 0.08  # the robot (-x) by this much: its knob stays within a pincer's reach
+# The cabinets' poses are drawn per episode (split v3.3; at v3.2 the left front stood at x 0.45,
+# y 0.30, square to the table, and an unrelated demonstration replayed open loop opened it in
+# 19 of 21 replays): each cabinet's front x, |y| of its centre line and yaw about its centre.
+DRAWER_FRONT_X = (0.38, 0.54)
+DRAWER_Y = (0.26, 0.33)
+DRAWER_YAW_DEG = 15.0
+# m: a cabinet's inner edge stays at least this far from the midline (redrawn otherwise): the
+# pincers rest at |y| ~0.12 and a cabinet reaching ~0.15 held a drawer shut against one of them
+DRAWER_INNER_Y = 0.19
+DRAWER_SIZE = (0.12, 0.08, 0.05)  # depth, half width, height of a drawer
+DRAWER_TRAVEL = 0.08  # it opens towards the robot by this much: its knob stays within reach
 FLAP_POS = (0.50, 0.34)  # the left hinge; the right one mirrors it. The flap extends towards the
 FLAP_LENGTH = (
     0.06  # m from the hinge to the free end: it stays clear of an open pincer at its start
@@ -78,9 +87,9 @@ PATCH_FRICTION = (0.1, 0.5, 1.2)  # sliding friction of the three patches
 PATCH_X = (0.435, 0.515, 0.595)  # three strips across x, each 7 cm wide and 60 cm long in y
 PATCH_HALF = (0.035, 0.30)
 
-# Axis-aligned zones (x0, x1, y0, y1) in which objects are not placed when the prop is present.
+# Axis-aligned zones (x0, x1, y0, y1) in which objects are not placed when the prop is present
+# (the drawers' footprints follow their drawn poses: ``in_cabinet``).
 EXCLUSION = {
-    "drawer": (0.34, 0.62, 0.20, 0.42),  # and its mirror image
     "hinged_flap": (0.42, 0.62, 0.20, 0.38),  # and its mirror image (see ``in_exclusion``)
     "button": (0.42, 0.53, 0.05, 0.19),
 }
@@ -152,38 +161,68 @@ def patches_xml(top: float) -> str:
 
 
 def drawer_xml(top: float) -> str:
-    """Two cabinets (left and right), each a drawer on a slide joint with a pinchable knob."""
-    depth, half_w, high = 0.12, 0.08, 0.05
+    """Two cabinets (left and right), each a drawer on a slide joint with a pinchable knob.
+
+    Each cabinet is a static body ``cabinet_<l|r>`` at the drawer's closed centre: its pose (front,
+    side offset and yaw, ``DRAWER_FRONT_X``, ``DRAWER_Y``, ``DRAWER_YAW_DEG``) is drawn per episode
+    by ``HumanoidRecorder.apply_props``; this places them at the middle of those ranges.
+    """
+    depth, half_w, high = DRAWER_SIZE
+    x = sum(DRAWER_FRONT_X) / 2 + depth / 2
     parts = []
     for side, sign in (("l", 1.0), ("r", -1.0)):
-        x, y = DRAWER_POS[0], sign * DRAWER_POS[1]
-        cx = x + depth / 2  # the drawer's centre when closed
-        wall_z = top + 0.010 + high / 2
+        y = sign * sum(DRAWER_Y) / 2
+        wall_z = 0.010 + high / 2
         parts.append(
-            f'    <geom name="table_drawer_{side}_base" type="box" pos="{cx} {y} {top + 0.005}" '
+            f'    <body name="cabinet_{side}" pos="{x} {y} {top}">\n'
+            f'      <geom name="table_drawer_{side}_base" type="box" pos="0 0 0.005" '
             f'size="{depth / 2 + 0.01} {half_w + 0.012} 0.005" material="table_wood"/>\n'
-            f'    <geom name="table_drawer_{side}_wall_a" type="box" '
-            f'pos="{cx} {y + half_w + 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
+            f'      <geom name="table_drawer_{side}_wall_a" type="box" '
+            f'pos="0 {half_w + 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
             'material="table_wood"/>\n'
-            f'    <geom name="table_drawer_{side}_wall_b" type="box" '
-            f'pos="{cx} {y - half_w - 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
+            f'      <geom name="table_drawer_{side}_wall_b" type="box" '
+            f'pos="0 {-half_w - 0.007} {wall_z}" size="{depth / 2} 0.005 {high / 2}" '
             'material="table_wood"/>\n'
-            f'    <geom name="table_drawer_{side}_back" type="box" '
-            f'pos="{x + depth + 0.005} {y} {wall_z}" size="0.005 {half_w + 0.012} {high / 2}" '
+            f'      <geom name="table_drawer_{side}_back" type="box" '
+            f'pos="{depth / 2 + 0.005} 0 {wall_z}" size="0.005 {half_w + 0.012} {high / 2}" '
             'material="table_wood"/>\n'
-            f'    <body name="prop_drawer_{side}" pos="{cx} {y} {top + 0.012 + high / 2}">\n'
-            f'      <joint name="prop_drawer_{side}" type="slide" axis="-1 0 0" '
+            f'      <body name="prop_drawer_{side}" pos="0 0 {0.012 + high / 2}">\n'
+            f'        <joint name="prop_drawer_{side}" type="slide" axis="-1 0 0" '
             f'range="0 {DRAWER_TRAVEL}" damping="3" frictionloss="0.5" solreflimit="0.004 1" '
             'solimplimit="0.95 0.99 0.001"/>\n'
-            f'      <geom name="table_drawer_{side}_box" type="box" '
+            f'        <geom name="table_drawer_{side}_box" type="box" '
             f'size="{depth / 2 - 0.003} {half_w} {high / 2 - 0.002}" mass="0.3" '
             'material="metal"/>\n'
-            f'      <geom name="table_drawer_{side}_knob" type="cylinder" '
+            f'        <geom name="table_drawer_{side}_knob" type="cylinder" '
             f'pos="{-depth / 2 + 0.02} 0 {high / 2 + 0.018}" size="0.012 0.02" mass="0.02" '
             'material="metal"/>\n'
+            "      </body>\n"
             "    </body>\n"
         )
     return "".join(parts)
+
+
+def draw_cabinet(rng: np.random.Generator, sign: float) -> tuple[float, float, float]:
+    """One cabinet's pose (centre x, centre y, yaw in radians) on the side ``sign`` (+1 left),
+    redrawn until its inner edge is ``DRAWER_INNER_Y`` or more from the midline."""
+    depth, half_w, _ = DRAWER_SIZE
+    while True:
+        x = rng.uniform(*DRAWER_FRONT_X) + depth / 2
+        y = rng.uniform(*DRAWER_Y)
+        yaw = np.radians(rng.uniform(-DRAWER_YAW_DEG, DRAWER_YAW_DEG))
+        reach = (half_w + 0.012) * np.cos(yaw) + (depth / 2 + 0.01) * abs(np.sin(yaw))
+        if y - reach >= DRAWER_INNER_Y:
+            return float(x), float(sign * y), float(yaw)
+
+
+def in_cabinet(xy: np.ndarray, pose: tuple[float, float, float], margin: float = 0.03) -> bool:
+    """True if ``xy`` lies on the footprint of the cabinet at ``pose``, or within ``margin``."""
+    x, y, yaw = pose
+    c, s = np.cos(yaw), np.sin(yaw)
+    dx, dy = xy[0] - x, xy[1] - y
+    u, v = c * dx + s * dy, -s * dx + c * dy  # in the cabinet's frame
+    depth, half_w, _ = DRAWER_SIZE
+    return bool(abs(u) <= depth / 2 + 0.01 + margin and abs(v) <= half_w + 0.012 + margin)
 
 
 def flap_xml(top: float) -> str:

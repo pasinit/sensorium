@@ -8,6 +8,10 @@
 #      the 7 cm wood box: alone, in T1's start region on the disc's side, 10 cm or more from the disc.
 #      Its check at v3.2 was 3/30 (no plan for the wood box at the reach edge in 17, slips in the
 #      pads in 9 of the 13 grasps, 2 drags onto the disc). A drag no longer counts.
+#      T2, open the drawer: each cabinet's pose is drawn per episode (front x 0.38-0.54, |y|
+#      0.26-0.33, yaw +-15 deg, inner edge 19 cm or more from the midline), and the demonstrator
+#      pulls along the drawer's slide. At v3.2 the cabinets were fixed, and a successful
+#      demonstration replayed open loop from another start state opened the drawer in 19 of 21.
 #   v3.2 (2026-11-05): adds the held-out task T3b, place on target (pincers): its demonstrator picks an
 #      object that began 17 cm or more from the target disc and sets it down on it (the v3.1 layout).
 #      It replaces T3 push to target in the E1 pilot, whose demonstrators stayed under the agreed 30%

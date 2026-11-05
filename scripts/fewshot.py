@@ -11,7 +11,7 @@ Usage:
     uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
         --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
-        [--kinds hold replay]
+        [--kinds hold replay] [--successful]
 
 - ``cache``: features and action chunks of the successful demonstrations.
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
@@ -42,6 +42,8 @@ Usage:
   solves cannot rank encoders. Both are open loop and judged on the physics state, so
   ``--no-render`` skips the cameras (``HumanoidRecorder.render_eyes``; the outcomes are the same).
   ``--kinds`` runs only some of them (a VM shard of one start state and one floor).
+  ``--successful`` replays only the successful demonstrations: the floor a task's start variation
+  must keep low (an open-loop copy of a success should not succeed from another start state).
 
 ``closed-loop`` and ``floor`` print one line per finished episode (for a VM's stall rule).
 ``closed-loop`` renders the model's eye only: the second eye is privileged (``RestoredScene``).
@@ -194,7 +196,8 @@ def floor(args: argparse.Namespace) -> None:
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
     demos = []
     if "replay" in args.kinds:
-        demos = [Episode.load(p, privileged=False).action for p in sorted(expand(args.demos))]
+        loaded = [Episode.load(p, privileged=False) for p in sorted(expand(args.demos))]
+        demos = [e.action for e in loaded if e.meta["success"] or not args.successful]
         if not demos:
             raise SystemExit(f"no demonstrations match {args.demos}")
     result: dict[str, object] = {"block": args.block, "rendered": not args.no_render}
@@ -352,6 +355,7 @@ def main() -> None:
     p.add_argument("--steps", type=int, default=600)
     p.add_argument("--no-render", action="store_true", help="skip the cameras (open loop only)")
     p.add_argument("--kinds", nargs="+", choices=["hold", "replay"], default=["hold", "replay"])
+    p.add_argument("--successful", action="store_true", help="replay successful demos only")
     args = parser.parse_args()
     commands = {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}
     {**commands, "cap": cap}[args.command](args)

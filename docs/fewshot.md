@@ -70,7 +70,7 @@ harder to imitate from one example.
 | task | effector | demonstrator success | status |
 |---|---|---|---|
 | T1 stack two blocks | pincers | 15/29 = 52% [34, 69] (check of 2026-11-05) | demonstrations being generated |
-| T2 open the drawer | pincers | the 30/30 of the check were shoves; fixed: the arm keeps clear of the cabinets, success needs the knob pinched | re-check pending |
+| T2 open the drawer | pincers | re-check 10/30; demos 62/134; replay floor 19/50, 19/21 when the replayed demo was a success (fixed cabinets); v3.3 draws each cabinet's pose | re-check pending |
 | T3 push to the target | hands, pincers | post-fix re-check 6/30 (hands) and 0/30 (pincers): under the agreed 30% | kept held out under its own name, not used in the pilot |
 | T3b place on the target | pincers | v3.2 check 3/30 (the 7 cm wood box: no plan or slips); v3.3 carries T1's block, alone, 10 cm or more from the disc | check pending |
 
