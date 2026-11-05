@@ -4255,8 +4255,7 @@ the four runs (`configs/model/e1-pilot-*.toml`).
 * Features: `fewshot.layer_features`, the state at every window end.
 * Head: the harness's BC head and configuration (`BCConfig`), one for every encoder and k.
 * k ∈ {1, 5, 10, 50} demonstrations, 3 head seeds.
-* **Tasks:** T1 and T3b, both pincer, and T2 if its redesign passes the validity check (see
-  "Held-out tasks" below).
+* **Tasks:** T1, T2 and T3b, all pincer (see "Held-out tasks" below).
 * **Design (supervisor, 2026-11-05; draft, not final):** closed-loop success at **k = 10 only**;
   k = 1, 5 and 50 are scored offline only.
   * **Primary score:** closed-loop success at k = 10 in the simulator, judged by the task's
@@ -4266,9 +4265,11 @@ the four runs (`configs/model/e1-pilot-*.toml`).
   * **Secondary score, at every k:** offline action RMSE on the demonstrations the head did not
     see. It gives the k-curve (1, 5, 10, 50) without the simulator; it is not a success rate.
   * **Closed-loop size:** 5 encoders (4 arms and DINOv2) x 3 head seeds x 50 start states = 750
-    episodes per task: 1,500 for T1 + T3b, 2,250 with T2. Most episodes fail and run to the cap.
+    episodes per task, **2,250** for the three tasks. Most episodes fail and run to the cap.
 
-**Held-out tasks** (split v3.3, sha256 `4bdf4beda04cfb14ac581d815dabc600394a047d0eae5b1f8c2bb14f5464ca53`).
+**Held-out tasks** (split v3.4, sha256 `7e6bcaf162874dc96fc6944ee1bdcdd2880f3b321a39826cb157a3fcee39d1d9`;
+v3.4 changes only T2's held-out cells, not the pretraining sources, so the pools built at v3.3 keep
+their content).
 Each task is admitted by a **task validity check, run before any encoder is scored**: its
 demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 
@@ -4279,6 +4280,7 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 | task | demonstrator | successful demos | floors: hold / replay | step cap | parts scored |
 |---|---|---|---|---|---|
 | T1 stack two blocks (pincers) | 64/130 = 49% [41, 58] | 64 | 0/50 [0, 7] / 0/50 [0, 7] | 600 | picked, placed |
+| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] | [n] | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | [from its demonstrations] | pinched, opened |
 | T3b place the object on the target (pincers) | 93/128 = 73% [64, 80] | 93 | 0/50 [0, 7] / 0/50 [0, 7] | 436 | grasped, lifted, at_target, released |
 
 * **Step caps:** 1.5 x the 95th percentile of the demonstrators' success steps (`fewshot.py cap`).
@@ -4289,11 +4291,14 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   * its 128 demonstration seeds share none with the 50 closed-loop start states;
   * a first check of the cell gave 21/30 = 70% [52, 83].
 * **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
-  has 64 and T3b 93.
-* **T2 open the drawer failed the validity check twice.** In both, open-loop replay does as well as
-  the demonstrator, so the task cannot rank encoders. A redesign is being built (Track A); it enters
-  the pilot only if it passes the same validity check before any encoder is scored, with its
-  demonstrator, floors, step cap and parts added to the table then.
+  has 64 and T3b 93. T2's demonstrator succeeds 27% of the time (no plan in 17 of 30 attempts), so
+  its demonstration set needs about 200 attempts.
+* **T2 at v3.4** (small low cabinets drawn by their knobs within comfortable reach, the table height
+  drawn per episode) is admitted: the demonstrator's lower bound (14%) is 7 points above both
+  floors' upper bounds (7%), outside the 5-point near-bar margin. Its median demonstration success
+  step is 146; its cap comes from its demonstration set (`fewshot.py cap`).
+* **T2's earlier versions failed the validity check.** In both, open-loop replay did as well as the
+  demonstrator, so the task could not rank encoders.
   * v3.1, pulled by the knob: demonstrator 62/134 = 46% [38, 55], replay floor 19/50 = 38%
     [26, 52].
   * v3.3, re-randomised start states: demonstrator 7/30 = 23% [12, 41] (no plan in 20 of 30),
@@ -4305,7 +4310,8 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 
 **Goal content, fixed per task before training** (B-pusht-0's goal-content rule):
 
-* T1 is not goal-conditioned: one head on the current features only.
+* T1 and T2 are not goal-conditioned: one head per task on the current features only (T2's cabinet
+  is seen in the head cameras).
 * T3b's target reaches the head only through the scene, as the disc in the head cameras, never as
   coordinates or other privileged state.
 * Every encoder, ours and the baseline, gets exactly the same inputs.
@@ -4334,7 +4340,7 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
 * **Go** if all of these hold:
   1. All four runs pass the checks above: `pred / std²` below 0.8, no collapse, and a train /
      held-out gap at most 10% of the held-out loss.
-  2. The tasks are neither saturated nor impossible: at k = 10, on both tasks, some encoder is above
+  2. The tasks are neither saturated nor impossible: at k = 10, on every task, some encoder is above
      both floors' upper Wilson bounds and below 95%.
   3. The frozen heads separate encoders: at least one pairwise contrast among the five encoders
      exceeds its interval on some task.
@@ -4343,9 +4349,10 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
   * check 2: a task problem, back to Track A's D0.6;
   * check 3: the frozen protocol cannot rank encoders, so LoRA heads come first in the full sweep.
 
-**Expectation, so it can be wrong** (restated for T1 and T3b, before any data):
+**Expectation, so it can be wrong** (restated for T1, T2 and T3b, before any data):
 
-* all ≥ V on both tasks (both grasp an object);
+* all ≥ V on every task (each grasps an object or a knob), most on T2, where the pull is felt more
+  than seen;
 * babbling ≥ expert stand-in;
 * DINOv2 competitive with V.
 
@@ -4354,11 +4361,11 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
 * **No hand-side held-out task.** T3 (hands) failed its demonstrator bar. The hand cell carried the
   touch-rich contacts, so the pilot's H1 (senses) contrast is measured on pincer tasks only; the
   across-senses claim for hands waits for the full E1.
-* **The held-out set tests new goals, not new skills.** T1 and T3b share the effector (pincers), a
-  block-like object and the workspace in front of the seated robot, and both are pick-and-place.
-  A frozen layer that does well on both shows it supports new goals for a kind of manipulation its
-  pretraining saw (the scripted programs include pincer lift_drop and push), not transfer to a new
-  kind. A redesigned T2 (an articulated drawer) would be the one task of another kind.
+* **The held-out set mostly tests new goals, not new skills.** All three tasks are pincer tasks in
+  the workspace in front of the seated robot. T1 and T3b share a block-like object and are both
+  pick-and-place, a kind of manipulation the pretraining saw (the scripted programs include pincer
+  lift_drop and push). T2, pulling an articulated drawer by its knob, is the one task of another
+  kind, so any claim of transfer to a new kind of manipulation rests on it alone.
 * **The k-curve is offline.** Closed loop is measured at k = 10 only, so "demonstrations saved"
   (experiment-01) and the shape of success against k are read from action RMSE, which need not
   track closed-loop success.
