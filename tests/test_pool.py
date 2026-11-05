@@ -302,3 +302,10 @@ def test_shipped_pool_specs_load() -> None:
     pilot = specs["e1-pilot-babble"]
     assert pilot.kinds == {"babbling": 1.0} and pilot.effector_ratio == {"hand": 1.0, "pincer": 1.0}
     assert pilot.heldout_fraction == 0.05
+    programs = specs["e1-pilot-programs"]
+    assert programs.kinds == {"experiment": 1.0} and programs.effector_ratio == pilot.effector_ratio
+    assert (programs.total_steps, programs.heldout_fraction, programs.tolerance) == (
+        pilot.total_steps,
+        pilot.heldout_fraction,
+        pilot.tolerance,
+    )
