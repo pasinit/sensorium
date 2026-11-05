@@ -115,6 +115,10 @@ class TrainConfig:
             states' per-dimension variance, ``std``²) is above ``mean_stop`` ends the run with
             ``MeanOnlyPredictor``. A predictor that beats the batch mean sits well below 1 (A0 on
             Push-T: 0.01 to 0.04); B-pusht-0's one-pass fix1 sat at 1.00 from step 50.
+        compile: ``torch.compile`` backend for the training step's forward pass ("" = eager, the
+            default; "inductor" on a GPU). The model itself is not wrapped, so checkpoints and
+            every evaluation are unchanged. On CUDA, TF32 is allowed for the float32 matmuls and
+            convolutions that bf16 autocast leaves in float32.
         heldout_every, heldout_batches: Every ``heldout_every`` steps and at the last step (0 =
             never; needs ``data.heldout_paths``), the objective on ``heldout_batches`` batches of
             16 held-out sequences (``diagnostics.heldout_loss``: eval mode, centre crop, a fixed
@@ -148,6 +152,7 @@ class TrainConfig:
     mean_stop_step: int = 2000
     heldout_every: int = 0
     heldout_batches: int = 8
+    compile: str = ""
 
 
 @dataclass(frozen=True)
@@ -543,6 +548,7 @@ def train(
     )
     metrics: dict[str, float] = {}
     model.train()
+    step_fn = fast_forward(model, tc, device)
     start = time.perf_counter() - before
     amp = torch.autocast(device.type, dtype=torch.bfloat16, enabled=tc.precision == "bf16")
     with (out / "log.jsonl").open("a" if done else "w") as journal:
@@ -551,9 +557,9 @@ def train(
                 group["lr"] = lr_at(step - 1, tc)
             batch = {k: v.to(device, non_blocking=True) for k, v in next(batches).items()}
             with amp:
-                result = model(batch)
+                result = step_fn(batch)
             opt.zero_grad(set_to_none=True)
-            result["loss"].backward()
+            result["loss"].backward()  # type: ignore[no-untyped-call]
             torch.nn.utils.clip_grad_norm_(model.parameters(), tc.grad_clip)
             opt.step()
             model.update_target(ema_at(step, model_cfg, tc.steps))
@@ -643,6 +649,22 @@ class HeldOut:
             meta = {"step": step, "heldout_pred": self.best}
             (self.out / BEST_META).write_text(json.dumps(meta))
         return result
+
+
+def fast_forward(
+    model: SensoryModel, tc: TrainConfig, device: torch.device
+) -> Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]]:
+    """The training step's forward pass: the model, compiled with ``tc.compile``'s backend if set
+    (``torch.compile`` on a wrapper; the model and its ``state_dict`` stay as they are). Allows
+    TF32 on CUDA."""
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    if not tc.compile:
+        return model
+    compiled: Callable[[dict[str, torch.Tensor]], dict[str, torch.Tensor]]
+    compiled = torch.compile(model, backend=tc.compile)
+    return compiled
 
 
 def check_mean_stop(metrics: dict[str, float], tc: TrainConfig) -> None:

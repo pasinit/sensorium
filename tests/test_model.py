@@ -2313,3 +2313,27 @@ def test_the_heldout_loss_is_logged_and_the_best_checkpoint_kept(tmp_path: Path)
     by_step = {r["step"]: r for r in rows}
     for r in rows_p:  # the measurement leaves training's random numbers unchanged
         assert by_step[r["step"]]["loss"] == pytest.approx(r["loss"], rel=1e-5)
+
+
+def test_a_compiled_forward_trains_the_same_model(tmp_path: Path) -> None:
+    small_pusht_data(tmp_path)
+    tc = TrainConfig(
+        steps=4,
+        batch_size=2,
+        warmup=2,
+        out_dir=str(tmp_path / "runs"),
+        log_every=1,
+        eval_windows=0,
+        device="cpu",
+    )
+    data = parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data
+    model = replace(TINY, senses=("vision", "proprio_effector"))
+    eager = train(RunConfig(name="e", data=data, model=model, train=tc))
+    compiled = train(
+        RunConfig(name="c", data=data, model=model, train=replace(tc, compile="eager"))
+    )
+    assert compiled["loss"] == pytest.approx(eager["loss"], rel=1e-5)  # the same computation
+    a = torch.load(tmp_path / "runs/e/ckpt.pt", weights_only=True)["model"]
+    b = torch.load(tmp_path / "runs/c/ckpt.pt", weights_only=True)["model"]
+    assert set(a) == set(b)  # no wrapper prefix in the checkpoint
+    assert all(torch.allclose(a[k], b[k], atol=1e-5) for k in a)
