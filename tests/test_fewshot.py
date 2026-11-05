@@ -189,3 +189,61 @@ def test_the_sweep_command_scores_every_k_and_seed(demo_paths: list[Path], tmp_p
     assert set(result["by_k"]) == {"1", "3"}  # k = 5 leaves no demonstration to score
     assert result["by_k"]["3"]["mean"] < result["by_k"]["1"]["mean"]
     assert (tmp_path / "out" / "head_k3_s1.pt").exists()
+
+
+def test_recalibration_reestimates_batchnorm_on_clean_pool_sequences(
+    demo_paths: list[Path], tmp_path: Path
+) -> None:
+    import importlib.util
+
+    from torch import Tensor
+
+    from sensorium.model.pretrain import RunConfig, save_checkpoint
+    from sensorium.model.recalibrate import pool_batches, recalibrate, recalibrated
+
+    episodes = [Episode.load(p) for p in demo_paths]
+    space = ChannelSpace.from_headers(header_of(e) for e in episodes)
+    torch.manual_seed(0)
+    layer = SensoryLayer(
+        SensoryModel(TINY, space), space, LoaderConfig(steps=4, substeps=4, view_size=32, crop=1.0)
+    )
+    batches = pool_batches(layer, demo_paths, batches=3, batch_size=4, seed=0)
+    assert len(batches) == 3 and batches[0]["vision"].shape[:2] == (4, 4)
+    again = pool_batches(layer, demo_paths, batches=3, batch_size=4, seed=0)
+    assert all(torch.equal(a["vision"], b["vision"]) for a, b in zip(batches, again, strict=True))
+    seen: list[Tensor] = []
+    bn = next(m for m in layer.model.modules() if isinstance(m, torch.nn.BatchNorm1d))
+    hook = bn.register_forward_pre_hook(lambda m, a: seen.append(a[0].detach()))
+    layer.model.train()
+    with torch.no_grad():
+        for b in batches:
+            layer.model.embed(b)
+    hook.remove()
+    before = {k: v.clone() for k, v in layer.model.state_dict().items()}
+    net = recalibrate(layer.model, batches)
+    new_bn = next(m for m in net.modules() if isinstance(m, torch.nn.BatchNorm1d))
+    assert new_bn.running_mean is not None
+    torch.testing.assert_close(new_bn.running_mean, torch.cat(seen).mean(0), atol=1e-5, rtol=1e-4)
+    weights = {
+        k: v for k, v in net.state_dict().items() if "running" not in k and "batches" not in k
+    }
+    assert all(torch.equal(v, before[k]) for k, v in weights.items())  # no weight changes
+    assert all(torch.equal(v, layer.model.state_dict()[k]) for k, v in before.items())  # a copy
+    assert not net.training and recalibrated(layer, demo_paths).space is space
+    with pytest.raises(ValueError):
+        pool_batches(layer, [])
+    # the command line: --recal-bn on a layer, refused for DINOv2
+    path = tmp_path / "ckpt.pt"
+    save_checkpoint(path, layer.model, space, RunConfig(model=TINY), 0)
+    script = Path(__file__).resolve().parent.parent / "scripts" / "fewshot.py"
+    spec = importlib.util.spec_from_file_location("fewshot_script", script)
+    assert spec is not None and spec.loader is not None
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    glob = str(demo_paths[0].parent / "*.npz")
+    features, substeps = cli.make_encoder(f"layer:{path}", True, [], glob)
+    plain, _ = cli.make_encoder(f"layer:{path}", True, [])
+    ends = np.array([12, 30])
+    assert substeps == 4 and not np.allclose(features(episodes[0], ends), plain(episodes[0], ends))
+    with pytest.raises(ValueError, match="recal-bn"):
+        cli.make_encoder("dino:none.pth", True, [], glob)
