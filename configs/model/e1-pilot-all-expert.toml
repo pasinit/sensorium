@@ -1,0 +1,45 @@
+# E1 pilot, Track B (docs/model.md, "E1 pilot, Track B: pre-registration"): arm all x expert stand-in.
+# v0 widths, A0 (no reconstruction), seed 0. The four pilot arms differ only in model.senses and in the
+# pool (data.pool, data.heldout_paths); every other value, the step budget included, is identical.
+# PLACEHOLDERS until Track A builds the pools: data.pool, data.heldout_paths and train.steps
+# (10 epochs = ceil(10 x the pool's sequence starts / 128), the same for all four arms; 42,000 assumes
+# ~537k starts, a ~600k-step pool of 600-step episodes and 64-step sequences).
+name = "e1-pilot-all-expert"
+seed = 0
+
+[data]
+pool = "data/pools/e1-pilot-expert.json"  # placeholder
+heldout_paths = ["data/pools/e1-pilot-expert-heldout/*.npz"]  # placeholder: the pool's ~5% held-out split
+
+[augment]
+crop = 0.9
+frame_cache = "data/e1_cache160"  # 160 px cache of the pool's episodes (crop 0.9 -> 128 px)
+cache_episodes = 32
+
+[model]
+senses = ["vision", "touch", "audio", "proprio_body", "vestibular", "proprio_effector"]
+steps = 16
+substeps = 4
+vision_size = 128
+sense_dropout = 0.0
+recon_weight = 0.0  # A0, written out (the default since B-pusht-0)
+
+[train]
+steps = 42000  # placeholder: 10 epochs of the pool, identical for the four arms
+batch_size = 128
+lr = 5e-5
+weight_decay = 1e-3
+warmup = 500
+log_every = 100
+save_every = 2000
+save_steps = [0, 2000, 10000, 25000, 42000]
+num_workers = 12
+device = "cuda"
+precision = "bf16"
+eval_windows = 256
+mean_stop = 0.8  # a predictor no better than the mean stops the arm (pred / std^2)
+mean_stop_step = 2000
+resume_every = 500
+heldout_every = 2000
+heldout_batches = 8
+out_dir = "runs/e1_pilot"
