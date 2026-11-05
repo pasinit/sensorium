@@ -467,7 +467,7 @@ class HumanoidRecorder:
                 self.dynamics.substep(self.data, contacts_now)
                 self.peaks.update(contacts_now)
         plan_stats = getattr(actor, "plan_stats", None)
-        return self.episode(
+        episode = self.episode(
             log,
             seed,
             policy,
@@ -476,6 +476,10 @@ class HumanoidRecorder:
             getattr(actor, "reflexes", None),
             plan_stats() if plan_stats else None,
         )
+        milestones = getattr(actor, "milestones", None)  # a held-out task's sub-goals
+        if milestones:
+            episode.meta["milestones"] = dict(milestones)
+        return episode
 
     def check_policy(self, policy: str) -> None:
         """Raise ``ValueError`` if this recorder cannot run ``policy`` (see ``record``)."""

@@ -1,6 +1,7 @@
 """Experiment programs: the recorder hooks, task names, and that each program plans (assets)."""
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -138,10 +139,48 @@ def test_a_stack_counts_only_when_the_top_block_rests_released_on_the_other() ->
 def test_a_demonstrator_ends_on_success_and_carries_the_held_out_task_name() -> None:
     task = {**settings("pincer", "drawer_open"), "task": True}
     with HumanoidRecorder(task) as recorder:
-        episode = recorder.record(41, "experiment", 400)
+        episode = recorder.record(2, "experiment", 400)  # seed 41 succeeded by a shove until fixed
     assert episode.meta["task"] == "drawer_open" and episode.meta["success"] is True
     assert episode.meta["end_reason"] == "success" and episode.length < 400
+    assert episode.meta["milestones"] == {"pinched": True, "opened": True}  # pulled by the knob
     registry = load_registry(ROOT / "configs/sources.toml")
     assert (
         registry.resolve("humanoid", "drawer_open", "pincer").name == "humanoid/pincer/drawer_open"
     )
+
+
+@needs_assets
+def test_a_drawer_shoved_open_is_no_success_and_one_pulled_by_its_knob_is() -> None:
+    with HumanoidRecorder({**settings("pincer", "drawer_open"), "task": True}) as recorder:
+        policy = recorder.make_policy("experiment", np.random.default_rng(0))
+        assert isinstance(policy, ExperimentPolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        model, data = recorder.model, recorder.data
+        joint = model.joint("prop_drawer_l")
+        low, high = model.jnt_range[joint.id]
+        data.qpos[joint.qposadr[0]] = low + 0.9 * (high - low)  # open, with nothing on the knob
+        mujoco.mj_forward(model, data)
+        assert not policy.succeeded(data)
+        assert policy.milestones == {"pinched": False, "opened": False}
+        policy.pinched = lambda data, geoms: True  # type: ignore[method-assign]  # pads on the knob
+        assert policy.succeeded(data)
+        assert policy.milestones == {"pinched": True, "opened": True}
+
+
+@needs_assets
+def test_the_drawer_demonstrator_travels_clear_of_the_drawers() -> None:
+    with HumanoidRecorder({**settings("pincer", "drawer_open"), "task": True}) as recorder:
+        episode = recorder.record(41, "experiment", 40)
+        names = cast(list[str], episode.meta["body_names"])
+    contacts = episode.privileged["contacts"][:20]  # [T, rows, 6]: body1, body2, force, xyz
+    drawer = {i for i, n in enumerate(names) if n.startswith("prop_drawer_")}
+    pincer = {i for i, n in enumerate(names) if n.startswith(("lp_", "rp_"))}
+    hits = [
+        (t, names[int(a)], names[int(b)])
+        for t, rows in enumerate(contacts)
+        for a, b, *_ in rows
+        if a >= 0 and {int(a), int(b)} & drawer and {int(a), int(b)} & pincer
+    ]
+    assert not hits  # the old travel shoved a drawer open within the first 10 steps
+    assert float(episode.privileged["prop_state"][:20].max()) < 0.05
+    assert episode.meta["milestones"] == {"pinched": False, "opened": False}

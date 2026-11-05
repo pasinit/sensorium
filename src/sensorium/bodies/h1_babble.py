@@ -23,7 +23,7 @@ arm cannot meet a full 6-D pose (see ``.tmp/phd-a/lift_spike.md`` in the D0.3 PR
 
 import copy
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 import mujoco
@@ -300,6 +300,8 @@ class BabblePolicy:
     CLEARANCE = 0.006  # m a non-effector part keeps from the table, objects and other limbs
     GRASP_CLEARANCE = -0.003  # ... for a pincer and during grasps: the forearm may graze the table
     REFLEX_N = 80.0  # N of limb contact that triggers a withdrawal
+    AVOID_CLEARANCE = 0.008  # m the effector keeps from ``avoid`` geoms (the check sees 1 cm)
+    AVOID_STEP = 0.03  # rad between the postures checked along a path near ``avoid`` geoms
     PRESS_DEPTH = 0.004  # m below a surface the tip is sent to (a light press)
     OBJECT_GOAL = 0.7  # share of touches aimed at an object
     START_Y = 0.2  # m, how far to its side each arm starts
@@ -391,6 +393,9 @@ class BabblePolicy:
         self.clearance = self.CLEARANCE  # the one posture_ok enforces now
         self.axis_weight = 0.0  # weight of the closing-axis scalar in the oriented IK now
         self.exempt = np.zeros(model.ngeom, dtype=bool)  # geoms the clearance check ignores now
+        # geoms the effector itself must keep clear of now (a program's props on the way, e.g. the
+        # drawers: their geoms count as table, which the effector may otherwise touch)
+        self.avoid = np.zeros(model.ngeom, dtype=bool)
         self.check = mujoco.MjData(self.check_model)
         self.arm_noise = {s: SmoothNoise(rng, 5, 1.0, theta=0.1) for s in SIDES}
         self.arm_noise_scale = self.ARM_NOISE / space.half_range
@@ -466,7 +471,8 @@ class BabblePolicy:
     ) -> bool:
         """True if arm posture ``q`` (5 joints) has the clearance, and reaches ``goal`` if given.
 
-        Only limb contacts of this arm count: the other arm's and the body's are not its doing.
+        Only limb contacts of this arm count: the other arm's and the body's are not its doing. The
+        arm's effector must also keep the clearance from the geoms in ``avoid``.
         """
         ik = self.ik[side]
         if goal is not None and np.linalg.norm(ik.tip_at(data.qpos, q) - goal) > tolerance:
@@ -484,7 +490,15 @@ class BabblePolicy:
             self.classes.group[geom] == (LEFT_ARM if side == "left" else RIGHT_ARM)
         ) & self.classes.robot[geom]
         limb = self.classes.limb_contacts(geom) & arm.any(axis=1) & ~self.exempt[geom].any(axis=1)
-        return not bool((limb & (np.asarray(scratch.contact.dist[:n]) < self.clearance)).any())
+        dist = np.asarray(scratch.contact.dist[:n])
+        if self.avoid.any():
+            effector = arm & self.classes.effector[geom]
+            near = (effector[:, 0] & self.avoid[geom[:, 1]]) | (
+                effector[:, 1] & self.avoid[geom[:, 0]]
+            )
+            if (near & (dist < max(self.clearance, self.AVOID_CLEARANCE))).any():
+                return False
+        return not bool((limb & (dist < self.clearance)).any())
 
     def in_envelope(self, data: mujoco.MjData, side: str, q: np.ndarray) -> bool:
         """True if the tip at ``q`` is in front of the body, over the table, under its ceiling."""
@@ -505,7 +519,11 @@ class BabblePolicy:
         big = float(np.abs(q1[:4] - q0[:4]).max()) > self.ENVELOPE_JUMP  # small moves cannot swing
         if big and not all(self.in_envelope(data, side, q0 + f * (q1 - q0)) for f in fractions):
             return False
-        return all(self.posture_ok(data, side, q0 + f * (q1 - q0)) for f in (0.25, 0.5, 0.75))
+        checks: Sequence[float] = (0.25, 0.5, 0.75)
+        if self.avoid.any():  # a prop to keep clear of: check the path densely
+            steps = max(4, math.ceil(float(np.abs(q1 - q0).max()) / self.AVOID_STEP))
+            checks = list(np.linspace(0.0, 1.0, steps + 1)[1:])
+        return all(self.posture_ok(data, side, q0 + f * (q1 - q0)) for f in checks)
 
     def plan_ok(self, data: mujoco.MjData, side: str, queue: list[Waypoint]) -> bool:
         """True if every leg of the queue, from the arm's current command, is clear."""

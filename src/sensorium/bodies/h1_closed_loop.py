@@ -12,7 +12,7 @@ layout and the arms' start. It then tells when the task's success test has held 
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import mujoco
 import numpy as np
@@ -77,15 +77,22 @@ class LearnedPolicy:
         """The judge's success test (held ``SUCCESS_STEPS``)."""
         return self.judge.done(data)
 
+    @property
+    def milestones(self) -> dict[str, bool]:
+        """The judge's sub-goals of the task, as reached so far."""
+        return self.judge.milestones
+
 
 @dataclass
 class Outcome:
-    """One closed-loop episode: its seed, success, length and the head's queries."""
+    """One closed-loop episode: its seed, success, length, the head's queries and the task's
+    sub-goals reached (``ExperimentPolicy.milestones``)."""
 
     seed: int
     success: bool
     steps: int
     queries: int
+    milestones: dict[str, bool] = field(default_factory=dict)
 
 
 def evaluate(

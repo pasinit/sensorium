@@ -105,6 +105,16 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
   pool specs should leave `humanoid/pincer/exp_slide`, `exp_press` and `exp_door` out until a pincer
   planner fixes them (pincer knock, topple, push and lift-drop plan well enough). **Pincer press has one
   episode with a 300 N effector-object peak**, above the 2F-85's 235 N grip and under the 470 N gate limit.
+* **The drawer demonstrator (T2) succeeded by shoving (found 2026-11-05, fixed).**
+  - In the demonstrator check (30 pincer episodes) all 30 "succeeded" by step 29. On its first
+    travel the arm pressed the pincer into the cabinet at 37-118 N and shoved the drawer open; the
+    knob was never pinched. The cabinets are `table_*` geoms, which an effector may touch.
+  - The demonstrator now keeps its effector clear of the cabinets on its travel and approach
+    (`BabblePolicy.avoid`: 8 mm, a posture every 0.03 rad along each path).
+  - The task's success test now also requires the drawer to pass half its travel while both pads
+    of a pincer hold its knob.
+  - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
+    stack block picked then placed.
 * **Push to the target (T3) is weak:** 3 of 12 demonstrator episodes succeed with hands and 1 of 12 with
   pincers; only the successful episodes should be offered as few-shot demonstrations.
 * Some `displaced` events of the hand programs come from the hand sweeping objects during a low hover
