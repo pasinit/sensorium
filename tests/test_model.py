@@ -2272,3 +2272,44 @@ def test_the_mean_stop_rule_ends_a_run_whose_predictor_does_no_better_than_the_m
     check_mean_stop(
         {"step": 1999.0, "pred_var": 5.0}, replace(tc, mean_stop=0.8, mean_stop_step=2000)
     )
+
+
+def test_the_heldout_loss_is_logged_and_the_best_checkpoint_kept(tmp_path: Path) -> None:
+    small_pusht_data(tmp_path)
+    data = {"paths": [str(tmp_path / "data" / "pusht-00000.npz")]}
+    data["heldout_paths"] = [str(tmp_path / "data" / "pusht-00001.npz")]
+    tc = TrainConfig(
+        steps=8,
+        batch_size=2,
+        warmup=2,
+        out_dir=str(tmp_path / "runs"),
+        log_every=3,
+        eval_windows=0,
+        device="cpu",
+        heldout_every=4,
+        heldout_batches=1,
+    )
+    model = replace(TINY, senses=("vision", "proprio_effector"))
+    cfg = RunConfig(name="h", data=parse_config({"data": data}).data, model=model, train=tc)
+    train(cfg)
+    rows = [json.loads(x) for x in (tmp_path / "runs/h/log.jsonl").read_text().splitlines()]
+    assert [r["step"] for r in rows] == [3, 4, 6, 8]  # held-out steps are logged too
+    measured = [r for r in rows if "heldout_pred" in r]
+    assert [r["step"] for r in measured] == [4, 8]
+    for r in measured:
+        assert r["heldout_gap"] == pytest.approx(r["heldout_pred"] - r["pred"])
+    best = json.loads((tmp_path / "runs/h/heldout_best.json").read_text())
+    want = min(measured, key=lambda r: r["heldout_pred"])
+    assert best["step"] == want["step"] and best["heldout_pred"] == pytest.approx(
+        want["heldout_pred"]
+    )
+    assert torch.load(tmp_path / "runs/h/ckpt-best.pt", weights_only=True)["step"] == want["step"]
+    plain = replace(cfg, name="p", train=replace(tc, heldout_every=0))
+    train(plain)
+    rows_p = [json.loads(x) for x in (tmp_path / "runs/p/log.jsonl").read_text().splitlines()]
+    assert [r["step"] for r in rows_p] == [3, 6, 8] and not (
+        tmp_path / "runs/p/ckpt-best.pt"
+    ).exists()
+    by_step = {r["step"]: r for r in rows}
+    for r in rows_p:  # the measurement leaves training's random numbers unchanged
+        assert by_step[r["step"]]["loss"] == pytest.approx(r["loss"], rel=1e-5)
