@@ -3,7 +3,7 @@
 Usage:
     uv run python scripts/fewshot.py cache <out.npz> --demos 'data/tasks_demos/humanoid/*.npz'
         --encoder layer:<checkpoint.pt> | dino:<weights.pth> [--no-proprio] [--drop SENSE ...]
-        [--horizon H] [--stride S]
+        [--recal-bn '<pool episodes glob>'] [--horizon H] [--stride S]
     uv run python scripts/fewshot.py sweep <cache.npz> <out_dir> [--k 1 5 10 50] [--seeds 0 1 2]
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
         --block <name> --encoder ... [--episodes N] [--steps 600]
@@ -12,6 +12,9 @@ Usage:
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
     and senses), or the frozen DINOv2 baseline (``model.controls.load_dino``; the frame at each
     step, plus proprio unless ``--no-proprio``).
+  - ``--recal-bn``: a layer's BatchNorm statistics re-estimated on clean sequences of the given
+    pool episodes first (``model.recalibrate``; B-pusht-0's BatchNorm rule). Pass the same value
+    to ``closed-loop``, so the head runs on the features it was trained on.
   - ``--horizon`` is the chunk length: the head is asked again after that many steps (default 4,
     0.2 s at 20 Hz).
 - ``sweep``: for each k and seed, a head trained on k demonstrations drawn by the seed, scored by
@@ -39,6 +42,7 @@ from sensorium.bodies.humanoid import DT, HumanoidRecorder
 from sensorium.generate import episode_seed
 from sensorium.model.controls import load_dino
 from sensorium.model.pretrain import expand, load_layer
+from sensorium.model.recalibrate import recalibrated
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -51,24 +55,32 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (centre - half, centre + half)
 
 
-def make_encoder(spec: str, proprio: bool, drop: Sequence[str]) -> tuple[fewshot.FeatureFn, int]:
-    """``(features, substeps)`` of ``layer:<checkpoint>`` or ``dino:<weights>``.
+def make_encoder(
+    spec: str, proprio: bool, drop: Sequence[str], recal: str = ""
+) -> tuple[fewshot.FeatureFn, int]:
+    """``(features, substeps)`` of ``layer:<checkpoint>`` or ``dino:<weights>``. With ``recal`` (a
+    glob of pool episodes), a layer's BatchNorm statistics are re-estimated on clean sequences of
+    them first (``model.recalibrate``).
 
     Raises:
-        ValueError: for another kind.
+        ValueError: for another kind, or ``recal`` with DINOv2.
     """
     kind, _, path = spec.partition(":")
     if kind == "layer":
         layer = load_layer(Path(path))
+        if recal:
+            layer = recalibrated(layer, sorted(expand(recal)))
         return fewshot.layer_features(layer, drop), int(layer.model.cfg.substeps)
     if kind == "dino":
+        if recal:
+            raise ValueError("--recal-bn applies to a sensory layer only")
         return fewshot.dino_features_fn(load_dino(Path(path)), proprio), 1
     raise ValueError(f"encoder must be layer:<checkpoint> or dino:<weights>, got {spec!r}")
 
 
 def cache(args: argparse.Namespace) -> None:
     """Build and save the cache."""
-    features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop)
+    features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     paths = sorted(expand(args.demos))
     built = fewshot.build_cache(paths, features, args.horizon, substeps, args.stride)
     built.save(args.out)
@@ -112,7 +124,7 @@ def closed_loop(args: argparse.Namespace) -> None:
     """Run the head on the task and write the outcomes."""
     config = tomllib.loads(args.config.read_text())
     spec = config["humanoid"][args.block]
-    features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop)
+    features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     head = fewshot.load_head(args.head)
     master = int(config["master_seed"])
     seeds = [
@@ -147,6 +159,7 @@ def main() -> None:
         p.add_argument("--encoder", required=True)
         p.add_argument("--no-proprio", action="store_true")
         p.add_argument("--drop", nargs="*", default=[])
+        p.add_argument("--recal-bn", default="", help="glob of pool episodes: re-estimate BN first")
 
     p = sub.add_parser("cache")
     p.add_argument("out", type=Path)

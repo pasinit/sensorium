@@ -576,24 +576,10 @@ def pred_loss(model: object, batches: list[dict[str, object]], mask: str, bn: st
 
 
 def recalibrate(model: object, batches: list[dict[str, object]]) -> object:
-    """A copy of ``model`` whose BatchNorm running statistics are re-estimated (reset, then the
-    cumulative average over ``batches``, encoded in training mode without gradients); every
-    weight is unchanged. Returned in eval mode."""
-    import copy  # noqa: PLC0415
+    """``model.recalibrate.recalibrate`` (BatchNorm statistics re-estimated on ``batches``)."""
+    from sensorium.model.recalibrate import recalibrate as recal  # noqa: PLC0415
 
-    import torch  # noqa: PLC0415
-
-    net = copy.deepcopy(model)
-    for m in net.modules():  # type: ignore[attr-defined]
-        if isinstance(m, torch.nn.BatchNorm1d):
-            m.reset_running_stats()
-            m.momentum = None  # a cumulative average over the batches
-    net.train()  # type: ignore[attr-defined]
-    with torch.no_grad():
-        for batch in batches:
-            net.embed(batch)  # type: ignore[attr-defined]
-    net.eval()  # type: ignore[attr-defined]
-    return net
+    return recal(model, batches)  # type: ignore[arg-type]
 
 
 def recal_layer(layer: object) -> object:
