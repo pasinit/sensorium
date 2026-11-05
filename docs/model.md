@@ -4193,6 +4193,121 @@ slot only, so the body's state shapes the dynamics without entering the goal. Va
 * an image-only loss with k-step unrolled training, so the body slot is learnt from future-image
   error. This also removes (v)'s train/plan context mismatch.
 
+## E1 pilot, Track B: pre-registration (draft)
+
+**Draft, not yet approved; written before any pilot data or run.** The pilot of
+[experiment-01.md](experiment-01.md) decides go or no-go on the full E1 sweep. It pretrains four
+sensory layers on Experientia, freezes them, and scores behaviour-cloning heads on held-out tasks
+from k demonstrations ([fewshot.md](fewshot.md)). It applies the rules B-pusht-0 established.
+
+**Arms** (1 pretraining seed each, the pilot's budget):
+
+| | expert stand-in (scripted programs) | event-dense babbling |
+|---|---|---|
+| **V**: vision + proprio + vestibular | V-expert | V-babble |
+| **all**: V + touch + sound | all-expert | all-babble |
+
+* Proprio and vestibular sense are in every condition (decision of 2026-10-14). A condition drops
+  senses at load time, identically in pretraining and evaluation.
+* The "expert" pool is Track A's scripted experiment programs, a stand-in. It is reported as that,
+  not as human or RL experts.
+
+**Model** (every arm): `sigreg`, the v0 widths (about 46M parameters), SIGReg per step,
+**no reconstruction** (`recon_weight` 0, the default since B-pusht-0). Seed 0.
+
+**Data** (Track A): two pools of about 600k env steps each, one per kind of experience.
+
+* Every pool has the same hand : pincer : body ratio.
+* About 5% of each pool's episodes are held out for early stopping (the held-out pretraining
+  split).
+* Per-pool contact and "caused change" statistics (A1) are reported next to H2.
+
+**Budget:** 10 epochs per run (6M sequences of 64 env steps, about 47,000 steps at batch 128),
+equal for the four runs. Runs early-stop on the held-out pretraining loss, and the train / held-out
+gap is reported. If the gap opens before 10 epochs, the full sweep grows the pools (1.5 to 2M
+steps) rather than cutting steps (pool-size check, B-scale-0).
+
+**Checks on every run, before any few-shot number is read:**
+
+* **Mean-only predictor:** `train.mean_stop` 0.8 from step 2,000 (`pred / std²`; B-pusht-0's
+  one-pass fix1 sat at 1.00, A0 at 0.01 to 0.04). After training, `pred / variance` of clean
+  held-out states (`state_variance`) is reported per run.
+* **Collapse:** std and effective rank of the states, train and held-out.
+* **BatchNorm:** the few-shot features are taken twice:
+  * as trained;
+  * re-calibrated on clean held-out pretraining sequences with the condition's senses
+    (`fewshot.py --recal-bn`).
+  The pilot has no sense dropout and no asymmetric target, so the two should agree; a difference
+  is reported, and the re-calibrated features are the primary ones if they differ.
+* **Probes:** the effector variant probe and the privileged-state probes, reported with every
+  result (experiment-01 §5).
+
+**Evaluation:** the D0.6 harness, frozen layers only.
+
+* Features: `fewshot.layer_features`, the state at every window end.
+* Head: the harness's BC head and configuration (`BCConfig`), one for every encoder and k.
+* k ∈ {1, 5, 10, 50} demonstrations, 3 head seeds.
+* **Tasks** (split v3): T1 stack two blocks (pincers), T2 open the drawer (pincers), T3 push to the
+  target (hands and pincers, reported separately).
+* **Primary score:** closed-loop success in the simulator, judged by the task's scripted program;
+  50 start states per task and effector, with a Wilson 95% interval.
+* **Secondary score:** offline action RMSE on the held-out demonstrations.
+
+**Goal content, fixed per task before training** (B-pusht-0's goal-content rule):
+
+* T1 and T2 are not goal-conditioned: one head per task, on the current features only.
+* T3's target reaches the head only through the scene, as the marker in the head cameras, never as
+  coordinates or other privileged state.
+* Every encoder, ours and the baseline, gets exactly the same inputs.
+* **Split scoring** where the harness can judge the parts:
+  * T2: handle grasped, then drawer opened;
+  * T3: effector at the object, then object at the target.
+  The parts are reported with the full success, so a lead can be attributed. (To be confirmed with
+  Track A: which sub-successes the task programs can judge.)
+
+**Baseline:** the frozen DINOv2 ViT-S/14 on the frame, with proprio (`fewshot.dino_features_fn`),
+through the same heads, k, seeds and start states.
+
+**Contrasts, at k = 10** (each per task and effector, never averaged across the two effectors):
+
+* **H1, senses:** all - V, within each kind of experience. The pilot's headline is the contact-rich
+  tasks.
+* **H2, experience:** babbling - expert stand-in, within each senses condition.
+* Every arm against DINOv2.
+
+**Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
+
+* the closed-loop start states: a paired bootstrap over the 50 start states, which are the same
+  for every encoder;
+* the head seeds.
+
+The pretraining-seed variance is not measured in the pilot, so no pilot contrast is claimed as an
+effect; contrasts feed the go/no-go and the full sweep's power estimate.
+
+**Go / no-go rule for the full sweep, stated now:**
+
+* **Go** if all of these hold:
+  1. All four runs pass the checks above: `pred / std²` below 0.8, no collapse, and a train /
+     held-out gap at most 10% of the held-out loss.
+  2. The tasks are neither saturated nor impossible: at k = 10, some encoder scores between 5% and
+     95% success on every task.
+  3. The frozen heads separate encoders: at least one pairwise contrast among the five encoders
+     exceeds its interval on some task.
+* **No-go, with a diagnosis**, if any fails:
+  * check 1: a model or recipe problem, back to M3;
+  * check 2: a task problem, back to Track A's D0.6;
+  * check 3: the frozen protocol cannot rank encoders, so LoRA heads come first in the full sweep.
+
+**Expectation, so it can be wrong:**
+
+* all ≥ V on T1 and T2 (contact-rich), smaller on T3;
+* babbling ≥ expert stand-in;
+* DINOv2 competitive with V on T3.
+
+**Compute** (estimated, to be measured by the GPU smoke test first): about 1 to 3 H100-hours per
+pretraining run at v0's 69 GFLOPs per sequence, plus minutes per frozen head and the closed-loop
+runs on CPU.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
