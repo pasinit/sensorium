@@ -115,6 +115,17 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
     of a pincer hold its knob.
   - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
     stack block picked then placed.
+* **T3b carries T1's block (split v3.3; its v3.2 check was 3/30, Wilson 95% [3, 26]).**
+  - At v3.2 the carried object was always the 7 cm wood box (the first object is the far one),
+    which the disc's 17 cm rule put at the reach edge (|y| 0.25-0.31): no plan in 17 of 30
+    episodes; 9 of the 13 grasps slipped in the pads (median mass ~0.7 kg; those lifted ~0.17 kg);
+    2 boxes were dragged, still pinched, onto the disc and counted as at the target.
+  - Now one 4 cm T1 block (prop `place_block`), alone, in T1's start region on the disc's side,
+    10 cm or more from the disc. At the target and the success count only after the block rose
+    in the pads; `released` is the success held for 1 s.
+  - As a held-out test it is close to T1: the same object, grasp and start region, with a goal
+    on the table instead of on a second block. It tests a new goal for a known grasp, not a new
+    object or a new skill.
 * **T3 is replaced in the pilot by T3b, place on target (pincers; split v3.2).**
   - The re-check after the closed-loop push change still fell under the agreed 30%: hands 6/30
     (reached 30/30, a median of 20 pushes), pincers 0/30 (the push mostly never started).

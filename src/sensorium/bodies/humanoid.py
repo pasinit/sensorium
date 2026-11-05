@@ -64,7 +64,7 @@ from sensorium.bodies.h1_babble import (
 )
 from sensorium.bodies.h1_director import DirectorSettings, SceneDirector  # noqa: E402
 from sensorium.bodies.h1_experiments import (  # noqa: E402
-    TARGET_PROGRAMS,
+    PLACE_FAR_M,
     ExperimentPolicy,
     check_program,
     task_name,
@@ -603,20 +603,28 @@ class HumanoidRecorder:
     def place_objects(self, rng: np.random.Generator) -> None:
         """Scatter the table objects at random non-overlapping positions and yaws."""
         placed: list[np.ndarray] = []
-        # the stack blocks share an arm's side (a draw only when they are there: old layouts hold)
-        stack_side = float(rng.choice([-1.0, 1.0])) if "stack_blocks" in self.props else 1.0
+        # the stack blocks share an arm's side (a draw only when they are there: old layouts hold);
+        # place on target: the disc's side, each block PLACE_FAR_M or more from the disc
+        place = self.program == "place_on_target"
+        stack_side = 1.0
+        if place:
+            stack_side = math.copysign(1.0, self.target[1])
+        elif "stack_blocks" in self.props:
+            stack_side = float(rng.choice([-1.0, 1.0]))
         for body in self.objects:
             geom = int(self.model.body_geomadr[body])
             half_height = object_half_height(self.model, geom)
             stack = "stackbox" in self.model.body(body).name
             # push to target: the first object starts 17 cm or more from the disc, on its side
-            far = self.program in TARGET_PROGRAMS and not placed
+            far = self.program == "push_to_target" and not placed
             for attempt in range(200 + 2 * PLACEMENT_RETRIES):
                 # 200 tries at a spacing of 11 cm; a crowded table (props) then relaxes it twice
                 spacing = SPACINGS[0 if attempt < 200 else 1 + (attempt - 200) // PLACEMENT_RETRIES]
                 if stack:
                     xy = np.array([rng.uniform(*STACK_X), stack_side * rng.uniform(*STACK_Y)])
                     spacing = STACK_MIN_GAP
+                    if place and np.linalg.norm(xy - self.target[:2]) < PLACE_FAR_M:
+                        continue
                 else:
                     y = rng.uniform(-OBJECT_HALF_WIDTH, OBJECT_HALF_WIDTH)
                     xy = np.array([rng.uniform(*self.reach_x), y])

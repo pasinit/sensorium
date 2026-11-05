@@ -23,6 +23,7 @@ PROPS = (
     "target_disc",
     "stack_blocks",
     "hand_sized",
+    "place_block",
 )
 
 # The two blocks of ``stack_blocks`` (4 cm cubes), which replace the six standard objects.
@@ -30,6 +31,7 @@ STACK_OBJECTS = (
     ("obj_wood_stackbox_a", "wood", "box", "0.02 0.02 0.02"),
     ("obj_plastic_stackbox_b", "plastic", "box", "0.02 0.02 0.02"),
 )
+# ``place_block`` (T3b, place on target): the first of them alone, placed as the stack blocks
 STACK_X = (0.42, 0.52)  # both blocks go on one arm's side, in this x range and |y| range
 STACK_Y = (0.12, 0.26)
 STACK_MIN_GAP = 0.10

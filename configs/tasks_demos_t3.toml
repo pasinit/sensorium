@@ -15,9 +15,10 @@ episodes_per_policy = 12
 steps = 600
 settings = { effector = "pincer", posture = "seated", program = "push_to_target", props = ["target_disc"], task = true, hidden_properties = true, effort = true }
 
-# T3b (split v3.2): the pincers pick an object that began far from the disc and place it on it.
+# T3b (split v3.3): the pincers pick T1's block (alone, in T1's start region, 10 cm or more from
+# the disc) and place it on the disc.
 [humanoid.pincer_place_on_target]
 policies = ["experiment"]
 episodes_per_policy = 12
 steps = 600
-settings = { effector = "pincer", posture = "seated", program = "place_on_target", props = ["target_disc"], task = true, hidden_properties = true, effort = true }
+settings = { effector = "pincer", posture = "seated", program = "place_on_target", props = ["target_disc", "place_block"], task = true, hidden_properties = true, effort = true }

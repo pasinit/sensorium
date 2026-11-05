@@ -54,19 +54,18 @@ PINCER_PROGRAMS = (
 # The demonstrators of the held-out few-shot tasks (T1 stack, T2 drawer, T3 push to the target):
 # their episodes carry the held-out task as their task name, not ``exp_<program>``.
 HELD_OUT_PROGRAMS = ("stack", "drawer_open", "push_to_target", "place_on_target")
-# Programs whose first object starts far from the target disc (``HumanoidRecorder.place_objects``)
-TARGET_PROGRAMS = ("push_to_target", "place_on_target")
 SUCCESS_STEPS = 20  # a task counts as done when its test has held this long (1 s)
 # Held-out tasks' sub-goals, in order (``ExperimentPolicy.milestones``, ``meta["milestones"]``):
 MILESTONES = {
     "stack": ("picked", "placed"),  # a block lifted 2 cm in the pads, then the stack test
     "drawer_open": ("pinched", "opened"),  # both pads of one pincer on a knob, then open by pulling
     "push_to_target": ("reached", "at_target"),  # an effector on an object that began far, then T3
-    # T3b (2026-11-05, the fallback after push to target failed its check): a pincer picks an
-    # object that began far from the disc and places it there: pinched, risen, over the disc,
-    # let go at rest
+    # T3b (the fallback after push to target failed its check): a pincer picks one of T1's
+    # blocks and places it on the disc. In order: a block pinched, risen in the pads, over the
+    # disc after it rose (a drag does not count), and left there at rest for 1 s (the success)
     "place_on_target": ("grasped", "lifted", "at_target", "released"),
 }
+PLACE_FAR_M = 0.10  # m: place on target: the blocks start at least this far from the disc
 PLACE_CARRY_M = 0.06  # place on target: the carried object's bottom rides this far above the table
 REACHED_M = 0.01  # m an object must have moved for a touch of it to count as reached
 PUSH_STEP_M = 0.06  # m: push to the target: one push moves the object at most this far, then re-aim
@@ -151,6 +150,7 @@ class ExperimentPolicy(BabblePolicy):
         self.milestones: dict[str, bool] = dict.fromkeys(MILESTONES.get(program, ()), False)
         self.pinched_travel = dict.fromkeys(("l", "r"), 0.0)  # drawer travel reached while pinched
         self.start_z: dict[int, float] = {}  # stack: each block's height at the first test
+        self.lifted: set[int] = set()  # place on target: the objects risen in the pads so far
         self.task_counts: dict[str, int] = {"pushes": 0} if program == "push_to_target" else {}
         self.pushed: int | None = None  # push to target: the object being pushed
         self.start_xy: dict[int, np.ndarray] = {}  # push to target: where each object began
@@ -374,14 +374,16 @@ class ExperimentPolicy(BabblePolicy):
         return False
 
     def place_test(self, data: mujoco.MjData) -> bool:
-        """Place on target: an object that began far from the disc rests within
-        ``TARGET_NEAR_M`` of its centre, still and touched by no robot part. Sub-goals: such an
-        object pinched (``grasped``), risen ``PICKED_M`` in the pads (``lifted``), over the disc
-        (``at_target``), and let go there (``released``, the success)."""
+        """Place on target: an object that began ``PLACE_FAR_M`` or more from the disc and has
+        risen ``PICKED_M`` in the pads rests within ``TARGET_NEAR_M`` of the disc's centre, still
+        and touched by no robot part. Sub-goals in order: such an object pinched (``grasped``),
+        risen in the pads (``lifted``), over the disc after it rose (``at_target``: an object
+        dragged there does not count), and the test held ``SUCCESS_STEPS`` (``released``, set by
+        ``done``)."""
         target = self.target_xy(data)
         if self.far_at_start is None:
             self.far_at_start = np.array(
-                [np.linalg.norm(data.xpos[b][:2] - target) >= TARGET_FAR_M for b in self.objects]
+                [np.linalg.norm(data.xpos[b][:2] - target) >= PLACE_FAR_M for b in self.objects]
             )
         done = False
         for i, far in enumerate(self.far_at_start):
@@ -395,14 +397,15 @@ class ExperimentPolicy(BabblePolicy):
                 self.milestones["grasped"] = True
                 if z > start + PICKED_M:
                     self.milestones["lifted"] = True
+                    self.lifted.add(i)
+            if i not in self.lifted:
+                continue  # not risen in the pads yet: on the disc by a drag or a shove
             if float(np.linalg.norm(data.xpos[body][:2] - target)) > TARGET_NEAR_M:
                 continue
             self.milestones["at_target"] = True
             dof = self.model.jnt_dofadr[self.model.body_jntadr[body]]
             still = float(np.linalg.norm(data.qvel[dof : dof + 3])) < RESTING_MPS
-            if still and not self.robot_touches(data, geoms):
-                self.milestones["released"] = True
-                done = True
+            done |= still and not self.robot_touches(data, geoms)
         return done
 
     def robot_touches(self, data: mujoco.MjData, geoms: set[int]) -> bool:
@@ -490,7 +493,10 @@ class ExperimentPolicy(BabblePolicy):
         if not self.task_mode:
             return False
         self.success_steps = self.success_steps + 1 if self.succeeded(data) else 0
-        return self.success_steps >= SUCCESS_STEPS
+        held = self.success_steps >= SUCCESS_STEPS
+        if held and "released" in self.milestones:
+            self.milestones["released"] = True  # place on target: left on the disc for 1 s
+        return held
 
     def target_xy(self, data: mujoco.MjData) -> np.ndarray:
         """The target disc's centre (x, y)."""
