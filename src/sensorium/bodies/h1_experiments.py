@@ -54,7 +54,10 @@ SUCCESS_STEPS = 20  # a task counts as done when its test has held this long (1 
 MILESTONES = {
     "stack": ("picked", "placed"),  # a block lifted 2 cm in the pads, then the stack test
     "drawer_open": ("pinched", "opened"),  # both pads of one pincer on a knob, then open by pulling
+    "push_to_target": ("reached", "at_target"),  # an effector on an object that began far, then T3
 }
+REACHED_M = 0.01  # m an object must have moved for a touch of it to count as reached
+PUSH_STEP_M = 0.06  # m: push to the target: one push moves the object at most this far, then re-aim
 PICKED_M = 0.02  # m a stack block must rise in the pads to count as picked
 RESTING_MPS = 0.02  # m/s: a stacked block must be slower than this (babble_stats.MOVING_MPS)
 TARGET_NEAR_M = 0.03  # push to target: the object's centre this close to the disc's centre
@@ -136,6 +139,9 @@ class ExperimentPolicy(BabblePolicy):
         self.milestones: dict[str, bool] = dict.fromkeys(MILESTONES.get(program, ()), False)
         self.pinched_travel = dict.fromkeys(("l", "r"), 0.0)  # drawer travel reached while pinched
         self.start_z: dict[int, float] = {}  # stack: each block's height at the first test
+        self.task_counts: dict[str, int] = {"pushes": 0} if program == "push_to_target" else {}
+        self.pushed: int | None = None  # push to target: the object being pushed
+        self.start_xy: dict[int, np.ndarray] = {}  # push to target: where each object began
         self.pads = [
             {g for g in range(model.ngeom) if model.body(model.geom_bodyid[g]).name == name}
             for name in (f"{p}_{pad}_pad" for p in ("lp", "rp") for pad in ("left", "right"))
@@ -291,6 +297,16 @@ class ExperimentPolicy(BabblePolicy):
 
     # ------------------------------------------------------------------ tasks (demonstrators)
 
+    def effector_touches(self, data: mujoco.MjData, geoms: set[int]) -> bool:
+        """True if an effector geom (either arm) touches one of ``geoms``."""
+        for i in range(data.ncon):
+            a, b = int(data.contact[i].geom1), int(data.contact[i].geom2)
+            if (a in geoms and self.classes.effector[b]) or (
+                b in geoms and self.classes.effector[a]
+            ):
+                return True
+        return False
+
     def pinched(self, data: mujoco.MjData, geoms: set[int]) -> bool:
         """True if both pads of one pincer touch ``geoms``."""
         touched = [False] * len(self.pads)
@@ -309,45 +325,66 @@ class ExperimentPolicy(BabblePolicy):
         Drawer: a drawer counts as opened only if it passed half its travel while both pads of a
         pincer held its knob, so a drawer shoved open by the arm on its way does not count.
         """
-        if self.program == "stack":
-            blocks = [i for i, n in enumerate(self.names) if "stackbox" in n]
-            for i in blocks:
-                z = float(data.xpos[self.objects[i]][2])
-                start = self.start_z.setdefault(i, z)
-                if z > start + PICKED_M and self.pinched(data, set(self.body_geoms(i))):
-                    self.milestones["picked"] = True
-            state = self.stacked_on(data, blocks) if len(blocks) == 2 else None
-            done = state is not None and self.resting_on(data, *state)
-            self.milestones["placed"] |= done
-            return done
-        if self.program == "drawer_open":
-            for letter in ("l", "r"):
-                joint = self.model.joint(f"prop_drawer_{letter}")
-                low, high = self.model.jnt_range[joint.id]
-                travel = float((data.qpos[joint.qposadr[0]] - low) / (high - low))
-                knob = {int(self.model.geom(f"table_drawer_{letter}_knob").id)}
-                if self.pinched(data, knob):
-                    self.milestones["pinched"] = True
-                    self.pinched_travel[letter] = max(self.pinched_travel[letter], travel)
-                if travel > 0.5 and self.pinched_travel[letter] > 0.5:
-                    self.milestones["opened"] = True
-                    return True
-            return False
-        if self.program == "push_to_target":
-            target = self.target_xy(data)
-            near = [
-                float(np.linalg.norm(data.xpos[b][:2] - target)) <= TARGET_NEAR_M
-                for b in self.objects
-            ]
-            if self.far_at_start is None:
-                self.far_at_start = np.array(
-                    [
-                        np.linalg.norm(data.xpos[b][:2] - target) >= TARGET_FAR_M
-                        for b in self.objects
-                    ]
-                )
-            return bool((np.array(near) & self.far_at_start).any())
+        test = {
+            "stack": self.stack_test,
+            "drawer_open": self.drawer_test,
+            "push_to_target": self.push_test,
+        }.get(self.program)
+        return test(data) if test is not None else False
+
+    def stack_test(self, data: mujoco.MjData) -> bool:
+        """Stack: one block rests released on the other (``picked``: a block risen in the pads)."""
+        blocks = [i for i, n in enumerate(self.names) if "stackbox" in n]
+        for i in blocks:
+            z = float(data.xpos[self.objects[i]][2])
+            start = self.start_z.setdefault(i, z)
+            if z > start + PICKED_M and self.pinched(data, set(self.body_geoms(i))):
+                self.milestones["picked"] = True
+        state = self.stacked_on(data, blocks) if len(blocks) == 2 else None
+        done = state is not None and self.resting_on(data, *state)
+        self.milestones["placed"] |= done
+        return done
+
+    def drawer_test(self, data: mujoco.MjData) -> bool:
+        """Drawer: one drawer past half its travel, reached while its knob was pinched."""
+        for letter in ("l", "r"):
+            joint = self.model.joint(f"prop_drawer_{letter}")
+            low, high = self.model.jnt_range[joint.id]
+            travel = float((data.qpos[joint.qposadr[0]] - low) / (high - low))
+            knob = {int(self.model.geom(f"table_drawer_{letter}_knob").id)}
+            if self.pinched(data, knob):
+                self.milestones["pinched"] = True
+                self.pinched_travel[letter] = max(self.pinched_travel[letter], travel)
+            if travel > 0.5 and self.pinched_travel[letter] > 0.5:
+                self.milestones["opened"] = True
+                return True
         return False
+
+    def push_test(self, data: mujoco.MjData) -> bool:
+        """Push to target: an object that began far from the disc lies within ``TARGET_NEAR_M``
+        of its centre (``reached``: an effector touches such an object, moved ``REACHED_M`` from
+        where it began: a touch at the start, the hand resting by it, does not count)."""
+        target = self.target_xy(data)
+        if self.far_at_start is None:
+            self.far_at_start = np.array(
+                [np.linalg.norm(data.xpos[b][:2] - target) >= TARGET_FAR_M for b in self.objects]
+            )
+            self.start_xy = {i: np.array(data.xpos[b][:2]) for i, b in enumerate(self.objects)}
+        if not self.milestones["reached"]:
+            moved = [
+                i
+                for i, f in enumerate(self.far_at_start)
+                if f
+                and np.linalg.norm(data.xpos[self.objects[i]][:2] - self.start_xy[i]) >= REACHED_M
+            ]
+            geoms = {g for i in moved for g in self.body_geoms(i)}
+            self.milestones["reached"] = bool(geoms) and self.effector_touches(data, geoms)
+        near = [
+            float(np.linalg.norm(data.xpos[b][:2] - target)) <= TARGET_NEAR_M for b in self.objects
+        ]
+        done = bool((np.array(near) & self.far_at_start).any())
+        self.milestones["at_target"] |= done
+        return done
 
     def done(self, data: mujoco.MjData) -> bool:
         """True once a demonstrator's success test has held for ``SUCCESS_STEPS`` steps."""
@@ -378,11 +415,30 @@ class ExperimentPolicy(BabblePolicy):
         movable = [i for i in far if "tall" not in self.names[i]]
         if not movable:
             return None
-        # the object nearest the disc that is not on it yet (boxes and cylinders: a sphere rolls on)
+        # Closed loop: keep pushing the object already pushed while it is still on this side;
+        # otherwise the steady objects nearest the disc first (a sphere rolls on), and the first
+        # one with a plan. Each push moves it at most PUSH_STEP_M towards the disc, re-aimed from
+        # where it lies now, so drift and rotation are corrected by the next push.
         steady = [i for i in movable if "sphere" not in self.names[i]] or movable
-        index = min(
+        order = sorted(
             steady, key=lambda i: float(np.linalg.norm(data.xpos[self.objects[i]][:2] - target))
         )
+        if self.pushed in order:
+            order.remove(self.pushed)
+            order.insert(0, self.pushed)
+        for index in order:
+            queue = self.push_towards(side, data, index, target)
+            if queue is not None:
+                self.pushed = index
+                self.task_counts["pushes"] += 1
+                return queue
+        return None
+
+    def push_towards(
+        self, side: str, data: mujoco.MjData, index: int, target: np.ndarray
+    ) -> list[Waypoint] | None:
+        """One push of object ``index`` towards ``target`` (at most ``PUSH_STEP_M``), or None if
+        it is already within ``TARGET_NEAR_M`` or the push has no plan."""
         centre, half_height, radius = self.object_geometry(data, index)
         gap = target - centre[:2]
         distance = float(np.linalg.norm(gap))
@@ -391,7 +447,9 @@ class ExperimentPolicy(BabblePolicy):
         direction = np.array([gap[0] / distance, gap[1] / distance, 0.0])
         start = centre - (radius + 0.03) * direction
         start[2] = self.table_top + 0.8 * half_height
-        end = np.array([target[0], target[1], start[2]]) - (radius + 0.002) * direction
+        step = min(distance, PUSH_STEP_M)
+        end = centre - (radius + 0.002) * direction + step * direction
+        end[2] = start[2]
         return self.contact_path(side, data, start, end, along_speed=self.PUSH_SPEED)
 
     # ------------------------------------------------------------------ pincer programs

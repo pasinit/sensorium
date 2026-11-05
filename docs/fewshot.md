@@ -40,14 +40,32 @@ from the same seeds.
 - The demonstrations hash the policy `experiment`, so the evaluation starts from new layouts of the
   same task.
 
-## Held-out tasks of the pilot (split v3)
+## Floors and sub-goals
+
+**Null-policy floors.** `scripts/fewshot.py floor`, on the same closed-loop start states:
+- `hold` keeps the start posture;
+- `replay` plays an unrelated demonstration's actions open loop.
+
+A task that either one solves cannot rank encoders. That is how the drawer's first demonstrator
+was caught: it succeeded by a sweep. Both use `bodies.h1_closed_loop.ReplayPolicy`.
+
+**Sub-goals.** Every held-out task records its sub-goals in order in `meta["milestones"]` and in
+each closed-loop outcome, for split scoring:
+- T1 `picked` -> `placed`;
+- T2 `pinched` -> `opened`;
+- T3 `reached` -> `at_target`.
+
+T3 also records its pushes per episode in `meta["task_counts"]`: a multi-push demonstration is
+harder to imitate from one example.
+
+## Held-out tasks of the pilot (split v3.1)
 
 | task | effector | demonstrator success | status |
 |---|---|---|---|
-| T1 stack two blocks | pincers | not recorded (only a unit test shows a success) | to measure before the demos are generated |
-| T2 open the drawer | pincers | not recorded (one unit-test episode succeeds within 400 steps) | to measure |
-| T3 push to the target | hands, pincers | 3/12 and 1/12 (`docs/experiments.md`) | weak: many attempts per successful demo |
+| T1 stack two blocks | pincers | 15/29 = 52% [34, 69] (check of 2026-11-05) | demonstrations being generated |
+| T2 open the drawer | pincers | the 30/30 of the check were shoves; fixed: the arm keeps clear of the cabinets, success needs the knob pinched | re-check pending |
+| T3 push to the target | hands, pincers | 1/4 and 0/11 in the check; fixed: closed-loop pushes of at most 6 cm, re-aimed from where the object lies, the disc inside both effectors' reach (split v3.1) | re-check pending; under 30% -> "place on the disc" for the pincers |
 
 k ∈ {1, 5, 10, 50} needs at least 51 successful demonstrations per task and effector (one to
-score), and the closed-loop runs need their own start states: 50 per task gives Wilson intervals of
+score). The closed-loop runs need their own start states: 50 per task gives Wilson intervals of
 about ±12 points at 30%.

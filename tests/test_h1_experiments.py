@@ -184,3 +184,47 @@ def test_the_drawer_demonstrator_travels_clear_of_the_drawers() -> None:
     assert not hits  # the old travel shoved a drawer open within the first 10 steps
     assert float(episode.privileged["prop_state"][:20].max()) < 0.05
     assert episode.meta["milestones"] == {"pinched": False, "opened": False}
+
+
+@needs_assets
+def test_push_to_target_layout_is_split_v3_1_and_pushes_are_short_and_re_aimed() -> None:
+    from sensorium.bodies.h1_experiments import PUSH_STEP_M
+    from sensorium.bodies.h1_props import FAR_OBJECT_X, TARGET_X
+
+    with HumanoidRecorder({**settings("hand", "push_to_target"), "task": True}) as recorder:
+        for seed in range(3):
+            policy = recorder.make_policy("experiment", np.random.default_rng(seed))
+            assert isinstance(policy, ExperimentPolicy)
+            recorder.reset(policy, np.random.default_rng(seed))
+            data = recorder.data
+            target = policy.target_xy(data)
+            assert TARGET_X[0] <= target[0] <= TARGET_X[1]  # inside both effectors' reach
+            first = data.xpos[recorder.objects[0]][:2]
+            assert FAR_OBJECT_X[0] <= first[0] <= FAR_OBJECT_X[1]
+            assert np.linalg.norm(first - target) >= 0.17
+        assert isinstance(policy, ExperimentPolicy)
+        side = "left" if target[1] > 0 else "right"
+        legs: list[tuple[np.ndarray, np.ndarray]] = []
+
+        def fake_path(
+            side: str, data: mujoco.MjData, start: np.ndarray, end: np.ndarray, **kw: object
+        ) -> list[object]:
+            legs.append((start, end))
+            return []
+
+        policy.contact_path = fake_path  # type: ignore[method-assign,assignment]
+        assert policy.plan_push_to_target(side, data) == []
+        start, end = legs[0]
+        assert float(np.linalg.norm(end - start)) <= 0.03 + PUSH_STEP_M + 1e-6  # one short push
+        assert policy.task_counts == {"pushes": 1} and policy.pushed is not None
+        pushed = policy.pushed
+        policy.plan_push_to_target(side, data)  # the same object again, re-aimed from where it is
+        assert policy.pushed == pushed and policy.task_counts == {"pushes": 2}
+        assert policy.milestones == {"reached": False, "at_target": False}
+        policy.effector_touches = lambda data, geoms: True  # type: ignore[method-assign]
+        assert not policy.succeeded(data) and not policy.milestones["reached"]  # nothing moved
+        body = recorder.objects[0]
+        adr = recorder.model.jnt_qposadr[recorder.model.body_jntadr[body]]
+        data.qpos[adr] += 0.02  # the far object pushed 2 cm
+        mujoco.mj_forward(recorder.model, data)
+        assert not policy.succeeded(data) and policy.milestones["reached"]

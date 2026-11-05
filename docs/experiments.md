@@ -115,6 +115,14 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
     of a pincer hold its knob.
   - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
     stack block picked then placed.
+* **Push to the target (T3) failed (check of 2026-11-05: 1/4 hands, 0/11 pincers; changed).**
+  - Its single straight push rarely ended within 3 cm.
+  - The disc sat at the pincers' reach edge, so pushes often had no plan.
+  - Now each push moves the object at most 6 cm, re-aimed from where it lies (the same object first,
+    else the next one with a plan).
+  - The disc and the far object are placed inside both effectors' reach (split v3.1,
+    `configs/splits/v3.toml`).
+  - The earlier note follows:
 * **Push to the target (T3) is weak:** 3 of 12 demonstrator episodes succeed with hands and 1 of 12 with
   pincers; only the successful episodes should be offered as few-shot demonstrations.
 * Some `displaced` events of the hand programs come from the hand sweeping objects during a low hover

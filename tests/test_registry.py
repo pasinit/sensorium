@@ -76,7 +76,7 @@ def test_shipped_registry_and_split_are_valid() -> None:
     assert set(splits.sections["pretrain"]) | set(splits.heldout) == {
         s.name for s in registry.sources
     }
-    assert splits.version == "v3"
+    assert splits.version == "v3.1"
     assert registry.resolve("humanoid", "stand_table", "hand").name == "humanoid/hand/stand_table"
 
 
