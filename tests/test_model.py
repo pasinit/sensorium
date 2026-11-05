@@ -45,8 +45,10 @@ from sensorium.model.layout import (  # noqa: E402
 )
 from sensorium.model.modules import SIGReg  # noqa: E402
 from sensorium.model.pretrain import (  # noqa: E402
+    MeanOnlyPredictor,
     RunConfig,
     TrainConfig,
+    check_mean_stop,
     ema_at,
     load_layer,
     lr_at,
@@ -2164,13 +2166,14 @@ def test_image_target_predicts_the_image_only_encoding_of_the_next_step(
         assert not torch.allclose(plain(batch)["pred"], want)  # the default is unchanged
 
 
-def test_a_stopped_run_resumes_from_its_last_resume_point(tmp_path: Path) -> None:
+def small_pusht_data(tmp_path: Path) -> None:
+    """Two small Push-T episodes under ``tmp_path/data`` (vision and the agent's proprio)."""
     pytest.importorskip("h5py", reason="needs the pusht extra")
     from sensorium import pusht  # noqa: PLC0415
 
     (tmp_path / "data").mkdir()
     rng = np.random.default_rng(0)
-    for i in range(2):  # two small Push-T episodes on disk (vision and the agent's proprio)
+    for i in range(2):
         arrays = {
             "pixels": rng.integers(0, 255, (40, 224, 224, 3), dtype=np.uint8),
             "action": rng.uniform(-0.5, 0.5, (40, 2)),
@@ -2178,6 +2181,10 @@ def test_a_stopped_run_resumes_from_its_last_resume_point(tmp_path: Path) -> Non
             "state": rng.normal(0, 1, (40, 7)),
         }
         pusht.to_episode(i, arrays).save(tmp_path / "data" / f"pusht-{i:05d}.npz")
+
+
+def test_a_stopped_run_resumes_from_its_last_resume_point(tmp_path: Path) -> None:
+    small_pusht_data(tmp_path)
     cfg = RunConfig(
         name="r",
         data=parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data,
@@ -2221,3 +2228,39 @@ def test_a_stopped_run_resumes_from_its_last_resume_point(tmp_path: Path) -> Non
     assert all(s["step"] == 15 for s in seen["optimizer"]["state"].values())  # continuous
     lr = seen["optimizer"]["param_groups"][0]["lr"]
     assert lr == pytest.approx(lr_at(14, cfg.train))  # the schedule continues
+
+
+def test_the_mean_stop_rule_ends_a_run_whose_predictor_does_no_better_than_the_mean(
+    tmp_path: Path,
+) -> None:
+    small_pusht_data(tmp_path)
+    tc = TrainConfig(
+        steps=8,
+        batch_size=2,
+        warmup=2,
+        out_dir=str(tmp_path / "runs"),
+        log_every=1,
+        eval_windows=0,
+        device="cpu",
+        mean_stop=1e-9,  # any predictor is above this: the rule must fire at its first step
+        mean_stop_step=3,
+    )
+    cfg = RunConfig(
+        name="m",
+        data=parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data,
+        model=replace(TINY, senses=("vision", "proprio_effector")),
+        train=tc,
+    )
+    with pytest.raises(MeanOnlyPredictor, match="step 3"):
+        train(cfg)
+    rows = [json.loads(x) for x in (tmp_path / "runs/m/log.jsonl").read_text().splitlines()]
+    assert [r["step"] for r in rows] == [1, 2, 3]  # logged up to the step that stopped it
+    assert all(r["pred_var"] == pytest.approx(r["pred"] / r["std"] ** 2) for r in rows)
+    off = replace(cfg, name="n", train=replace(tc, mean_stop=0.0))  # the default: off
+    assert train(off)["step"] == 8
+    check_mean_stop({"step": 2000.0, "pred_var": 0.79}, replace(tc, mean_stop=0.8))
+    with pytest.raises(MeanOnlyPredictor):
+        check_mean_stop({"step": 2000.0, "pred_var": 0.81}, replace(tc, mean_stop=0.8))
+    check_mean_stop(
+        {"step": 1999.0, "pred_var": 5.0}, replace(tc, mean_stop=0.8, mean_stop_step=2000)
+    )
