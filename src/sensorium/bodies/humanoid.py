@@ -98,7 +98,9 @@ from sensorium.bodies.h1_props import (  # noqa: E402
     STACK_Y,
     TARGET_X,
     TARGET_Y,
+    draw_cabinet,
     draw_hidden,
+    in_cabinet,
     in_exclusion,
 )
 from sensorium.bodies.h1_reach import ReachFreePolicy  # noqa: E402
@@ -316,6 +318,15 @@ class HumanoidRecorder:
         self.target_geom = (
             int(self.model.geom("target_disc").id) if "target_disc" in self.props else None
         )
+        self.cabinets = (
+            [
+                (int(self.model.body(f"cabinet_{s}").id), sign)
+                for s, sign in (("l", 1.0), ("r", -1.0))
+            ]
+            if "drawer" in self.props
+            else []
+        )
+        self.cabinet_poses: list[tuple[float, float, float]] = []  # drawn by ``apply_props``
         self.patch_geoms = [
             int(self.model.geom(f"table_patch{i}").id)
             for i in range(3)
@@ -495,9 +506,15 @@ class HumanoidRecorder:
             getattr(actor, "reflexes", None),
             plan_stats() if plan_stats else None,
         )
+        return self.with_task_meta(self.with_scene_meta(episode), actor)
+
+    def with_scene_meta(self, episode: Episode) -> Episode:
+        """Add ``blind`` (no camera rendered) and the drawn ``cabinet_poses`` to the meta."""
         if not self.render_eyes:
             episode.meta["blind"] = True
-        return self.with_task_meta(episode, actor)
+        if self.cabinet_poses:  # (x, y, yaw) of the left and the right cabinet
+            episode.meta["cabinet_poses"] = [list(pose) for pose in self.cabinet_poses]
+        return episode
 
     @staticmethod
     def with_task_meta(episode: Episode, actor: Policy) -> Episode:
@@ -634,7 +651,8 @@ class HumanoidRecorder:
                     if np.linalg.norm(xy - self.target[:2]) < 0.17:
                         continue
                 clear = all(np.linalg.norm(xy - other) > spacing for other in placed)
-                if clear and not in_exclusion(xy, self.props):
+                on_cabinet = any(in_cabinet(xy, pose) for pose in self.cabinet_poses)
+                if clear and not in_exclusion(xy, self.props) and not on_cabinet:
                     break
             placed.append(xy)
             adr = int(self.model.jnt_qposadr[self.model.body_jntadr[body]])
@@ -689,6 +707,12 @@ class HumanoidRecorder:
             model.body_inertia[self.objects] = self.nominal["inertia"] * scale[:, None]
             model.geom_friction[self.object_geoms, 0] = self.hidden[:, 1]
             model.geom_solref[self.object_geoms, 0] = self.hidden[:, 2]
+        self.cabinet_poses = []
+        for body, sign in self.cabinets:  # last, so that the draws above are as before
+            pose = draw_cabinet(self.props_rng, sign)
+            model.body_pos[body, :2] = pose[:2]
+            model.body_quat[body] = (np.cos(pose[2] / 2), 0.0, 0.0, np.sin(pose[2] / 2))
+            self.cabinet_poses.append(pose)
         if self.hidden_properties or self.mass_dirty:  # masses changed: refresh the constants
             mujoco.mj_setConst(model, self.data)
         self.mass_dirty = self.hidden_properties and n > 0

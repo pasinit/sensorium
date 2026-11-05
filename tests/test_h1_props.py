@@ -1,6 +1,7 @@
 """Experiment props, hidden properties and the effort channels (needs the assets)."""
 
 from collections.abc import Iterator
+from typing import cast
 
 import numpy as np
 import pytest
@@ -11,6 +12,10 @@ import mujoco  # noqa: E402
 
 from sensorium.bodies.h1_babble import BabblePolicy  # noqa: E402
 from sensorium.bodies.h1_props import (  # noqa: E402
+    DRAWER_FRONT_X,
+    DRAWER_SIZE,
+    DRAWER_Y,
+    DRAWER_YAW_DEG,
     EXCLUSION,
     FRICTION,
     HAND_SIZED_OBJECTS,
@@ -18,6 +23,7 @@ from sensorium.bodies.h1_props import (  # noqa: E402
     MASS_KG,
     SOLREF_S,
     draw_hidden,
+    in_cabinet,
     in_exclusion,
     prop_xml,
 )
@@ -50,10 +56,16 @@ def test_unknown_prop_is_rejected_and_zones_cover_the_big_props() -> None:
         prop_xml(("trampoline",), 0.82)
     with pytest.raises(ValueError, match="overlap"):
         prop_xml(("drawer", "hinged_flap"), 0.82)
-    assert in_exclusion(np.array([0.50, 0.22]), ("drawer",))
-    assert in_exclusion(np.array([0.50, -0.22]), ("drawer",))  # mirrored
+    assert in_exclusion(np.array([0.50, 0.22]), ("hinged_flap",))
+    assert in_exclusion(np.array([0.50, -0.22]), ("hinged_flap",))  # mirrored
     assert not in_exclusion(np.array([0.60, 0.22]), ())
-    assert set(EXCLUSION) == {"drawer", "hinged_flap", "button"}
+    assert set(EXCLUSION) == {"hinged_flap", "button"}  # the drawers' follow their poses
+    pose = (0.50, 0.27, np.radians(15.0))
+    assert in_cabinet(np.array([0.50, 0.27]), pose)
+    assert in_cabinet(
+        np.array([0.50 + 0.08 * np.cos(pose[2]), 0.27 + 0.08 * np.sin(pose[2])]), pose
+    )
+    assert not in_cabinet(np.array([0.50, 0.13]), pose)
 
 
 def meta_list(episode: Episode, key: str) -> list[str]:
@@ -213,3 +225,39 @@ def test_hand_sized_objects_spawn_settle_and_are_within_the_hands_reach() -> Non
             mujoco.mj_forward(model, data)
             found = any(policy.grasp_candidate(data, "right", index) for _ in range(10))
             assert found, name
+
+
+@needs_assets
+def test_the_cabinets_are_posed_per_episode_and_objects_keep_off_them() -> None:
+    """Split v3.3: each cabinet's front, side offset and yaw are drawn per episode, the drawer
+    slides along its own (yawed) axis, and no object starts on a cabinet."""
+    settings = {**SETTINGS, "props": ["drawer"], "program": "drawer_open"}
+    with HumanoidRecorder(settings) as recorder:
+        model, data = recorder.model, recorder.data
+        knobs = []
+        for seed in range(6):
+            episode = recorder.record(seed, "experiment", 1)
+            poses = cast(list[list[float]], episode.meta["cabinet_poses"])
+            assert len(poses) == 2
+            for (x, y, yaw), sign in zip(poses, (1.0, -1.0), strict=True):
+                front = x - DRAWER_SIZE[0] / 2
+                assert DRAWER_FRONT_X[0] <= front <= DRAWER_FRONT_X[1]
+                assert DRAWER_Y[0] <= sign * y <= DRAWER_Y[1]
+                assert abs(np.degrees(yaw)) <= DRAWER_YAW_DEG
+            knobs.append(data.geom_xpos[model.geom("table_drawer_l_knob").id][:2].copy())
+            for xy in episode.privileged["object_pose"][0, :, :2]:
+                assert not any(in_cabinet(xy, (p[0], p[1], p[2]), margin=0.0) for p in poses), (
+                    seed,
+                    xy,
+                )
+        assert np.ptp(np.array(knobs), axis=0).min() > 0.01  # the knob moves between episodes
+        joint = model.joint("prop_drawer_l")
+        body = model.body("prop_drawer_l").id
+        start = data.xpos[body].copy()
+        data.qpos[joint.qposadr[0]] = 0.05
+        mujoco.mj_forward(model, data)
+        moved = data.xpos[body] - start
+        yaw = recorder.cabinet_poses[0][2]
+        np.testing.assert_allclose(
+            moved[:2], -0.05 * np.array([np.cos(yaw), np.sin(yaw)]), atol=1e-3
+        )

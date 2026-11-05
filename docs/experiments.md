@@ -115,6 +115,13 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
     of a pincer hold its knob.
   - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
     stack block picked then placed.
+* **T2's cabinets are posed per episode (split v3.3).**
+  - At v3.2 the cabinets stood still: the replay floor (an unrelated demonstration played open
+    loop) opened the drawer in 19 of 50 start states, 19 of the 21 whose demonstration was a
+    success (Wilson 95% [71, 97]). No encoder could beat that floor by the pre-registered margin.
+  - Each cabinet's front x (0.38-0.54), |y| (0.26-0.33) and yaw (+-15 deg) are drawn per
+    episode, with its inner edge 19 cm or more from the midline (the resting pincers are at
+    |y| ~0.12). The demonstrator pulls along the drawer's slide; objects keep off the footprints.
 * **T3b carries T1's block (split v3.3; its v3.2 check was 3/30, Wilson 95% [3, 26]).**
   - At v3.2 the carried object was always the 7 cm wood box (the first object is the far one),
     which the disc's 17 cm rule put at the reach edge (|y| 0.25-0.31): no plan in 17 of 30
