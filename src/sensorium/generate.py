@@ -22,7 +22,13 @@ default ``EPISODE_TIMEOUT_S``): an episode still running then is abandoned with 
 log, the recorder is rebuilt and the next episode starts (a variety run lost a whole block to one
 episode that never finished). A crash in native code also dumps the stack (``faulthandler``).
 As episodes finish, their manifest entries are appended to
-``<out_dir>/manifest.parts/<body>[-<variant>].jsonl``, so a run stopped early keeps them.
+``<out_dir>/manifest.parts/<body>[-<variant>].jsonl``, so a run stopped early keeps them. Each
+episode is written to a temporary name and then renamed, so a file under its final name is whole.
+
+With ``skip_existing = true`` (top level or per body or variant), an episode whose file already
+exists and loads is not recorded again: its seed and name are deterministic, so the file is the one
+this config would write. Its manifest entry is reused from ``manifest.parts``, or rebuilt from the
+file. A run stopped part-way (a preempted machine) then resumes where it stopped.
 
 ``<out_dir>/manifest.json`` records the config, the code version (git commit,
 dirty flag), package versions, platform, and per episode its seed, policy,
@@ -129,12 +135,14 @@ def record_body(
     faulthandler.enable(all_threads=True)  # a crash in native code leaves its stack in the log
     settings = dict(spec.get("settings", {}))  # type: ignore[call-overload]
     timeout = int(spec.get("episode_timeout_s", EPISODE_TIMEOUT_S))  # type: ignore[call-overload]
+    skip_existing = bool(spec.get("skip_existing", False))
     stem = "-".join([body, *([variant] if variant else []), "%s"])
     parts = (
         out_dir / "manifest.parts" / f"{'-'.join([body, *([variant] if variant else [])])}.jsonl"
     )
     parts.parent.mkdir(parents=True, exist_ok=True)
     entries: list[dict[str, object]] = []
+    done = previous_entries(parts) if skip_existing else {}
     recorder = make_recorder(body, settings)
     previous = signal.signal(signal.SIGALRM, _on_alarm)
     try:
@@ -142,6 +150,13 @@ def record_body(
             for index in range(int(spec["episodes_per_policy"])):  # type: ignore[call-overload]
                 seed = episode_seed(master_seed, body, policy, index, variant)
                 name = f"{body}/{stem % policy}-{index:03d}.npz"
+                if skip_existing:
+                    key = (body, policy, variant, index, seed)
+                    kept = existing_entry(out_dir / name, name, done, parts, key)
+                    if kept is not None:
+                        entries.append(kept)
+                        log.info("[%s] %s: exists, skipped", body, name)
+                        continue
                 started = time.time()
                 # a hang in native code never returns to Python: dump its stack a bit later
                 faulthandler.dump_traceback_later(timeout + 60, exit=False)
@@ -159,23 +174,8 @@ def record_body(
                 finally:
                     signal.alarm(0)
                     faulthandler.cancel_dump_traceback_later()
-                episode.save(out_dir / name)
-                entry = {
-                    "file": name,
-                    "body": body,
-                    "policy": policy,
-                    **({"variant": variant} if variant else {}),
-                    "index": index,
-                    # Registry keys (docs/pools.md): what the episode is about and which
-                    # specific content it has; the effector when the body has variants.
-                    "task": episode.meta.get("task"),
-                    "instance": episode.meta.get("instance", "default"),
-                    **{k: episode.meta[k] for k in ("effector",) if k in episode.meta},
-                    "seed": seed,
-                    "steps": episode.length,
-                    "end_reason": episode.meta.get("end_reason"),
-                    "content_hash": content_hash(episode),
-                }
+                save_whole(episode, out_dir / name)
+                entry = manifest_entry(episode, name, body, policy, variant, index, seed)
                 entries.append(entry)
                 with parts.open("a") as handle:
                     handle.write(json.dumps(entry, default=str) + "\n")
@@ -188,6 +188,78 @@ def record_body(
         signal.signal(signal.SIGALRM, previous)
         recorder.close()
     return entries
+
+
+def manifest_entry(
+    episode: Episode, name: str, body: str, policy: str, variant: str, index: int, seed: int
+) -> dict[str, object]:
+    """The manifest entry of one saved episode."""
+    return {
+        "file": name,
+        "body": body,
+        "policy": policy,
+        **({"variant": variant} if variant else {}),
+        "index": index,
+        # Registry keys (docs/pools.md): what the episode is about and which
+        # specific content it has; the effector when the body has variants.
+        "task": episode.meta.get("task"),
+        "instance": episode.meta.get("instance", "default"),
+        **{k: episode.meta[k] for k in ("effector",) if k in episode.meta},
+        "seed": seed,
+        "steps": episode.length,
+        "end_reason": episode.meta.get("end_reason"),
+        "content_hash": content_hash(episode),
+    }
+
+
+def save_whole(episode: Episode, path: Path) -> None:
+    """Save under a temporary name, then rename: a file under ``path`` is always complete."""
+    partial = path.with_name(path.stem + ".partial.npz")
+    episode.save(partial)
+    partial.replace(path)
+
+
+def previous_entries(parts: Path) -> dict[str, dict[str, object]]:
+    """Manifest entries already in a ``manifest.parts`` file, by episode file name."""
+    if not parts.exists():
+        return {}
+    entries = {}
+    for line in parts.read_text().splitlines():
+        if line.strip():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:  # a line cut short by a stop
+                continue
+            entries[str(entry["file"])] = entry
+    return entries
+
+
+def existing_entry(
+    path: Path,
+    name: str,
+    done: dict[str, dict[str, object]],
+    parts: Path,
+    key: tuple[str, str, str, int, int],
+) -> dict[str, object] | None:
+    """The manifest entry of an episode already on disk, or None if it must be recorded.
+
+    A file that does not load is treated as missing. A file without an entry in
+    ``manifest.parts`` (stopped between the save and the append) gets one rebuilt from it;
+    ``key`` is its ``(body, policy, variant, index, seed)``.
+    """
+    if not path.exists():
+        return None
+    if name in done:
+        return done[name]
+    try:
+        episode = Episode.load(path)
+    except Exception:  # noqa: BLE001  (a damaged file: record it again)
+        log.warning("%s does not load: recorded again", name)
+        return None
+    entry = manifest_entry(episode, name, *key)
+    with parts.open("a") as handle:
+        handle.write(json.dumps(entry, default=str) + "\n")
+    return entry
 
 
 def generate(config_path: Path) -> Path:
@@ -203,7 +275,10 @@ def generate(config_path: Path) -> Path:
     bodies = [body for body in BODIES if body in config]
     jobs: list[tuple[str, dict[str, object], int, Path, str]] = []
     for body in bodies:
-        limit = {"episode_timeout_s": config.get("episode_timeout_s", EPISODE_TIMEOUT_S)}
+        limit = {
+            "episode_timeout_s": config.get("episode_timeout_s", EPISODE_TIMEOUT_S),
+            "skip_existing": config.get("skip_existing", False),
+        }
         if "policies" in config[body]:
             jobs.append((body, {**limit, **config[body]}, master_seed, out_dir, ""))
         else:  # a table of named variants
