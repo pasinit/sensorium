@@ -4255,11 +4255,18 @@ the four runs (`configs/model/e1-pilot-*.toml`).
 * Features: `fewshot.layer_features`, the state at every window end.
 * Head: the harness's BC head and configuration (`BCConfig`), one for every encoder and k.
 * k ∈ {1, 5, 10, 50} demonstrations, 3 head seeds.
-* **Tasks:** T1 and T3b, both pincer (see "Held-out tasks" below).
-* **Primary score:** closed-loop success in the simulator, judged by the task's scripted program;
-  50 start states per task, with a Wilson 95% interval. Episodes are capped per task
-  (`fewshot.py closed-loop --max-steps`; a capped episode is a failure).
-* **Secondary score:** offline action RMSE on the held-out demonstrations.
+* **Tasks:** T1 and T3b, both pincer, and T2 if its redesign passes the validity check (see
+  "Held-out tasks" below).
+* **Design (supervisor, 2026-11-05; draft, not final):** closed-loop success at **k = 10 only**;
+  k = 1, 5 and 50 are scored offline only.
+  * **Primary score:** closed-loop success at k = 10 in the simulator, judged by the task's
+    scripted program; 50 start states per task, the same for every encoder, 3 head seeds, with a
+    Wilson 95% interval. Episodes are capped per task (`fewshot.py closed-loop --max-steps`; a
+    capped episode is a failure).
+  * **Secondary score, at every k:** offline action RMSE on the demonstrations the head did not
+    see. It gives the k-curve (1, 5, 10, 50) without the simulator; it is not a success rate.
+  * **Closed-loop size:** 5 encoders (4 arms and DINOv2) x 3 head seeds x 50 start states = 750
+    episodes per task: 1,500 for T1 + T3b, 2,250 with T2. Most episodes fail and run to the cap.
 
 **Held-out tasks** (split v3.3, sha256 `4bdf4beda04cfb14ac581d815dabc600394a047d0eae5b1f8c2bb14f5464ca53`).
 Each task is admitted by a **task validity check, run before any encoder is scored**: its
@@ -4283,8 +4290,10 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   * a first check of the cell gave 21/30 = 70% [52, 83].
 * **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
   has 64 and T3b 93.
-* **T2 open the drawer failed the validity check twice and is not in the pilot.** In both, open-loop
-  replay does as well as the demonstrator, so the task cannot rank encoders.
+* **T2 open the drawer failed the validity check twice.** In both, open-loop replay does as well as
+  the demonstrator, so the task cannot rank encoders. A redesign is being built (Track A); it enters
+  the pilot only if it passes the same validity check before any encoder is scored, with its
+  demonstrator, floors, step cap and parts added to the table then.
   * v3.1, pulled by the knob: demonstrator 62/134 = 46% [38, 55], replay floor 19/50 = 38%
     [26, 52].
   * v3.3, re-randomised start states: demonstrator 7/30 = 23% [12, 41] (no plan in 20 of 30),
@@ -4349,7 +4358,10 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
   block-like object and the workspace in front of the seated robot, and both are pick-and-place.
   A frozen layer that does well on both shows it supports new goals for a kind of manipulation its
   pretraining saw (the scripted programs include pincer lift_drop and push), not transfer to a new
-  kind.
+  kind. A redesigned T2 (an articulated drawer) would be the one task of another kind.
+* **The k-curve is offline.** Closed loop is measured at k = 10 only, so "demonstrations saved"
+  (experiment-01) and the shape of success against k are read from action RMSE, which need not
+  track closed-loop success.
 * **One pretraining seed:** no pilot contrast is claimed as an effect.
 
 **Compute** (estimated, to be measured by the GPU smoke test first): about 1 to 3 H100-hours per
