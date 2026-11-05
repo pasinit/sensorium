@@ -4176,7 +4176,8 @@ agent's motion. Evaluation moves to E1's pretrain → few-shot protocol (`docs/e
   driver.
 * **The one-pass fix1 bug:** `recon_input = "masked"` feeds the JEPA masked frames for both
   context and target, and its predictor outputs the mean (pred / std² = 1.00 on 9 runs).
-  `"separate"` plans like A0. The reconstruction default is unchanged for now (with the supervisor).
+  `"separate"` plans like A0. Decision (supervisor, 2026-11-04): reconstruction is off by default,
+  and `"separate"` is the default when it is turned on.
 * **The BatchNorm-statistics rule:** running statistics must come from the inputs the model is
   used on. Masked-frame statistics collapse clean states; re-calibration is `recalibrate`.
 * **The goal-content rule:** (iii)'s lead came from its goal holding the agent's position. With an
