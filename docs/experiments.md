@@ -115,6 +115,12 @@ inside that range. `configs/experiments.toml` is the short check, `experiments_b
     of a pincer hold its knob.
   - Held-out tasks record their sub-goals in `meta["milestones"]`: drawer pinched then opened,
     stack block picked then placed.
+* **T3 is replaced in the pilot by T3b, place on target (pincers; split v3.2).**
+  - The re-check after the closed-loop push change still fell under the agreed 30%: hands 6/30
+    (reached 30/30, a median of 20 pushes), pincers 0/30 (the push mostly never started).
+  - T3b's demonstrator (`plan_place_on_target`) pinches an object that began 17 cm or more from the
+    disc, carries it with its bottom 6 cm over the table, sets it on the disc and lets go.
+  - Success: within 3 cm of the disc's centre, still, touched by no robot part, for 1 s.
 * **Push to the target (T3) failed (check of 2026-11-05: 1/4 hands, 0/11 pincers; changed).**
   - Its single straight push rarely ended within 3 cm.
   - The disc sat at the pincers' reach edge, so pushes often had no plan.

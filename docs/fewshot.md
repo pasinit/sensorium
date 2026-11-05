@@ -53,18 +53,20 @@ was caught: it succeeded by a sweep. Both use `bodies.h1_closed_loop.ReplayPolic
 each closed-loop outcome, for split scoring:
 - T1 `picked` -> `placed`;
 - T2 `pinched` -> `opened`;
-- T3 `reached` -> `at_target`.
+- T3 `reached` -> `at_target`;
+- T3b `grasped` -> `lifted` -> `at_target` -> `released` (the success).
 
 T3 also records its pushes per episode in `meta["task_counts"]`: a multi-push demonstration is
 harder to imitate from one example.
 
-## Held-out tasks of the pilot (split v3.1)
+## Held-out tasks of the pilot (split v3.2)
 
 | task | effector | demonstrator success | status |
 |---|---|---|---|
 | T1 stack two blocks | pincers | 15/29 = 52% [34, 69] (check of 2026-11-05) | demonstrations being generated |
 | T2 open the drawer | pincers | the 30/30 of the check were shoves; fixed: the arm keeps clear of the cabinets, success needs the knob pinched | re-check pending |
-| T3 push to the target | hands, pincers | 1/4 and 0/11 in the check; fixed: closed-loop pushes of at most 6 cm, re-aimed from where the object lies, the disc inside both effectors' reach (split v3.1) | re-check pending; under 30% -> "place on the disc" for the pincers |
+| T3 push to the target | hands, pincers | post-fix re-check 6/30 (hands) and 0/30 (pincers): under the agreed 30% | kept held out under its own name, not used in the pilot |
+| T3b place on the target | pincers | new (split v3.2): pick an object that began 17 cm or more away, set it down on the disc, let go | check pending |
 
 k ∈ {1, 5, 10, 50} needs at least 51 successful demonstrations per task and effector (one to
 score). The closed-loop runs need their own start states: 50 per task gives Wilson intervals of

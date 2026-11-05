@@ -44,18 +44,30 @@ PROGRAMS = (
     "stack",
     "drawer_open",
     "push_to_target",
+    "place_on_target",
 )
-PINCER_PROGRAMS = ("stack", "drawer_open")  # hands lift (the claw pinch) but do not place or pull
+PINCER_PROGRAMS = (
+    "stack",
+    "drawer_open",
+    "place_on_target",
+)  # hands lift (the claw pinch) but do not place or pull
 # The demonstrators of the held-out few-shot tasks (T1 stack, T2 drawer, T3 push to the target):
 # their episodes carry the held-out task as their task name, not ``exp_<program>``.
-HELD_OUT_PROGRAMS = ("stack", "drawer_open", "push_to_target")
+HELD_OUT_PROGRAMS = ("stack", "drawer_open", "push_to_target", "place_on_target")
+# Programs whose first object starts far from the target disc (``HumanoidRecorder.place_objects``)
+TARGET_PROGRAMS = ("push_to_target", "place_on_target")
 SUCCESS_STEPS = 20  # a task counts as done when its test has held this long (1 s)
 # Held-out tasks' sub-goals, in order (``ExperimentPolicy.milestones``, ``meta["milestones"]``):
 MILESTONES = {
     "stack": ("picked", "placed"),  # a block lifted 2 cm in the pads, then the stack test
     "drawer_open": ("pinched", "opened"),  # both pads of one pincer on a knob, then open by pulling
     "push_to_target": ("reached", "at_target"),  # an effector on an object that began far, then T3
+    # T3b (2026-11-05, the fallback after push to target failed its check): a pincer picks an
+    # object that began far from the disc and places it there: pinched, risen, over the disc,
+    # let go at rest
+    "place_on_target": ("grasped", "lifted", "at_target", "released"),
 }
+PLACE_CARRY_M = 0.06  # place on target: the carried object's bottom rides this far above the table
 REACHED_M = 0.01  # m an object must have moved for a touch of it to count as reached
 PUSH_STEP_M = 0.06  # m: push to the target: one push moves the object at most this far, then re-aim
 PICKED_M = 0.02  # m a stack block must rise in the pads to count as picked
@@ -329,6 +341,7 @@ class ExperimentPolicy(BabblePolicy):
             "stack": self.stack_test,
             "drawer_open": self.drawer_test,
             "push_to_target": self.push_test,
+            "place_on_target": self.place_test,
         }.get(self.program)
         return test(data) if test is not None else False
 
@@ -359,6 +372,92 @@ class ExperimentPolicy(BabblePolicy):
                 self.milestones["opened"] = True
                 return True
         return False
+
+    def place_test(self, data: mujoco.MjData) -> bool:
+        """Place on target: an object that began far from the disc rests within
+        ``TARGET_NEAR_M`` of its centre, still and touched by no robot part. Sub-goals: such an
+        object pinched (``grasped``), risen ``PICKED_M`` in the pads (``lifted``), over the disc
+        (``at_target``), and let go there (``released``, the success)."""
+        target = self.target_xy(data)
+        if self.far_at_start is None:
+            self.far_at_start = np.array(
+                [np.linalg.norm(data.xpos[b][:2] - target) >= TARGET_FAR_M for b in self.objects]
+            )
+        done = False
+        for i, far in enumerate(self.far_at_start):
+            if not far:
+                continue
+            body = self.objects[i]
+            z = float(data.xpos[body][2])
+            start = self.start_z.setdefault(i, z)
+            geoms = set(self.body_geoms(i))
+            if self.pinched(data, geoms):
+                self.milestones["grasped"] = True
+                if z > start + PICKED_M:
+                    self.milestones["lifted"] = True
+            if float(np.linalg.norm(data.xpos[body][:2] - target)) > TARGET_NEAR_M:
+                continue
+            self.milestones["at_target"] = True
+            dof = self.model.jnt_dofadr[self.model.body_jntadr[body]]
+            still = float(np.linalg.norm(data.qvel[dof : dof + 3])) < RESTING_MPS
+            if still and not self.robot_touches(data, geoms):
+                self.milestones["released"] = True
+                done = True
+        return done
+
+    def robot_touches(self, data: mujoco.MjData, geoms: set[int]) -> bool:
+        """True if any robot geom touches one of ``geoms``."""
+        for i in range(data.ncon):
+            a, b = int(data.contact[i].geom1), int(data.contact[i].geom2)
+            if (a in geoms and self.classes.robot[b]) or (b in geoms and self.classes.robot[a]):
+                return True
+        return False
+
+    def plan_place_on_target(self, side: str, data: mujoco.MjData) -> list[Waypoint] | None:
+        """Pick an object that began far from the target disc and place it on the disc.
+
+        The steady objects (no spheres, no tall ones) on this arm's side are tried nearest the
+        disc first; the first with a plan is pinched at its centre, raised so that its bottom rides
+        ``PLACE_CARRY_M`` over the table, carried over the disc, set down and let go, and the arm
+        waits ``STACK_DWELL`` steps clear of it so the success test can hold.
+        """
+        if "target_disc" not in self.props:
+            return None
+        target = self.target_xy(data)
+        if self.far_at_start is None:
+            self.succeeded(data)  # sets the objects that began far from the target
+        if self.task_mode and self.milestones.get("released"):
+            return None  # the job is done
+        sign = ROLL_YAW_SIGN[side]
+        if sign * target[1] < self.midline:
+            return None  # the disc is on the other arm's side
+        far = [
+            i
+            for i in self.free_objects(data, side)
+            if self.far_at_start is not None and self.far_at_start[i]
+        ]
+        steady = [i for i in far if "tall" not in self.names[i] and "sphere" not in self.names[i]]
+        order = sorted(
+            steady, key=lambda i: float(np.linalg.norm(data.xpos[self.objects[i]][:2] - target))
+        )
+        for index in order:
+            centre, half_height, _ = self.object_geometry(data, index)
+            if float(np.linalg.norm(centre[:2] - target)) <= TARGET_NEAR_M:
+                continue  # already there
+            carry = self.table_top + half_height + PLACE_CARRY_M
+            over = np.array([target[0], target[1], carry])
+            place = np.array([target[0], target[1], self.table_top + half_height + 0.004])
+            moves = [
+                (np.array([centre[0], centre[1], carry]), self.LIFT),
+                (over, self.LIFT),
+                (place, self.SLOW),
+            ]
+            queue = self.grasp_moves(
+                side, data, centre, moves, grazed=self.body_geoms(index), hold=4, dwell=STACK_DWELL
+            )
+            if queue is not None:
+                return queue
+        return None
 
     def push_test(self, data: mujoco.MjData) -> bool:
         """Push to target: an object that began far from the disc lies within ``TARGET_NEAR_M``

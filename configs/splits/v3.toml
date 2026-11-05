@@ -4,6 +4,10 @@
 # (sensorium.pool.validate_pool).
 #
 # Changelog:
+#   v3.2 (2026-11-05): adds the held-out task T3b, place on target (pincers): its demonstrator picks an
+#      object that began 17 cm or more from the target disc and sets it down on it (the v3.1 layout).
+#      It replaces T3 push to target in the E1 pilot, whose demonstrators stayed under the agreed 30%
+#      success (hands 6/30, pincers 0/30); the push sources stay held out under their own names.
 #   v3.1 (2026-11-05): same sources and sections; T3's layout fixed before any of its demonstrations:
 #      the target disc is drawn at x 0.47-0.52, |y| 0.11-0.14 (was 0.50-0.56, 0.12-0.17) and the object
 #      that starts 17 cm or more from it at x 0.38-0.52 (was 0.38-0.56), |y| 0.12-0.30 (unchanged)
@@ -24,7 +28,7 @@
 # Every source in configs/sources.toml must be listed in exactly one section;
 # sensorium.pool.load_splits checks this. Changing this file changes its hash,
 # which every pool records.
-version = "v3.1"
+version = "v3.2"
 
 [pretrain]
 sources = [
@@ -57,6 +61,7 @@ sources = [
 "humanoid/pincer/drawer_open" = { reason = "T2: open the drawer, pincer side", tag = "contact_rich" }
 "humanoid/hand/push_to_target" = { reason = "T3: push a block onto a marked target", tag = "contact_rich" }
 "humanoid/pincer/push_to_target" = { reason = "T3: push a block onto a marked target", tag = "contact_rich" }
+"humanoid/pincer/place_on_target" = { reason = "T3b: pick an object and place it on a marked target (pincers)", tag = "contact_rich" }
 "humanoid/hand/turn_reach" = { reason = "T4: reach the far-side object by turning the torso", tag = "contact_rich" }
 "humanoid/pincer/turn_reach" = { reason = "T4: reach the far-side object by turning the torso", tag = "contact_rich" }
 "bigym/pincer/stack_blocks" = { reason = "T1: stack two blocks, pincer side", tag = "contact_rich" }

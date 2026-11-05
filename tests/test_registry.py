@@ -20,6 +20,7 @@ EXPERIMENT_SOURCES = {
     "humanoid/pincer/exp_lift_drop",
     "humanoid/pincer/stack",
     "humanoid/pincer/drawer_open",
+    "humanoid/pincer/place_on_target",
     "bigym/pincer/stack_blocks",
     "bigym/pincer/drawer_top_open",
 }
@@ -28,6 +29,7 @@ HELD_OUT = {
     "humanoid/pincer/drawer_open",
     "humanoid/hand/push_to_target",
     "humanoid/pincer/push_to_target",
+    "humanoid/pincer/place_on_target",
     "humanoid/hand/turn_reach",
     "humanoid/pincer/turn_reach",
     "bigym/pincer/stack_blocks",
@@ -76,7 +78,7 @@ def test_shipped_registry_and_split_are_valid() -> None:
     assert set(splits.sections["pretrain"]) | set(splits.heldout) == {
         s.name for s in registry.sources
     }
-    assert splits.version == "v3.1"
+    assert splits.version == "v3.2"
     assert registry.resolve("humanoid", "stand_table", "hand").name == "humanoid/hand/stand_table"
 
 
@@ -143,7 +145,13 @@ def test_held_out_tasks_are_the_decided_ones_and_do_not_leak() -> None:
     pretrain = [registry.by_name(n) for n in splits.sections["pretrain"]]
     held_programs = {p for s in held for p in s.programs}
     held_props = {p for s in held for p in s.props}
-    assert held_programs == {"stack", "drawer_open", "push_to_target", "turn_reach"}
+    assert held_programs == {
+        "stack",
+        "drawer_open",
+        "push_to_target",
+        "place_on_target",
+        "turn_reach",
+    }
     assert not held_programs & {p for s in pretrain for p in s.programs}
     assert not held_props & {p for s in pretrain for p in s.props}
     # the neighbouring skills stay in pretraining

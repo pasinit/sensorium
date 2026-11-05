@@ -24,6 +24,7 @@ PROPS = {
     "stack": ["stack_blocks", "target_disc"],
     "drawer_open": ["drawer"],
     "push_to_target": ["target_disc"],
+    "place_on_target": ["target_disc"],
 }
 
 
@@ -228,3 +229,32 @@ def test_push_to_target_layout_is_split_v3_1_and_pushes_are_short_and_re_aimed()
         data.qpos[adr] += 0.02  # the far object pushed 2 cm
         mujoco.mj_forward(recorder.model, data)
         assert not policy.succeeded(data) and policy.milestones["reached"]
+
+
+@needs_assets
+def test_place_on_target_counts_an_object_set_down_on_the_disc_and_let_go() -> None:
+    with HumanoidRecorder({**settings("pincer", "place_on_target"), "task": True}) as recorder:
+        policy = recorder.make_policy("experiment", np.random.default_rng(0))
+        assert isinstance(policy, ExperimentPolicy)
+        recorder.reset(policy, np.random.default_rng(0))
+        model, data = recorder.model, recorder.data
+        assert not policy.succeeded(data)  # the far object starts 17 cm or more away
+        assert policy.milestones == dict.fromkeys(
+            ("grasped", "lifted", "at_target", "released"), False
+        )
+        body = recorder.objects[0]
+        adr = model.jnt_qposadr[model.body_jntadr[body]]
+        target = policy.target_xy(data)
+        data.qpos[adr : adr + 2] = target  # set down on the disc
+        data.qvel[:] = 0.0
+        mujoco.mj_forward(model, data)
+        policy.robot_touches = lambda data, geoms: True  # type: ignore[method-assign]  # still held
+        assert not policy.succeeded(data) and policy.milestones["at_target"]
+        policy.robot_touches = lambda data, geoms: False  # type: ignore[method-assign]  # let go
+        assert policy.succeeded(data) and policy.milestones["released"]
+        side = "left" if target[1] > 0 else "right"
+        data.qpos[adr : adr + 2] = target + np.array([0.0, np.sign(target[1]) * 0.18])
+        mujoco.mj_forward(model, data)
+        policy.milestones["released"] = False
+        queue = policy.plan_place_on_target(side, data)
+        assert queue is None or len(queue) > 3  # a plan, if this layout has one, is a full move
