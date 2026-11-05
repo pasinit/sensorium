@@ -4215,17 +4215,25 @@ from k demonstrations ([fewshot.md](fewshot.md)). It applies the rules B-pusht-0
 **Model** (every arm): `sigreg`, the v0 widths (about 46M parameters), SIGReg per step,
 **no reconstruction** (`recon_weight` 0, the default since B-pusht-0). Seed 0.
 
-**Data** (Track A): two pools of about 600k env steps each, one per kind of experience.
+**Data** (Track A): two pools of the same size, one per kind of experience.
 
-* Every pool has the same hand : pincer : body ratio.
-* About 5% of each pool's episodes are held out for early stopping (the held-out pretraining
-  split).
+* **Babbling:** `e1-pilot-babble.json` (content hash `f65b5cfdd3b4dfa1`, split v3.3):
+  * event-dense seated babbling with the director, code `077d317`;
+  * 1,044 episodes of 600 steps (626,400 steps), hand : pincer 1 : 1 (313,200 steps each);
+  * 55 further episodes (28 hand, 27 pincer) held out for the held-out pretraining loss.
+* **Expert stand-in:** to be built the same way and the same size (1,044 episodes of 600 steps), from
+  Track A's scripted programs (pending the decision on regenerating them at `077d317`).
 * Per-pool contact and "caused change" statistics (A1) are reported next to H2.
 
-**Budget:** 10 epochs per run (6M sequences of 64 env steps, about 47,000 steps at batch 128),
-equal for the four runs. Runs early-stop on the held-out pretraining loss, and the train / held-out
-gap is reported. If the gap opens before 10 epochs, the full sweep grows the pools (1.5 to 2M
-steps) rather than cutting steps (pool-size check, B-scale-0).
+**Budget:** 10 epochs per run. A 600-step episode has 537 starts of a 64-step sequence, so a pool has
+560,628 starts, and 10 epochs = ceil(10 x 560,628 / 128) = **43,800 steps** at batch 128, equal for
+the four runs (`configs/model/e1-pilot-*.toml`).
+
+* The held-out pretraining loss is measured every 2,000 steps (`train.heldout_every`). The
+  checkpoint with the lowest one (`ckpt-best.pt`) is the one evaluated, and the train / held-out
+  gap is reported.
+* If the gap opens before 10 epochs, the full sweep grows the pools (1.5 to 2M steps) rather than
+  cutting steps (pool-size check, B-scale-0).
 
 **Checks on every run, before any few-shot number is read:**
 
@@ -4247,31 +4255,59 @@ steps) rather than cutting steps (pool-size check, B-scale-0).
 * Features: `fewshot.layer_features`, the state at every window end.
 * Head: the harness's BC head and configuration (`BCConfig`), one for every encoder and k.
 * k ∈ {1, 5, 10, 50} demonstrations, 3 head seeds.
-* **Tasks** (split v3): T1 stack two blocks (pincers), T2 open the drawer (pincers), T3 push to the
-  target (hands and pincers, reported separately).
+* **Tasks:** T1 and T3b, both pincer (see "Held-out tasks" below).
 * **Primary score:** closed-loop success in the simulator, judged by the task's scripted program;
-  50 start states per task and effector, with a Wilson 95% interval.
+  50 start states per task, with a Wilson 95% interval. Episodes are capped per task
+  (`fewshot.py closed-loop --max-steps`; a capped episode is a failure).
 * **Secondary score:** offline action RMSE on the held-out demonstrations.
+
+**Held-out tasks** (split v3.3, sha256 `4bdf4beda04cfb14ac581d815dabc600394a047d0eae5b1f8c2bb14f5464ca53`).
+Each task is admitted by a **task validity check, run before any encoder is scored**: its
+demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
+
+* The floors are blind, on the same 50 closed-loop start states, at the task's closed-loop step cap:
+  hold still, and replay an unrelated demonstration open loop.
+* A task within 5 points of the bar gets 50 more floor states before it is admitted.
+
+| task | demonstrator | successful demos | floors: hold / replay | step cap | parts scored |
+|---|---|---|---|---|---|
+| T1 stack two blocks (pincers) | 64/130 = 49% [41, 58] | 64 | 0/50 [0, 7] / 0/50 [0, 7] | 600 | picked, placed |
+| T3b place the object on the target (pincers) | 93/128 = 73% [64, 80] | 93 | 0/50 [0, 7] / 0/50 [0, 7] | 436 | grasped, lifted, at_target, released |
+
+* **Step caps:** 1.5 x the 95th percentile of the demonstrators' success steps (`fewshot.py cap`).
+  * T1: p95 430, which gives 646, above the 600-step episode, so T1 runs uncapped at 600.
+  * T3b: p95 290, cap 436 (one of its 93 successes, at 437, lies past it).
+* **T3b checks:**
+  * replaying its own successful demonstrations open loop also succeeds 0/34;
+  * its 128 demonstration seeds share none with the 50 closed-loop start states;
+  * a first check of the cell gave 21/30 = 70% [52, 83].
+* **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
+  has 64 and T3b 93.
+* **T2 open the drawer failed the validity check twice and is not in the pilot.** In both, open-loop
+  replay does as well as the demonstrator, so the task cannot rank encoders.
+  * v3.1, pulled by the knob: demonstrator 62/134 = 46% [38, 55], replay floor 19/50 = 38%
+    [26, 52].
+  * v3.3, re-randomised start states: demonstrator 7/30 = 23% [12, 41] (no plan in 20 of 30),
+    replay of a successful demonstration 14/50 = 28% [17, 42], hold 0/50.
+* **T3 push to the target** failed the 30% demonstrator bar (hands 6/30, pincers 0/30). The first
+  T3b cell (v3.2) also failed (3/30 = 10% [3, 26]).
+* **Code:** T3b's cell and demonstrations at `b4d9303`; main at `06819a2` for T2 v3.3; current main
+  `681b106`.
 
 **Goal content, fixed per task before training** (B-pusht-0's goal-content rule):
 
-* T1 and T2 are not goal-conditioned: one head per task, on the current features only.
-* T3's target reaches the head only through the scene, as the marker in the head cameras, never as
+* T1 is not goal-conditioned: one head on the current features only.
+* T3b's target reaches the head only through the scene, as the disc in the head cameras, never as
   coordinates or other privileged state.
 * Every encoder, ours and the baseline, gets exactly the same inputs.
-* **Split scoring** where the harness can judge the parts:
-  * T2: handle grasped, then drawer opened;
-  * T3: effector at the object, then object at the target.
-  The parts are reported with the full success, so a lead can be attributed. (To be confirmed with
-  Track A: which sub-successes the task programs can judge.)
+* The parts in the table above are reported with the full success, so a lead can be attributed.
 
 **Baseline:** the frozen DINOv2 ViT-S/14 on the frame, with proprio (`fewshot.dino_features_fn`),
 through the same heads, k, seeds and start states.
 
-**Contrasts, at k = 10** (each per task and effector, never averaged across the two effectors):
+**Contrasts, at k = 10** (each per task, never averaged across tasks):
 
-* **H1, senses:** all - V, within each kind of experience. The pilot's headline is the contact-rich
-  tasks.
+* **H1, senses:** all - V, within each kind of experience.
 * **H2, experience:** babbling - expert stand-in, within each senses condition.
 * Every arm against DINOv2.
 
@@ -4289,8 +4325,8 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
 * **Go** if all of these hold:
   1. All four runs pass the checks above: `pred / std²` below 0.8, no collapse, and a train /
      held-out gap at most 10% of the held-out loss.
-  2. The tasks are neither saturated nor impossible: at k = 10, some encoder scores between 5% and
-     95% success on every task.
+  2. The tasks are neither saturated nor impossible: at k = 10, on both tasks, some encoder is above
+     both floors' upper Wilson bounds and below 95%.
   3. The frozen heads separate encoders: at least one pairwise contrast among the five encoders
      exceeds its interval on some task.
 * **No-go, with a diagnosis**, if any fails:
@@ -4298,11 +4334,23 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
   * check 2: a task problem, back to Track A's D0.6;
   * check 3: the frozen protocol cannot rank encoders, so LoRA heads come first in the full sweep.
 
-**Expectation, so it can be wrong:**
+**Expectation, so it can be wrong** (restated for T1 and T3b, before any data):
 
-* all ≥ V on T1 and T2 (contact-rich), smaller on T3;
+* all ≥ V on both tasks (both grasp an object);
 * babbling ≥ expert stand-in;
-* DINOv2 competitive with V on T3.
+* DINOv2 competitive with V.
+
+**Limitations:**
+
+* **No hand-side held-out task.** T3 (hands) failed its demonstrator bar. The hand cell carried the
+  touch-rich contacts, so the pilot's H1 (senses) contrast is measured on pincer tasks only; the
+  across-senses claim for hands waits for the full E1.
+* **The held-out set tests new goals, not new skills.** T1 and T3b share the effector (pincers), a
+  block-like object and the workspace in front of the seated robot, and both are pick-and-place.
+  A frozen layer that does well on both shows it supports new goals for a kind of manipulation its
+  pretraining saw (the scripted programs include pincer lift_drop and push), not transfer to a new
+  kind.
+* **One pretraining seed:** no pilot contrast is claimed as an effect.
 
 **Compute** (estimated, to be measured by the GPU smoke test first): about 1 to 3 H100-hours per
 pretraining run at v0's 69 GFLOPs per sequence, plus minutes per frozen head and the closed-loop
