@@ -405,6 +405,15 @@ class HumanoidRecorder:
             self.model.actuator_gainprm[a, 0] = gain[a, 0] * scale
             self.model.actuator_biasprm[a, 1:3] = bias[a, 1:3] * scale
 
+    def physics_substep(self) -> None:
+        """One physics substep, then the contact readers that run at the physics rate: the
+        skin's contact dynamics (unless touch is skipped) and the contact peaks."""
+        mujoco.mj_step(self.model, self.data)
+        contacts_now = read_contacts(self.model, self.data)
+        if "touch" not in self.skip_senses:
+            self.dynamics.substep(self.data, contacts_now)
+        self.peaks.update(contacts_now)
+
     def record(
         self,
         seed: int,
@@ -475,11 +484,7 @@ class HumanoidRecorder:
             for sub in range(self.substeps):
                 if ticks and (step * self.substeps + sub) % ticks == 0:
                     self.data.ctrl[:] = actor.tick(self.data)  # type: ignore[attr-defined]
-                mujoco.mj_step(self.model, self.data)
-                contacts_now = read_contacts(self.model, self.data)
-                if "touch" not in self.skip_senses:
-                    self.dynamics.substep(self.data, contacts_now)
-                self.peaks.update(contacts_now)
+                self.physics_substep()
         plan_stats = getattr(actor, "plan_stats", None)
         episode = self.episode(
             log,
