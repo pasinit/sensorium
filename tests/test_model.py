@@ -1962,7 +1962,8 @@ def test_recon_from_s_decodes_the_projected_state_and_trains_the_projector(
 ) -> None:
     batch = batch_of(episodes, space, check_senses(V_P))
     torch.manual_seed(0)
-    model = SensoryModel(replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s"), space)
+    cfg = replace(TINY, senses=V_P, recon_weight=0.5, recon_source="s", recon_input="masked")
+    model = SensoryModel(cfg, space)
     states: list[Tensor] = []
     decoded: list[Tensor] = []
     model.encoder.projector.register_forward_hook(lambda m, a, o: states.append(o.detach()))
