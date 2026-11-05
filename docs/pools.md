@@ -108,7 +108,13 @@ held out. The rest of an instance-held-out task stays in the pretraining pool.
 `build_pool` leaves held-out instances out, and `validate_pool` asserts that
 neither a held-out task nor a held-out instance is in the pool. The pool JSON
 records, per task, how many held-out instances were present and excluded.
-Each pool also records the split file's hash.
+Each pool also records the split file's version and hash (`split_version`, `split_sha256`).
+They are a record, not a gate: `validate_pool` checks the episodes against the `Splits` it is
+given (no held-out task or instance, every source in the section), and the trainer reads only the
+episodes and senses. A split bump that leaves a pool's sources and instances where they were
+(e.g. v3.4, which changed only T2's held-out entry) leaves the pool valid; rebuild its record from
+the same index and spec to stamp the new version (the episodes and the content hash come out
+identical, as for `e1-pilot-babble` at v3.4: `f65b5cfdd3b4dfa1`).
 
 v0 holds nothing out yet. **TODO (D0.5):** generate `[heldout.instances.rp1m]`
 from RP1M's own in-distribution / out-of-distribution song lists with a small
