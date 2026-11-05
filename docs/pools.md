@@ -119,6 +119,7 @@ seed = 0
 n_sources = 8                # int, or "all"
 split = "pretrain"           # section of the split file
 tolerance = 0.02             # optional, default 2%
+heldout_fraction = 0.05      # optional, default 0: the pool's held-out pretraining split
 
 [kinds]                      # relative weights
 expert = 1
@@ -145,6 +146,12 @@ none = 1                     # alien bodies (car, drone) only if "alien" > 0
    sources are ordered deterministically (round-robin over sources, hash-shuffled
    within) and taken whole, first-fit, until the cell is within `tolerance` of its
    target.
+   With `heldout_fraction`, a seeded share of each cell's candidate episodes is set aside
+   first as the pool's **held-out pretraining split** (early stopping and the held-out loss;
+   `data.heldout_paths` of a training config), and the cell is filled from the rest. The split
+   keeps the pool's effector and kind mix; it is never in the training episodes.
+   `sensorium-pool ... --heldout-dir DIR` symlinks its files into `DIR` (relative links), so a
+   config can name `DIR/*.npz`.
 4. **Checks (fail loudly, `PoolError`):** every cell and the total must be within
    `tolerance`; the message names the cell and how many steps were available. No
    padding, no truncation, no silent re-weighting.
