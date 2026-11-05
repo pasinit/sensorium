@@ -50,6 +50,12 @@ PINCER_PROGRAMS = ("stack", "drawer_open")  # hands lift (the claw pinch) but do
 # their episodes carry the held-out task as their task name, not ``exp_<program>``.
 HELD_OUT_PROGRAMS = ("stack", "drawer_open", "push_to_target")
 SUCCESS_STEPS = 20  # a task counts as done when its test has held this long (1 s)
+# Held-out tasks' sub-goals, in order (``ExperimentPolicy.milestones``, ``meta["milestones"]``):
+MILESTONES = {
+    "stack": ("picked", "placed"),  # a block lifted 2 cm in the pads, then the stack test
+    "drawer_open": ("pinched", "opened"),  # both pads of one pincer on a knob, then open by pulling
+}
+PICKED_M = 0.02  # m a stack block must rise in the pads to count as picked
 RESTING_MPS = 0.02  # m/s: a stacked block must be slower than this (babble_stats.MOVING_MPS)
 TARGET_NEAR_M = 0.03  # push to target: the object's centre this close to the disc's centre
 TARGET_FAR_M = 0.15  # ... for an object that began this far away
@@ -126,6 +132,14 @@ class ExperimentPolicy(BabblePolicy):
         self.names = [model.body(b).name for b in object_bodies]
         self.patch_counts = np.zeros(len(PATCH_X))
         self.height_counts = np.zeros(len(LIFT_HEIGHTS))
+        # sub-goals of a held-out task, in order, for split scoring (``succeeded`` updates them)
+        self.milestones: dict[str, bool] = dict.fromkeys(MILESTONES.get(program, ()), False)
+        self.pinched_travel = dict.fromkeys(("l", "r"), 0.0)  # drawer travel reached while pinched
+        self.start_z: dict[int, float] = {}  # stack: each block's height at the first test
+        self.pads = [
+            {g for g in range(model.ngeom) if model.body(model.geom_bodyid[g]).name == name}
+            for name in (f"{p}_{pad}_pad" for p in ("lp", "rp") for pad in ("left", "right"))
+        ]
 
     def tilt(self) -> float | None:
         """The pincer's approach height for this program (see ``TILTS``); None for hands."""
@@ -277,17 +291,46 @@ class ExperimentPolicy(BabblePolicy):
 
     # ------------------------------------------------------------------ tasks (demonstrators)
 
+    def pinched(self, data: mujoco.MjData, geoms: set[int]) -> bool:
+        """True if both pads of one pincer touch ``geoms``."""
+        touched = [False] * len(self.pads)
+        for i in range(data.ncon):
+            pair = (int(data.contact[i].geom1), int(data.contact[i].geom2))
+            for mine, other in (pair, pair[::-1]):
+                if other in geoms:
+                    for k, pad in enumerate(self.pads):
+                        touched[k] |= mine in pad
+        return (touched[0] and touched[1]) or (len(touched) > 2 and touched[2] and touched[3])
+
     def succeeded(self, data: mujoco.MjData) -> bool:
-        """The success test of this program's task at this step (see ``done``)."""
+        """The success test of this program's task at this step (see ``done``); updates the
+        task's ``milestones``.
+
+        Drawer: a drawer counts as opened only if it passed half its travel while both pads of a
+        pincer held its knob, so a drawer shoved open by the arm on its way does not count.
+        """
         if self.program == "stack":
             blocks = [i for i, n in enumerate(self.names) if "stackbox" in n]
+            for i in blocks:
+                z = float(data.xpos[self.objects[i]][2])
+                start = self.start_z.setdefault(i, z)
+                if z > start + PICKED_M and self.pinched(data, set(self.body_geoms(i))):
+                    self.milestones["picked"] = True
             state = self.stacked_on(data, blocks) if len(blocks) == 2 else None
-            return state is not None and self.resting_on(data, *state)
+            done = state is not None and self.resting_on(data, *state)
+            self.milestones["placed"] |= done
+            return done
         if self.program == "drawer_open":
             for letter in ("l", "r"):
                 joint = self.model.joint(f"prop_drawer_{letter}")
                 low, high = self.model.jnt_range[joint.id]
-                if (data.qpos[joint.qposadr[0]] - low) / (high - low) > 0.5:
+                travel = float((data.qpos[joint.qposadr[0]] - low) / (high - low))
+                knob = {int(self.model.geom(f"table_drawer_{letter}_knob").id)}
+                if self.pinched(data, knob):
+                    self.milestones["pinched"] = True
+                    self.pinched_travel[letter] = max(self.pinched_travel[letter], travel)
+                if travel > 0.5 and self.pinched_travel[letter] > 0.5:
+                    self.milestones["opened"] = True
                     return True
             return False
         if self.program == "push_to_target":
@@ -363,16 +406,36 @@ class ExperimentPolicy(BabblePolicy):
         grazed: list[int] | None = None,
         hold: int = 0,
         dwell: int = 0,
+        avoid: list[int] | None = None,
     ) -> list[Waypoint] | None:
         """Pinch at ``centre``, make each ``(target, speed)`` move while gripping, release, retreat.
 
         The geoms in ``grazed`` (the grasped object or knob) may be grazed by the forearm;
         ``hold`` steps are held gripping after the last move, and the arm stays ``dwell`` steps at
-        its retreat (a stack needs time to be seen as one). Returns None if the grasp, a move or
-        the retreat has no clear plan.
+        its retreat (a stack needs time to be seen as one). The effector keeps clear of the geoms
+        in ``avoid`` on its way to the pre-grasp point (the travel and the approach from above),
+        not on the final descent onto ``centre``. Returns None if the grasp, a move or the retreat
+        has no clear plan.
         """
         self.exempt[:] = False
         self.exempt[grazed or []] = True
+        self.avoid[:] = False
+        self.avoid[avoid or []] = True
+        try:
+            return self._grasp_moves(side, data, centre, moves, hold, dwell)
+        finally:
+            self.avoid[:] = False
+
+    def _grasp_moves(
+        self,
+        side: str,
+        data: mujoco.MjData,
+        centre: np.ndarray,
+        moves: list[tuple[np.ndarray, float]],
+        hold: int,
+        dwell: int,
+    ) -> list[Waypoint] | None:
+        """``grasp_moves`` after its exemptions are set."""
         approach_z = float(self.rng.choice(GRASP_HEIGHTS))
         found = self.oriented_pose(data, side, centre, approach_z)
         if found is None:
@@ -386,12 +449,7 @@ class ExperimentPolicy(BabblePolicy):
         if pos_error > 0.01 or ori_error > 0.05 or not self.posture_ok(data, side, q_above):
             return None
         to_pre = self.line(data, side, q_above, above, pre, self.SLOW, 0.02, approach_z)
-        onto = (
-            self.line(data, side, to_pre[-1].q, pre, centre, self.SLOW, 0.012, approach_z)
-            if to_pre
-            else None
-        )
-        if not (to_pre and onto):
+        if not to_pre:
             return None
         lead = [Waypoint(q_above, self.FAST)]
         if not self.path_ok(data, side, self.cmd_q[side], q_above):
@@ -401,6 +459,10 @@ class ExperimentPolicy(BabblePolicy):
             if via is None:
                 return None
             lead = via
+        self.avoid[:] = False  # the final descent may meet the prop it grasps
+        onto = self.line(data, side, to_pre[-1].q, pre, centre, self.SLOW, 0.012, approach_z)
+        if not onto:
+            return None
         travel, descent, contact, retreat = (
             PHASES.index(p) for p in ("travel", "descent", "contact", "retreat")
         )
@@ -546,7 +608,16 @@ class ExperimentPolicy(BabblePolicy):
         direction = 1.0 if opened else -1.0  # push shut (+x) or pull open (-x)
         target = knob + np.array([direction * PULL_M, 0.0, 0.0])
         grazed = [int(self.model.geom(f"table_drawer_{letter}_knob").id)]
-        return self.grasp_moves(side, data, knob, [(target, self.SLOW)], grazed=grazed, hold=3)
+        # the cabinets are table geoms, which an effector may touch: keep it off them on the way,
+        # or the arm's travel shoves a drawer open (2026-11-05: every "success" of the check run)
+        drawers = [
+            g
+            for g in range(self.model.ngeom)
+            if (self.model.geom(g).name or "").startswith("table_drawer_")
+        ]
+        return self.grasp_moves(
+            side, data, knob, [(target, self.SLOW)], grazed=grazed, hold=3, avoid=drawers
+        )
 
 
 def mark_phases(queue: list[Waypoint]) -> None:
