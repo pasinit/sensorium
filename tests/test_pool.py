@@ -145,6 +145,20 @@ def test_heldout_instances_never_in_pool(
         validate_pool(tampered, splits)
 
 
+def test_the_split_hash_is_a_record_not_a_gate(
+    records_and_splits: tuple[list[IndexRecord], Splits],
+) -> None:
+    """A pool stamped with an older split (another version and hash) validates against the current
+    one as long as its episodes do; a rebuild stamps the current split with the same episodes."""
+    records, splits = records_and_splits
+    pool = build_pool(records, spec(n_sources="all"), splits)
+    older = dataclasses.replace(pool, split_version="v0-old", split_sha256="0" * 64)
+    validate_pool(older, splits)  # no refusal, no warning: membership is what is checked
+    again = build_pool(records, spec(n_sources="all"), splits)
+    assert (again.split_version, again.split_sha256) == (splits.version, splits.sha256)
+    assert again.content_hash == pool.content_hash and again.paths == pool.paths
+
+
 def test_split_cannot_be_heldout(records_and_splits: tuple[list[IndexRecord], Splits]) -> None:
     with pytest.raises(PoolError, match="held-out"):
         spec(split="heldout")
