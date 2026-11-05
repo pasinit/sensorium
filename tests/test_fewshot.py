@@ -129,6 +129,7 @@ def test_a_frozen_layer_gives_features_at_window_ends() -> None:
 def test_closed_loop_the_head_drives_the_arms_and_the_program_only_judges() -> None:
     from sensorium.bodies.h1_closed_loop import (
         LearnedPolicy,
+        Outcome,
         ReplayPolicy,
         Wrap,
         evaluate,
@@ -183,8 +184,18 @@ def test_closed_loop_the_head_drives_the_arms_and_the_program_only_judges() -> N
         held = evaluate_with(rec, [7], steps, lambda judge: ReplayPolicy(judge))
         replay = evaluate_with(rec, [8], steps, lambda judge: ReplayPolicy(judge, scripted.action))
         still = rec.record(7, "experiment", steps, wrap=Wrap(lambda judge: ReplayPolicy(judge)))
+        # without the cameras: black frames, flagged blind, the same physics and outcome
+        rec.render_eyes = False
+        seen: list[Outcome] = []
+        blind_held = evaluate_with(rec, [7], steps, lambda judge: ReplayPolicy(judge), seen.append)
+        blind = rec.record(7, "experiment", steps, wrap=Wrap(lambda judge: ReplayPolicy(judge)))
     assert not held[0].success and not replay[0].success
     assert np.array_equal(still.action, np.tile(still.action[0], (steps, 1)))
+    assert seen == blind_held and blind_held[0].success == held[0].success
+    assert blind.meta["blind"] and "blind" not in still.meta
+    assert not blind.rgb.any() and still.rgb.any()
+    np.testing.assert_array_equal(blind.privileged["object_pose"], still.privileged["object_pose"])
+    np.testing.assert_array_equal(blind.privileged["qpos"], still.privileged["qpos"])
 
 
 def test_the_sweep_command_scores_every_k_and_seed(demo_paths: list[Path], tmp_path: Path) -> None:
@@ -262,3 +273,24 @@ def test_recalibration_reestimates_batchnorm_on_clean_pool_sequences(
     assert substeps == 4 and not np.allclose(features(episodes[0], ends), plain(episodes[0], ends))
     with pytest.raises(ValueError, match="recal-bn"):
         cli.make_encoder("dino:none.pth", True, [], glob)
+
+
+def test_the_floor_command_runs_one_floor_blind_and_reports_each_episode(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+
+    from sensorium.bodies.h1_scene import assets_available
+
+    if not assets_available():
+        pytest.skip("H1 assets not fetched (make h1-assets)")
+    root = Path(__file__).resolve().parent.parent
+    out = tmp_path / "floor.json"
+    cmd = [sys.executable, str(root / "scripts" / "fewshot.py"), "floor", str(out)]
+    cmd += ["--config", str(root / "configs" / "tasks_demos.toml"), "--block", "pincer_stack"]
+    cmd += ["--demos", "unused", "--episodes", "2", "--steps", "3", "--kinds", "hold"]
+    run = subprocess.run([*cmd, "--no-render"], check=True, capture_output=True, text=True)
+    assert run.stdout.count("pincer_stack hold episode seed ") == 2  # one line per episode
+    result = json.loads(out.read_text())
+    assert result["rendered"] is False and "replay" not in result
+    assert result["hold"]["n"] == 2
