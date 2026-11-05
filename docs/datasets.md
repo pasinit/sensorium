@@ -36,6 +36,20 @@ ManiSkill3, MuJoCo Playground, Isaac Lab.
 | Sonicverse, SoundSpaces 2.0 | physics-based audio in scenes | A | later: physics-based contact audio |
 | TACTO / Taxim | tactile-image rendering (DIGIT/GelSight) | tactile images | later, if taxel forces prove too coarse |
 
+## 2a. Non-commercial sources: private use only (decided 2026-11-05)
+
+Sources whose data is licensed for non-commercial use may be converted and used for this research
+under one rule. Today these are LocoMuJoCo's mocap (CC BY-NC-ND 4.0, with LAFAN1's and AMASS's own
+non-commercial terms) and, if used, non-commercial grasp data such as DexGraspNet or GraspXL
+(CC BY-NC 4.0).
+- **Storage:** their converted episodes stay in the project's private cloud storage. They never go
+  into this repository, a public sample or a public Experientia release.
+- **Tagging:** every such episode carries its source licence in the manifest (e.g. `CC BY-NC-ND
+  4.0`), so pools, splits and release tooling can tell them apart.
+- **Releases:** a public release or sample excludes them. A public release ships the generator, and
+  users fetch the source data under its own terms.
+- **Redistribution:** none, in any form, including derived files such as rendered frames.
+
 ## 2b. External benchmark data
 
 ### Push-T, as LeWorldModel uses it (2026-10-26)
