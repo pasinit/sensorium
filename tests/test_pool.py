@@ -28,12 +28,16 @@ THIRDS = {"expert": 1, "noisy": 1, "babbling": 1}
 
 
 @pytest.fixture(scope="module")
-def records_and_splits(
-    tmp_path_factory: pytest.TempPathFactory,
-) -> tuple[list[IndexRecord], Splits]:
-    world: World = make_world(tmp_path_factory.mktemp("world"))
+def world(tmp_path_factory: pytest.TempPathFactory) -> World:
+    return make_world(tmp_path_factory.mktemp("world"))
+
+
+@pytest.fixture(scope="module")
+def records_and_splits(world: World) -> tuple[list[IndexRecord], Splits]:
     registry = load_registry(world.registry)
-    return build_index([world.manifest], registry), load_splits(world.splits, registry)
+    return build_index([world.manifest], registry, world.manifest.parent), load_splits(
+        world.splits, registry
+    )
 
 
 def spec(**overrides: object) -> PoolSpec:
@@ -181,11 +185,11 @@ def test_senses_change_the_hash_and_are_normalised(
 
 
 def test_pool_senses_apply_at_load_time(
-    records_and_splits: tuple[list[IndexRecord], Splits],
+    records_and_splits: tuple[list[IndexRecord], Splits], world: World
 ) -> None:
     records, splits = records_and_splits
     pool = build_pool(records, spec(senses=["rgb", "touch"]), splits)
-    episode = Episode.load(pool.paths[0])
+    episode = Episode.load(world.manifest.parent / pool.paths[0])  # paths are root-relative
     assert set(model_inputs(episode, senses=pool.senses)) == {"rgb", "touch", "action"}
 
 
@@ -259,7 +263,7 @@ def test_instance_split_validation(tmp_path: Path) -> None:
 
 
 def test_heldout_split_is_stratified_disjoint_hashed_and_linked(
-    records_and_splits: tuple[list[IndexRecord], Splits], tmp_path: Path
+    records_and_splits: tuple[list[IndexRecord], Splits], world: World, tmp_path: Path
 ) -> None:
     records, splits = records_and_splits
     plain = build_pool(records, spec(total_steps=900), splits)
@@ -275,9 +279,19 @@ def test_heldout_split_is_stratified_disjoint_hashed_and_linked(
     assert loaded.heldout == tuple(
         dataclasses.replace(e, body="", family="", policy="", seed=0, tags=()) for e in pool.heldout
     )
-    links = link_heldout(loaded, tmp_path / "heldout")
-    assert [link.resolve() for link in links] == [Path(e.path).resolve() for e in pool.heldout]
-    assert all(link.is_symlink() for link in links)
+    root = world.manifest.parent
+    links = link_heldout(loaded, tmp_path / "heldout", root)
+    assert [link.resolve() for link in links] == [(root / e.path).resolve() for e in pool.heldout]
+    assert all(link.is_symlink() and link.is_file() for link in links)
+    text = (tmp_path / "pool.json").read_text()
+    assert str(root) not in text and str(tmp_path) not in text  # no local directory in the JSON
+    assert all(not Path(e.path).is_absolute() for e in (*loaded.episodes, *loaded.heldout))
+    absolute = dataclasses.replace(
+        pool,
+        episodes=(dataclasses.replace(pool.episodes[0], path=str(root / pool.episodes[0].path)),),
+    )
+    with pytest.raises(PoolError, match="absolute"):
+        write_pool(absolute, tmp_path / "bad.json")
     with pytest.raises(PoolError, match="heldout_fraction"):
         spec(heldout_fraction=0.5)
 
