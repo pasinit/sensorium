@@ -36,6 +36,7 @@ Usage:
   ``--kinds`` runs only some of them (a VM shard of one start state and one floor).
 
 ``closed-loop`` and ``floor`` print one line per finished episode (for a VM's stall rule).
+``closed-loop`` renders the model's eye only: the second eye is privileged (``RestoredScene``).
 """
 
 import argparse
@@ -226,6 +227,7 @@ def closed_loop(args: argparse.Namespace) -> None:
     head = fewshot.load_head(args.head)
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
     with HumanoidRecorder(dict(spec["settings"])) as rec:
+        rec.render_right = False  # the privileged second eye: never a model input, half the render
         first = fewshot.first_step(DT, substeps)
         outcomes = evaluate(
             rec, seeds, args.steps, features, head, first, progress(f"{args.block} closed-loop")
