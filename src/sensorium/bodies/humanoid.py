@@ -349,8 +349,8 @@ class HumanoidRecorder:
         self.render_eyes = True
         # Senses not synthesised, logged as zeros of their usual width: "touch" (skin forces and
         # contact dynamics; touch_xyz and contact peaks kept; the meta's touch_rate reads 0) and
-        # "audio". For closed-loop runs of encoders that do
-        # not read them; physics, the task program's judging and every other sense are unchanged.
+        # "audio". For closed-loop runs of encoders that do not read them; physics, the task
+        # program's judging and every other sense are unchanged.
         self.skip_senses: frozenset[str] = frozenset()
         self.not_foot = np.array(["ankle" not in n for n in self.force_names])
         self.leg_actuators = [
@@ -700,7 +700,8 @@ class HumanoidRecorder:
         """Append every sense of the current step (before ``action`` is applied)."""
         model, data = self.model, self.data
         sensordata = data.sensordata
-        if "touch" in self.skip_senses:
+        if "touch" in self.skip_senses:  # zeros: the meta's touch_rate then reads 0
+            force = np.zeros(len(self.force_names))
             log.touch.append(np.zeros(len(self.touch_names), dtype=np.float32))
         else:
             force = np.concatenate(
