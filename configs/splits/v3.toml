@@ -4,6 +4,12 @@
 # (sensorium.pool.validate_pool).
 #
 # Changelog:
+#   v3.1 (2026-11-05): same sources and sections; T3's layout fixed before any of its demonstrations:
+#      the target disc is drawn at x 0.47-0.52, |y| 0.11-0.14 (was 0.50-0.56, 0.12-0.17) and the object
+#      that starts 17 cm or more from it at x 0.38-0.52 (was 0.38-0.56), |y| 0.12-0.30 (unchanged)
+#      (h1_props.TARGET_X/Y, FAR_OBJECT_X/Y): inside both effectors' reach and the head camera's view,
+#      and the 17 cm start always placeable. The success test is unchanged (within 3 cm of the
+#      disc's centre for 1 s).
 #   v3 (2026-10-15): the experiments-with-consequences sources (scripted programs with outcomes), and the
 #      held-out few-shot tasks T1-T4 (stack, drawer-open, push-to-target, turn-reach) with BiGym's
 #      StackBlocks and DrawerTopOpen. Written before any experiment episode exists. The programs and
@@ -18,7 +24,7 @@
 # Every source in configs/sources.toml must be listed in exactly one section;
 # sensorium.pool.load_splits checks this. Changing this file changes its hash,
 # which every pool records.
-version = "v3"
+version = "v3.1"
 
 [pretrain]
 sources = [

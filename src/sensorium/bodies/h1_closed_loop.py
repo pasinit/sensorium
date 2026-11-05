@@ -11,8 +11,9 @@ layout and the arms' start. It then tells when the task's success test has held 
 - Until a full window has been sensed, it holds the start posture.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import mujoco
 import numpy as np
@@ -78,6 +79,11 @@ class LearnedPolicy:
         return self.judge.done(data)
 
     @property
+    def task_counts(self) -> dict[str, int]:
+        """The judge's counts (its own pushes stay 0: it never acts)."""
+        return {}
+
+    @property
     def milestones(self) -> dict[str, bool]:
         """The judge's sub-goals of the task, as reached so far."""
         return self.judge.milestones
@@ -95,6 +101,44 @@ class Outcome:
     milestones: dict[str, bool] = field(default_factory=dict)
 
 
+class ReplayPolicy:
+    """A null controller for the task's floor: plays ``actions`` open loop from the start, then
+    holds the last one; with no actions it holds the start posture throughout. The task program
+    ``judge`` sets the episode up and judges it, as for ``LearnedPolicy``."""
+
+    queries = 0
+
+    def __init__(self, judge: ExperimentPolicy, actions: np.ndarray | None = None) -> None:
+        self.judge = judge
+        self.actions = None if actions is None else np.asarray(actions, dtype=np.float32)
+        self.hold: np.ndarray | None = None
+
+    def reset(self, data: mujoco.MjData) -> np.ndarray:
+        """The judge's start, as for the demonstrations."""
+        home = self.judge.reset(data)
+        self.hold = np.asarray(self.judge.space.to_action(home), dtype=np.float32)
+        return home
+
+    def act(self, step: int, data: mujoco.MjData) -> np.ndarray:
+        """The replayed action of this step, or the held one."""
+        assert self.hold is not None
+        if self.actions is not None and len(self.actions):
+            self.hold = self.actions[min(step, len(self.actions) - 1)]
+        return self.hold
+
+    def done(self, data: mujoco.MjData) -> bool:
+        """The judge's success test."""
+        return self.judge.done(data)
+
+    @property
+    def milestones(self) -> dict[str, bool]:
+        """The judge's sub-goals reached so far."""
+        return self.judge.milestones
+
+
+Controller = LearnedPolicy | ReplayPolicy
+
+
 def evaluate(
     recorder: HumanoidRecorder,
     seeds: Sequence[int],
@@ -103,7 +147,22 @@ def evaluate(
     head: BCHead,
     first: int,
 ) -> list[Outcome]:
-    """Run the learned controller on the recorder's task from each seed.
+    """Run the learned controller on the recorder's task from each seed (``evaluate_with``)."""
+    return evaluate_with(
+        recorder,
+        seeds,
+        steps,
+        lambda judge: LearnedPolicy(judge, recorder, features, head, first),
+    )
+
+
+def evaluate_with(
+    recorder: HumanoidRecorder,
+    seeds: Sequence[int],
+    steps: int,
+    make: Callable[[ExperimentPolicy], Controller],
+) -> list[Outcome]:
+    """Run the controller ``make(judge)`` on the recorder's task from each seed.
 
     The recorder must be a task scene (``program`` and ``task`` settings, as the task's
     demonstrations).
@@ -115,26 +174,30 @@ def evaluate(
         raise ValueError("closed-loop evaluation needs a task program (the program setting)")
     out = []
     for seed in seeds:
-        wrap = Wrap(recorder, features, head, first)
+        wrap = Wrap(make)
         episode = recorder.record(seed, "experiment", steps, wrap=wrap)
         assert wrap.policy is not None
+        milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))
         out.append(
-            Outcome(seed, bool(episode.meta["success"]), episode.length, wrap.policy.queries)
+            Outcome(
+                seed,
+                bool(episode.meta["success"]),
+                episode.length,
+                wrap.policy.queries,
+                dict(milestones),
+            )
         )
     return out
 
 
 class Wrap:
-    """``HumanoidRecorder.record``'s ``wrap``: the task program becomes a ``LearnedPolicy``'s
-    judge."""
+    """``HumanoidRecorder.record``'s ``wrap``: the task program becomes a controller's judge."""
 
-    def __init__(
-        self, recorder: HumanoidRecorder, features: FeatureFn, head: BCHead, first: int
-    ) -> None:
-        self.recorder, self.features, self.head, self.first = recorder, features, head, first
-        self.policy: LearnedPolicy | None = None
+    def __init__(self, make: Callable[[ExperimentPolicy], Controller]) -> None:
+        self.make = make
+        self.policy: Controller | None = None
 
-    def __call__(self, judge: object) -> LearnedPolicy:
+    def __call__(self, judge: object) -> Controller:
         """Wrap the program the recorder made.
 
         Raises:
@@ -142,5 +205,5 @@ class Wrap:
         """
         if not isinstance(judge, ExperimentPolicy):
             raise TypeError(f"the judge must be an ExperimentPolicy, got {type(judge).__name__}")
-        self.policy = LearnedPolicy(judge, self.recorder, self.features, self.head, self.first)
+        self.policy = self.make(judge)
         return self.policy

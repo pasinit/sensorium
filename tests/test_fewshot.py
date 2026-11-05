@@ -127,7 +127,13 @@ def test_a_frozen_layer_gives_features_at_window_ends() -> None:
 
 
 def test_closed_loop_the_head_drives_the_arms_and_the_program_only_judges() -> None:
-    from sensorium.bodies.h1_closed_loop import Wrap, evaluate
+    from sensorium.bodies.h1_closed_loop import (
+        LearnedPolicy,
+        ReplayPolicy,
+        Wrap,
+        evaluate,
+        evaluate_with,
+    )
     from sensorium.bodies.h1_scene import assets_available
     from sensorium.bodies.humanoid import HumanoidRecorder
 
@@ -155,7 +161,7 @@ def test_closed_loop_the_head_drives_the_arms_and_the_program_only_judges() -> N
             assert episode.length == first + 1 and not episode.privileged  # model inputs only
             return np.zeros((len(ends), 4), dtype=np.float32)
 
-        wrap = Wrap(rec, features, head, first)
+        wrap = Wrap(lambda judge: LearnedPolicy(judge, rec, features, head, first))
         learned = rec.record(7, "experiment", steps, wrap=wrap)
         scripted = rec.record(7, "experiment", steps)
         outcomes = evaluate(rec, [7], steps, features, head, first)
@@ -170,6 +176,15 @@ def test_closed_loop_the_head_drives_the_arms_and_the_program_only_judges() -> N
     assert wrap.policy is not None and wrap.policy.queries == -(-(steps - first) // 5)
     assert outcomes[0].seed == 7 and not outcomes[0].success
     assert outcomes[0].queries == wrap.policy.queries
+    assert set(outcomes[0].milestones) == {"reached", "at_target"}  # recorded for split scoring
+    assert not outcomes[0].milestones["at_target"]
+    # the floors: holding still, and an unrelated demonstration's actions replayed open loop
+    with HumanoidRecorder(settings) as rec:
+        held = evaluate_with(rec, [7], steps, lambda judge: ReplayPolicy(judge))
+        replay = evaluate_with(rec, [8], steps, lambda judge: ReplayPolicy(judge, scripted.action))
+        still = rec.record(7, "experiment", steps, wrap=Wrap(lambda judge: ReplayPolicy(judge)))
+    assert not held[0].success and not replay[0].success
+    assert np.array_equal(still.action, np.tile(still.action[0], (steps, 1)))
 
 
 def test_the_sweep_command_scores_every_k_and_seed(demo_paths: list[Path], tmp_path: Path) -> None:

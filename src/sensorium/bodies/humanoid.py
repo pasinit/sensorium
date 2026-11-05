@@ -88,6 +88,8 @@ from sensorium.bodies.h1_policies import (  # noqa: E402
     find_tips,
 )
 from sensorium.bodies.h1_props import (  # noqa: E402
+    FAR_OBJECT_X,
+    FAR_OBJECT_Y,
     HIDDEN_COLUMNS,
     PROPS,
     STACK_MIN_GAP,
@@ -476,9 +478,16 @@ class HumanoidRecorder:
             getattr(actor, "reflexes", None),
             plan_stats() if plan_stats else None,
         )
-        milestones = getattr(actor, "milestones", None)  # a held-out task's sub-goals
-        if milestones:
-            episode.meta["milestones"] = dict(milestones)
+        return self.with_task_meta(episode, actor)
+
+    @staticmethod
+    def with_task_meta(episode: Episode, actor: Policy) -> Episode:
+        """Add a held-out task's sub-goals (``milestones``) and counts (``task_counts``, e.g. the
+        pushes of push to target) to the episode's meta, if the policy has them."""
+        for name in ("milestones", "task_counts"):
+            value = getattr(actor, name, None)
+            if value:
+                episode.meta[name] = dict(value)
         return episode
 
     def check_policy(self, policy: str) -> None:
@@ -594,7 +603,7 @@ class HumanoidRecorder:
                     xy = np.array([rng.uniform(*self.reach_x), y])
                 if far:
                     side = math.copysign(1.0, self.target[1])
-                    xy = np.array([rng.uniform(0.38, 0.56), side * rng.uniform(0.12, 0.30)])
+                    xy = np.array([rng.uniform(*FAR_OBJECT_X), side * rng.uniform(*FAR_OBJECT_Y)])
                     if np.linalg.norm(xy - self.target[:2]) < 0.17:
                         continue
                 clear = all(np.linalg.norm(xy - other) > spacing for other in placed)

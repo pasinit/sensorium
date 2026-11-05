@@ -6,7 +6,9 @@ Usage:
         [--recal-bn '<pool episodes glob>'] [--horizon H] [--stride S]
     uv run python scripts/fewshot.py sweep <cache.npz> <out_dir> [--k 1 5 10 50] [--seeds 0 1 2]
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
-        --block <name> --encoder ... [--episodes N] [--steps 600]
+        --block <name> --encoder ... [--first I] [--episodes N] [--steps 600]
+    uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
+        --demos '<glob>' [--first I] [--episodes N] [--steps 600]
 
 - ``cache``: features and action chunks of the successful demonstrations.
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
@@ -23,8 +25,12 @@ Usage:
 - ``closed-loop``: the head in the simulator on the config block's task (its settings as for the
   demonstrations). Episode ``i`` has seed ``generate.episode_seed(master_seed, "humanoid",
   "closed_loop", i, block)``: the demonstrations' seeds hash the policy ``experiment`` instead, so
-  the start states are new. Writes each episode's success and the success rate with a Wilson 95%
-  interval.
+  the start states are new. Writes each episode's success and sub-goals (``milestones``) and the
+  success rate with a Wilson 95% interval.
+- ``floor``: the task's null-policy floors on the same start states. ``hold`` keeps the start
+  posture; ``replay`` plays an unrelated demonstration's actions open loop (episode i replays the
+  (i mod n)-th of the demonstrations in ``--demos``, recorded from other seeds). A task one of them
+  solves cannot rank encoders.
 """
 
 import argparse
@@ -37,8 +43,9 @@ from pathlib import Path
 import numpy as np
 
 from sensorium import fewshot
-from sensorium.bodies.h1_closed_loop import evaluate
+from sensorium.bodies.h1_closed_loop import Outcome, ReplayPolicy, evaluate, evaluate_with
 from sensorium.bodies.humanoid import DT, HumanoidRecorder
+from sensorium.episode import Episode
 from sensorium.generate import episode_seed
 from sensorium.model.controls import load_dino
 from sensorium.model.pretrain import expand, load_layer
@@ -120,34 +127,75 @@ def sweep(args: argparse.Namespace) -> None:
     )
 
 
+def eval_seeds(config: dict[str, object], block: str, episodes: int, first: int = 0) -> list[int]:
+    """Closed-loop start states ``first .. first + episodes`` of a block: seeds hashing the policy
+    ``closed_loop`` (a shard of the 50 when ``first`` > 0)."""
+    master = int(config["master_seed"])  # type: ignore[call-overload]
+    return [
+        episode_seed(master, "humanoid", "closed_loop", i, block)
+        for i in range(first, first + episodes)
+    ]
+
+
+def summary(outcomes: Sequence[Outcome]) -> dict[str, object]:
+    """Success count, rate, Wilson interval and sub-goal counts of some outcomes."""
+    k = sum(o.success for o in outcomes)
+    low, high = wilson(k, len(outcomes))
+    reached: dict[str, int] = {}
+    for o in outcomes:
+        for name, value in o.milestones.items():
+            reached[name] = reached.get(name, 0) + int(value)
+    return {
+        "episodes": [o.__dict__ for o in outcomes],
+        "success": k,
+        "n": len(outcomes),
+        "rate": k / max(len(outcomes), 1),
+        "wilson95": [low, high],
+        "milestones": reached,
+    }
+
+
+def floor(args: argparse.Namespace) -> None:
+    """Run the null-policy floors and write their outcomes."""
+    config = tomllib.loads(args.config.read_text())
+    spec = config["humanoid"][args.block]
+    seeds = eval_seeds(config, args.block, args.episodes, args.first)
+    demos = [Episode.load(p, privileged=False).action for p in sorted(expand(args.demos))]
+    if not demos:
+        raise SystemExit(f"no demonstrations match {args.demos}")
+    result: dict[str, object] = {"block": args.block}
+    with HumanoidRecorder(dict(spec["settings"])) as rec:
+        held = evaluate_with(rec, seeds, args.steps, lambda judge: ReplayPolicy(judge))
+        replayed = []
+        for i, seed in enumerate(seeds, start=args.first):
+            actions = demos[i % len(demos)]
+            replayed += evaluate_with(
+                rec, [seed], args.steps, lambda judge, a=actions: ReplayPolicy(judge, a)
+            )
+    result["hold"], result["replay"] = summary(held), summary(replayed)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=1))
+    for name in ("hold", "replay"):
+        r = result[name]
+        assert isinstance(r, dict)
+        print(f"{args.block} floor {name}: {r['success']}/{r['n']} = {r['rate']:.0%}")
+
+
 def closed_loop(args: argparse.Namespace) -> None:
     """Run the head on the task and write the outcomes."""
     config = tomllib.loads(args.config.read_text())
     spec = config["humanoid"][args.block]
     features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     head = fewshot.load_head(args.head)
-    master = int(config["master_seed"])
-    seeds = [
-        episode_seed(master, "humanoid", "closed_loop", i, args.block) for i in range(args.episodes)
-    ]
+    seeds = eval_seeds(config, args.block, args.episodes, args.first)
     with HumanoidRecorder(dict(spec["settings"])) as rec:
         first = fewshot.first_step(DT, substeps)
         outcomes = evaluate(rec, seeds, args.steps, features, head, first)
-    k = sum(o.success for o in outcomes)
-    low, high = wilson(k, len(outcomes))
-    result = {
-        "head": str(args.head),
-        "block": args.block,
-        "encoder": args.encoder,
-        "episodes": [o.__dict__ for o in outcomes],
-        "success": k,
-        "n": len(outcomes),
-        "rate": k / max(len(outcomes), 1),
-        "wilson95": [low, high],
-    }
+    result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
+    result |= summary(outcomes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
-    print(f"{args.block}: {k}/{len(outcomes)} = {result['rate']:.0%} [{low:.0%}, {high:.0%}]")
+    print(f"{args.block}: {result['success']}/{result['n']} = {result['rate']:.0%}")
 
 
 def main() -> None:
@@ -177,11 +225,20 @@ def main() -> None:
     p.add_argument("out", type=Path)
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--block", required=True)
+    p.add_argument("--first", type=int, default=0)
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--steps", type=int, default=600)
     encoder_args(p)
+    p = sub.add_parser("floor")
+    p.add_argument("out", type=Path)
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--block", required=True)
+    p.add_argument("--demos", required=True)
+    p.add_argument("--first", type=int, default=0)
+    p.add_argument("--episodes", type=int, default=50)
+    p.add_argument("--steps", type=int, default=600)
     args = parser.parse_args()
-    {"cache": cache, "sweep": sweep, "closed-loop": closed_loop}[args.command](args)
+    {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}[args.command](args)
 
 
 if __name__ == "__main__":

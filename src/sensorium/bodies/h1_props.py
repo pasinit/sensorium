@@ -61,8 +61,16 @@ FLAP_LENGTH = (
 FLAP_RANGE = 1.6  # rad  ... middle (-y on the left) and swings away from the robot when pushed
 BUTTON_POS = (0.47, 0.12)  # the left button; the right one mirrors it
 BUTTON_TRAVEL = 0.008
-TARGET_X = (0.50, 0.56)  # the target disc is drawn in this x range (a pincer's reach edge) and |y|
-TARGET_Y = (0.12, 0.17)  # in this one, so that an object can start 17 cm or more away on its side
+# The target disc is drawn in this x range and |y| range (split v3.1, 2026-11-05; was x 0.50-0.56,
+# the pincers' reach edge, and |y| 0.12-0.17, where an object could often not be placed 17 cm away:
+# 44% of disc places at the new x). Now inside both effectors' reach and the head camera's view, and
+# an object can start 17 cm or more away on its side (in all but 0.2% of disc places)
+TARGET_X = (0.47, 0.52)
+TARGET_Y = (0.11, 0.14)
+# ... and that object is placed in this x range and |y| range (split v3.1: x was 0.38-0.56; a pincer
+# cannot reach behind an object beyond about 0.52 to push it)
+FAR_OBJECT_X = (0.38, 0.52)
+FAR_OBJECT_Y = (0.12, 0.30)
 TARGET_RADIUS = 0.04
 PATCH_FRICTION = (0.1, 0.5, 1.2)  # sliding friction of the three patches
 PATCH_X = (0.435, 0.515, 0.595)  # three strips across x, each 7 cm wide and 60 cm long in y
