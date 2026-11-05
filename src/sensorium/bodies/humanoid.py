@@ -136,6 +136,7 @@ DT = 0.05
 STANDING_PELVIS_Z = 0.98
 FALL_HEIGHT = 0.55  # pelvis below this (m) = fallen (standing is ~0.97)
 FALL_UPRIGHT = 0.5  # pelvis z-axis tilted past 60 degrees = fallen
+BLACK_FRAME = np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), dtype=np.uint8)  # an unrendered frame
 SETTLE_STEPS = 10  # unrecorded control steps that let the pose and the objects settle
 ARM_SOLREF = 0.04  # contact time constant (s) of the arms' and effectors' geoms, see the recorder
 DEFAULT_CAMERA = "left_eye_camera"
@@ -342,6 +343,10 @@ class HumanoidRecorder:
         )
         self.director_rng = np.random.default_rng(0)  # replaced per episode by ``record``
         self.render_right = True  # the privileged second eye; ``RestoredScene`` turns it off
+        # Off: no camera is rendered, every frame is black and the episode's meta says
+        # ``blind``. For open-loop runs judged on the physics state only (the null-policy
+        # floors, ``scripts/fewshot.py floor --no-render``); never for data.
+        self.render_eyes = True
         self.not_foot = np.array(["ankle" not in n for n in self.force_names])
         self.leg_actuators = [
             self.space.index[f"{side}_{joint}"] for side in SIDES for joint in LEG_ACTUATORS
@@ -479,6 +484,8 @@ class HumanoidRecorder:
             getattr(actor, "reflexes", None),
             plan_stats() if plan_stats else None,
         )
+        if not self.render_eyes:
+            episode.meta["blind"] = True
         return self.with_task_meta(episode, actor)
 
     @staticmethod
@@ -696,8 +703,11 @@ class HumanoidRecorder:
         log.touch.append(np.concatenate([force, self.dynamics.features()]))
         self.dynamics.clear()
         log.touch_xyz.append(self.skin.force_xyz(sensordata))
-        log.rgb.append(self.render(self.camera))
-        if self.render_right:
+        if not self.render_eyes:
+            log.rgb.append(BLACK_FRAME)
+        else:
+            log.rgb.append(self.render(self.camera))
+        if self.render_right and self.render_eyes:
             log.rgb_right.append(self.render(RIGHT_CAMERA))
         qpos = [data.qpos[model.jnt_qposadr[j]] for j in self.joints]
         qvel = [data.qvel[model.jnt_dofadr[j]] for j in self.joints]

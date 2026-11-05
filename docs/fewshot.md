@@ -49,6 +49,11 @@ from the same seeds.
 A task that either one solves cannot rank encoders. That is how the drawer's first demonstrator
 was caught: it succeeded by a sweep. Both use `bodies.h1_closed_loop.ReplayPolicy`.
 
+Both are open loop and judged on the physics state, so `--no-render` skips the cameras
+(`HumanoidRecorder.render_eyes = False`: black frames, `meta["blind"]`, the same physics): two
+256-pixel views per step in Mesa's software renderer on CPU machines. `floor` and `closed-loop` print
+one line per finished episode, so a VM's stall rule can count episodes.
+
 **Sub-goals.** Every held-out task records its sub-goals in order in `meta["milestones"]` and in
 each closed-loop outcome, for split scoring:
 - T1 `picked` -> `placed`;

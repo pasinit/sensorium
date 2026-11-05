@@ -146,6 +146,7 @@ def evaluate(
     features: FeatureFn,
     head: BCHead,
     first: int,
+    on_episode: Callable[[Outcome], None] | None = None,
 ) -> list[Outcome]:
     """Run the learned controller on the recorder's task from each seed (``evaluate_with``)."""
     return evaluate_with(
@@ -153,6 +154,7 @@ def evaluate(
         seeds,
         steps,
         lambda judge: LearnedPolicy(judge, recorder, features, head, first),
+        on_episode,
     )
 
 
@@ -161,8 +163,11 @@ def evaluate_with(
     seeds: Sequence[int],
     steps: int,
     make: Callable[[ExperimentPolicy], Controller],
+    on_episode: Callable[[Outcome], None] | None = None,
 ) -> list[Outcome]:
     """Run the controller ``make(judge)`` on the recorder's task from each seed.
+
+    ``on_episode`` is called with each outcome as soon as its episode ends (progress output).
 
     The recorder must be a task scene (``program`` and ``task`` settings, as the task's
     demonstrations).
@@ -178,15 +183,16 @@ def evaluate_with(
         episode = recorder.record(seed, "experiment", steps, wrap=wrap)
         assert wrap.policy is not None
         milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))
-        out.append(
-            Outcome(
-                seed,
-                bool(episode.meta["success"]),
-                episode.length,
-                wrap.policy.queries,
-                dict(milestones),
-            )
+        outcome = Outcome(
+            seed,
+            bool(episode.meta["success"]),
+            episode.length,
+            wrap.policy.queries,
+            dict(milestones),
         )
+        out.append(outcome)
+        if on_episode is not None:
+            on_episode(outcome)
     return out
 
 

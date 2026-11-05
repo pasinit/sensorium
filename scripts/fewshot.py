@@ -8,7 +8,8 @@ Usage:
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
         --block <name> --encoder ... [--first I] [--episodes N] [--steps 600]
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
-        --demos '<glob>' [--first I] [--episodes N] [--steps 600]
+        --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
+        [--kinds hold replay]
 
 - ``cache``: features and action chunks of the successful demonstrations.
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
@@ -30,14 +31,20 @@ Usage:
 - ``floor``: the task's null-policy floors on the same start states. ``hold`` keeps the start
   posture; ``replay`` plays an unrelated demonstration's actions open loop (episode i replays the
   (i mod n)-th of the demonstrations in ``--demos``, recorded from other seeds). A task one of them
-  solves cannot rank encoders.
+  solves cannot rank encoders. Both are open loop and judged on the physics state, so
+  ``--no-render`` skips the cameras (``HumanoidRecorder.render_eyes``; the outcomes are the same).
+  ``--kinds`` runs only some of them (a VM shard of one start state and one floor).
+
+``closed-loop`` and ``floor`` print one line per finished episode (for a VM's stall rule).
+``closed-loop`` renders the model's eye only: the second eye is privileged (``RestoredScene``).
 """
 
 import argparse
 import json
 import math
+import time
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -137,6 +144,22 @@ def eval_seeds(config: dict[str, object], block: str, episodes: int, first: int 
     ]
 
 
+def progress(label: str) -> Callable[[Outcome], None]:
+    """An ``on_episode`` callback: print one line per finished episode, with its wall time."""
+    last = [time.monotonic()]
+
+    def report(o: Outcome) -> None:
+        now = time.monotonic()
+        print(
+            f"{label} episode seed {o.seed}: success {o.success}, {o.steps} steps, "
+            f"{now - last[0]:.0f} s",
+            flush=True,
+        )
+        last[0] = now
+
+    return report
+
+
 def summary(outcomes: Sequence[Outcome]) -> dict[str, object]:
     """Success count, rate, Wilson interval and sub-goal counts of some outcomes."""
     k = sum(o.success for o in outcomes)
@@ -156,26 +179,41 @@ def summary(outcomes: Sequence[Outcome]) -> dict[str, object]:
 
 
 def floor(args: argparse.Namespace) -> None:
-    """Run the null-policy floors and write their outcomes."""
+    """Run the null-policy floors (``--kinds``, both by default) and write their outcomes."""
     config = tomllib.loads(args.config.read_text())
     spec = config["humanoid"][args.block]
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
-    demos = [Episode.load(p, privileged=False).action for p in sorted(expand(args.demos))]
-    if not demos:
-        raise SystemExit(f"no demonstrations match {args.demos}")
-    result: dict[str, object] = {"block": args.block}
+    demos = []
+    if "replay" in args.kinds:
+        demos = [Episode.load(p, privileged=False).action for p in sorted(expand(args.demos))]
+        if not demos:
+            raise SystemExit(f"no demonstrations match {args.demos}")
+    result: dict[str, object] = {"block": args.block, "rendered": not args.no_render}
     with HumanoidRecorder(dict(spec["settings"])) as rec:
-        held = evaluate_with(rec, seeds, args.steps, lambda judge: ReplayPolicy(judge))
-        replayed = []
-        for i, seed in enumerate(seeds, start=args.first):
-            actions = demos[i % len(demos)]
-            replayed += evaluate_with(
-                rec, [seed], args.steps, lambda judge, a=actions: ReplayPolicy(judge, a)
+        if args.no_render:
+            rec.render_eyes = False
+        if "hold" in args.kinds:
+            result["hold"] = summary(
+                evaluate_with(
+                    rec,
+                    seeds,
+                    args.steps,
+                    lambda judge: ReplayPolicy(judge),
+                    progress(f"{args.block} hold"),
+                )
             )
-    result["hold"], result["replay"] = summary(held), summary(replayed)
+        if "replay" in args.kinds:
+            replayed = []
+            report = progress(f"{args.block} replay")
+            for i, seed in enumerate(seeds, start=args.first):
+                actions = demos[i % len(demos)]
+                replayed += evaluate_with(
+                    rec, [seed], args.steps, lambda judge, a=actions: ReplayPolicy(judge, a), report
+                )
+            result["replay"] = summary(replayed)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
-    for name in ("hold", "replay"):
+    for name in args.kinds:
         r = result[name]
         assert isinstance(r, dict)
         print(f"{args.block} floor {name}: {r['success']}/{r['n']} = {r['rate']:.0%}")
@@ -189,8 +227,11 @@ def closed_loop(args: argparse.Namespace) -> None:
     head = fewshot.load_head(args.head)
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
     with HumanoidRecorder(dict(spec["settings"])) as rec:
+        rec.render_right = False  # the privileged second eye: never a model input, half the render
         first = fewshot.first_step(DT, substeps)
-        outcomes = evaluate(rec, seeds, args.steps, features, head, first)
+        outcomes = evaluate(
+            rec, seeds, args.steps, features, head, first, progress(f"{args.block} closed-loop")
+        )
     result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
     result |= summary(outcomes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -237,6 +278,8 @@ def main() -> None:
     p.add_argument("--first", type=int, default=0)
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--steps", type=int, default=600)
+    p.add_argument("--no-render", action="store_true", help="skip the cameras (open loop only)")
+    p.add_argument("--kinds", nargs="+", choices=["hold", "replay"], default=["hold", "replay"])
     args = parser.parse_args()
     {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}[args.command](args)
 
