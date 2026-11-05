@@ -106,6 +106,11 @@ class TrainConfig:
             (evaluation only; H1 episodes with privileged contacts).
         resume_every: Steps between writes of the rolling ``resume.pt`` (0 = never; see the
             module docstring).
+        mean_stop, mean_stop_step: Stop rule for a predictor that only outputs the mean (0 =
+            off). From ``mean_stop_step`` on, a logged step whose ``pred_var`` (``pred`` over the
+            states' per-dimension variance, ``std``²) is above ``mean_stop`` ends the run with
+            ``MeanOnlyPredictor``. A predictor that beats the batch mean sits well below 1 (A0 on
+            Push-T: 0.01 to 0.04); B-pusht-0's one-pass fix1 sat at 1.00 from step 50.
     """
 
     steps: int = 300
@@ -126,6 +131,8 @@ class TrainConfig:
     probes: bool = False
     threads: int = 0
     resume_every: int = 500
+    mean_stop: float = 0.0
+    mean_stop_step: int = 2000
 
 
 @dataclass(frozen=True)
@@ -248,6 +255,10 @@ def build_space(
     space = ChannelSpace.from_headers((read_header(p) for p in paths), drop_prefix)
     compute_stats(paths, space, stats_episodes)
     return space
+
+
+class MeanOnlyPredictor(RuntimeError):
+    """A run stopped by ``TrainConfig.mean_stop``: its predictor does no better than the mean."""
 
 
 def lr_at(step: int, tc: TrainConfig) -> float:
@@ -427,6 +438,7 @@ def _record(
         "elapsed_s": elapsed,
     }
     metrics |= {k: float(result[k]) for k in ("aux", "teacher_own", "recon") if k in result}
+    metrics["pred_var"] = metrics["pred"] / max(metrics["std"] ** 2, 1e-12)
     if on_log is not None:
         metrics |= on_log(metrics)
     return metrics
@@ -536,6 +548,7 @@ def train(
                 journal.write(json.dumps(metrics) + "\n")
                 journal.flush()
                 log.info(_line(metrics, tc.steps))
+                check_mean_stop(metrics, tc)
             if tc.save_every and step % tc.save_every == 0:
                 save_checkpoint(out / "ckpt.pt", model, space, cfg, step)
             save_step(step, out, model, space, cfg)
@@ -559,12 +572,27 @@ def train(
     return metrics
 
 
+def check_mean_stop(metrics: dict[str, float], tc: TrainConfig) -> None:
+    """Apply ``TrainConfig.mean_stop`` to a logged step's metrics.
+
+    Raises:
+        MeanOnlyPredictor: if the rule is on, the step is at or past ``mean_stop_step`` and
+            ``pred_var`` is above ``mean_stop``.
+    """
+    if tc.mean_stop and metrics["step"] >= tc.mean_stop_step and metrics["pred_var"] > tc.mean_stop:
+        raise MeanOnlyPredictor(
+            f"step {metrics['step']:.0f}: pred / std^2 = {metrics['pred_var']:.3f} > "
+            f"{tc.mean_stop} (the predictor does no better than the mean)"
+        )
+
+
 def _line(m: dict[str, float], total: int) -> str:
     """The progress line of a logged step."""
     extra = "".join(f" {k} {v:.3g}" for k, v in m.items() if k.startswith("gpu_"))
     return (
         f"step {m['step']:.0f}/{total} loss {m['loss']:.4f} pred {m['pred']:.4f} "
-        f"reg {m['reg']:.3f} std {m['std']:.3f} erank {m['erank']:.1f} | "
+        f"reg {m['reg']:.3f} std {m['std']:.3f} erank {m['erank']:.1f} "
+        f"pred/var {m['pred_var']:.3f} | "
         f"{m['seq_per_s']:.2f} seq/s{extra}"
     )
 
