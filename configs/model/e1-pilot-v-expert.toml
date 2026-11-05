@@ -1,9 +1,11 @@
 # E1 pilot, Track B (docs/model.md, "E1 pilot, Track B: pre-registration"): arm V x expert stand-in.
 # v0 widths, A0 (no reconstruction), seed 0. The four pilot arms differ only in model.senses and in the
 # pool (data.pool, data.heldout_paths); every other value, the step budget included, is identical.
-# PLACEHOLDERS until Track A builds the pools: data.pool, data.heldout_paths and train.steps
-# (10 epochs = ceil(10 x the pool's sequence starts / 128), the same for all four arms; 42,000 assumes
-# ~537k starts, a ~600k-step pool of 600-step episodes and 64-step sequences).
+# Step budget: 10 epochs of the babbling pool (e1/pools/e1-pilot-babble.json, content hash
+# f65b5cfdd3b4dfa1: 1,044 episodes of 600 steps, 626,400 steps, 537 starts each for 64-step
+# sequences = 560,628 starts): ceil(10 x 560,628 / 128) = 43,800, the same for all four arms (the
+# expert stand-in pool is to match its 626,400 steps). Held-out split: the pool's 55 episodes
+# (sensorium.pool.link_heldout -> data/pools/<pool>-heldout/). PLACEHOLDER: the expert pool's name.
 name = "e1-pilot-v-expert"
 seed = 0
 
@@ -25,14 +27,14 @@ sense_dropout = 0.0
 recon_weight = 0.0  # A0, written out (the default since B-pusht-0)
 
 [train]
-steps = 42000  # placeholder: 10 epochs of the pool, identical for the four arms
+steps = 43800  # 10 epochs of the 626,400-step pools, identical for the four arms
 batch_size = 128
 lr = 5e-5
 weight_decay = 1e-3
 warmup = 500
 log_every = 100
 save_every = 2000
-save_steps = [0, 2000, 10000, 25000, 42000]
+save_steps = [0, 2000, 10000, 25000, 43800]
 num_workers = 12
 device = "cuda"
 precision = "bf16"
