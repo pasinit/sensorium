@@ -91,14 +91,16 @@ class LearnedPolicy:
 
 @dataclass
 class Outcome:
-    """One closed-loop episode: its seed, success, length, the head's queries and the task's
-    sub-goals reached (``ExperimentPolicy.milestones``)."""
+    """One closed-loop episode: its seed, success, length, the head's queries, the task's
+    sub-goals reached (``ExperimentPolicy.milestones``) and whether it ran into the step cap
+    without succeeding (``capped``: a failure, counted as one)."""
 
     seed: int
     success: bool
     steps: int
     queries: int
     milestones: dict[str, bool] = field(default_factory=dict)
+    capped: bool = False
 
 
 class ReplayPolicy:
@@ -183,12 +185,14 @@ def evaluate_with(
         episode = recorder.record(seed, "experiment", steps, wrap=wrap)
         assert wrap.policy is not None
         milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))
+        success = bool(episode.meta["success"])
         outcome = Outcome(
             seed,
-            bool(episode.meta["success"]),
+            success,
             episode.length,
             wrap.policy.queries,
             dict(milestones),
+            not success and episode.meta.get("end_reason") == "steps",
         )
         out.append(outcome)
         if on_episode is not None:
