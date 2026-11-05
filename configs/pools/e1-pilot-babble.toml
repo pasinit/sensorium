@@ -1,18 +1,18 @@
 # The E1 pilot's babbling pool (Track B, docs/model.md "E1 pilot, Track B: pre-registration"):
 # event_dense (configs/event_dense.toml, code 077d317): seated babbling with the scene director,
-# 1,110 episodes of 600 steps, 15 hand and 15 pincer blocks of 37. Hands and pincers 1:1 by steps;
-# 5% of each effector's episodes held out (28 each) as the pool's held-out pretraining split.
+# 1,104 episodes of 600 steps (555 hand, 549 pincer: the run hit its time box 6 short). 1:1 by steps;
+# 5% of each effector's episodes held out (28 hand, 27 pincer) as the pool's held-out pretraining split.
 #
 #   uv run sensorium-index data/pools/e1-pilot-babble.parquet data/event_dense/manifest.json
 #   uv run sensorium-pool data/pools/e1-pilot-babble.parquet configs/pools/e1-pilot-babble.toml \
 #       data/pools/e1-pilot-babble.json --heldout-dir data/pools/e1-pilot-babble-heldout
 name = "e1-pilot-babble"
-total_steps = 632_400        # 2 x 527 episodes x 600 steps, all of event_dense but the held-out 56
+total_steps = 626_400        # 2 x 522 episodes x 600 steps: event_dense ended at 1,104 (pincers 549), minus the held-out 55
 senses = ["rgb", "audio_logmel", "proprio", "touch", "action"]  # the arms choose theirs (model.senses)
 seed = 0
 n_sources = "all"
 split = "pretrain"
-tolerance = 0.02
+tolerance = 0.001             # whole episodes: hands take exactly as many as the pincers have
 heldout_fraction = 0.05
 
 [kinds]
