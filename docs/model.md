@@ -22,22 +22,26 @@ uv run sensorium-pretrain configs/model/v0.toml   # full size; needs a pool (dat
  proprio body / vestibular / effector, 4 sub-steps each ─ MLP ─► 1 each                ┘     (4 layers, + summary token)
                                                                                              │
  action chunk (4 actions) ─ MLP ─► conditioning c_t ──► causal predictor (AdaLN-zero) ──► ŝ_{t+1}
- objective "sigreg":      MSE(ŝ_{t+1}, s_{t+1}) + 0.1 · SIGReg(s) + 0.5 · recon(z)   no EMA, no stop-gradient
-                          (one masked pass; z = the pre-projector summary; recon_weight = 0 is "A0")
+ objective "sigreg":      MSE(ŝ_{t+1}, s_{t+1}) + 0.1 · SIGReg(s) [+ w · recon(z)]   no EMA, no stop-gradient
+                          (default w = 0, "A0"; with w > 0, recon on a masked copy; z = pre-projector)
  objective "ema_vicreg":  MSE(ŝ_{t+1}, EMA-encoder s_{t+1}) + var(s) + 0.04 · cov(s)   (see below)
 ```
 
-* **Default since B-fix-1: JEPA + reconstruction in one masked pass.**
-  * The input window is masked once, and the encoder runs once on it.
-  * The next-state MSE and SIGReg act on the projected state s.
-  * An MAE-style decoder reads the pre-projector summary z and reconstructs the hidden patches and
-    proprio channels, with weight `model.recon_weight` = 0.5.
-  * This is the default for `sigreg` with vision (`recon_weight` unset). `recon_input = "separate"`
-    is B-fix-0's two-pass form.
-  * `recon_weight = 0` is the plain JEPA ("A0") of every study before B-fix-0.
-    `configs/model/cpu_tiny_a0.toml` keeps that recipe for the historical study scripts, so their
-    results reproduce.
-  * Checkpoints store the weight in use. A checkpoint from before the option existed loads as A0.
+* **Default since B-pusht-0: the plain JEPA ("A0"), no reconstruction** (supervisor, 2026-11-04).
+  * `model.recon_weight` unset means 0 for every objective. From B-fix-1 to B-pusht-0 it meant 0.5
+    for `sigreg` with vision.
+  * Reconstruction is turned on with `recon_weight > 0`. It then runs, by default, in two passes
+    (`recon_input = "separate"`, B-fix-0's form): the next-state MSE and SIGReg act on the clean
+    batch, and an MAE-style decoder reads the pre-projector summary z of a masked copy and
+    reconstructs the hidden patches and proprio channels.
+  * `recon_input = "masked"` is B-fix-1's one pass (the window masked once, the encoder run once
+    on it, the JEPA on the masked states). It failed on Push-T pixels: its predictor outputs the
+    mean of the masked-frame states (B-pusht-0, "fix1-pix-sep"). It stays an explicit option.
+  * `configs/model/cpu_tiny_a0.toml` keeps the A0 recipe of the historical study scripts, with the
+    weight written out; the study scripts set `recon_weight` and `recon_input` explicitly, so
+    their recipes are unchanged.
+  * Checkpoints store the weight and the pass in use. A checkpoint from before the options existed
+    loads as A0 and, if it reconstructs, as two passes (B-fix-0's form, the only one then).
 * **Two objectives**, `model.objective`. `sigreg` is LeWorldModel's (above). `ema_vicreg`
   has the predictor regress the states of an **EMA copy of the whole state encoder** (stems,
   fusion, projector; stop-gradient; momentum `ema_momentum` to `ema_momentum_end`, linear over
@@ -4172,7 +4176,8 @@ agent's motion. Evaluation moves to E1's pretrain → few-shot protocol (`docs/e
   driver.
 * **The one-pass fix1 bug:** `recon_input = "masked"` feeds the JEPA masked frames for both
   context and target, and its predictor outputs the mean (pred / std² = 1.00 on 9 runs).
-  `"separate"` plans like A0. The reconstruction default is unchanged for now (with the supervisor).
+  `"separate"` plans like A0. Decision (supervisor, 2026-11-04): reconstruction is off by default,
+  and `"separate"` is the default when it is turned on.
 * **The BatchNorm-statistics rule:** running statistics must come from the inputs the model is
   used on. Masked-frame statistics collapse clean states; re-calibration is `recalibrate`.
 * **The goal-content rule:** (iii)'s lead came from its goal holding the agent's position. With an

@@ -121,6 +121,7 @@ held-out task choice (step 7), go/no-go after the pilot (step 9).
 | 2026-10-14 | Track B: no tiny SSL encoder beats an untrained one (probe mean 0.22–0.25 vs floor 0.22); the probe battery is sound (supervised ceiling 0.64, gap +0.42); SSL init gives no fine-tune gain at 4 or 16 labelled episodes | B-ctrl-0 ([model.md](model.md)). Next on CPU: proprio dropout, scale curve (25/50/100 episodes, 128 px, width 256); differences under 0.08 (6 seeds) are not claimed |
 | 2026-11-02 | Goal: one model across senses for the same (or a comparable) body, not across bodies; alien-body ablation (car + drone) dropped from E1 | Your call; saves 2 E1 runs |
 | 2026-11-04 | Close B-pusht-0 (Push-T); move evaluation to E1's pretrain → few-shot protocol | Supervisor's call: Push-T has no pretraining or few-shot step and too few senses to test the thesis |
+| 2026-11-04 | Reconstruction (MAE on vision) off by default; recon_input "separate" when enabled | Supervisor's call: correctly wired it gained nothing on Push-T and costs ~1.3-1.5x per step |
 
 
 ## Open questions

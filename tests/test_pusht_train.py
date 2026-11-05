@@ -188,3 +188,26 @@ def test_fix1_sep_is_fix1_with_the_two_pass_reconstruction(plan: Any) -> None:
     assert changed == ["recon_input"] and sep.recon_input == "separate"
     resolved = sep.resolved()
     assert (resolved.recon_weight, resolved.mae_ratio, resolved.recon_source) == (0.5, 0.75, "z")
+
+
+def test_every_push_t_arm_resolves_as_before_the_default_change(plan: Any) -> None:
+    """``recon_weight`` and ``recon_input`` are set explicitly wherever they matter, so turning
+    reconstruction off by default (and two passes on) leaves every Push-T arm as it was trained.
+    The arms without reconstruction never set ``recon_input``: it is inert there (no decoder),
+    and only its stored value changes, from ``masked`` to ``separate``."""
+    want = {  # (reconstruction weight, recon_input if reconstruction is on, mask ratio)
+        "a0-pix": (0.0, None, 0.75),
+        "a0-pix-agent": (0.0, None, 0.75),
+        "fix1-pix": (0.5, "masked", 0.75),
+        "fix1-pix-r50": (0.5, "masked", 0.5),
+        "fix1-pix-r30": (0.5, "masked", 0.3),
+        "fix1-pix-sep": (0.5, "separate", 0.75),
+        "a0-pix-agent-imggoal": (0.0, None, 0.75),
+    }
+    assert set(plan.ARMS) == set(want)
+    for arm, (weight, mode, ratio) in want.items():
+        assert "recon_weight" in plan.ARMS[arm], arm  # never left to the default
+        cfg = plan.model_config(arm).resolved()
+        assert cfg.recon_weight == weight and cfg.mae_ratio == ratio, arm
+        if weight:
+            assert plan.ARMS[arm]["recon_input"] == mode == cfg.recon_input, arm
