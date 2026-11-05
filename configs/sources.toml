@@ -309,6 +309,16 @@ programs = ["push_to_target"]
 props = ["target_disc"]
 
 [[source]]
+name = "humanoid/pincer/place_on_target"
+body = "humanoid"
+effector = "pincer"
+task = "place_on_target"
+family = "humanoid"
+tags = ["contact_rich"]
+programs = ["place_on_target"]
+props = ["target_disc"]
+
+[[source]]
 name = "humanoid/hand/turn_reach"
 body = "humanoid"
 effector = "hand"

@@ -64,6 +64,7 @@ from sensorium.bodies.h1_babble import (
 )
 from sensorium.bodies.h1_director import DirectorSettings, SceneDirector  # noqa: E402
 from sensorium.bodies.h1_experiments import (  # noqa: E402
+    TARGET_PROGRAMS,
     ExperimentPolicy,
     check_program,
     task_name,
@@ -591,7 +592,7 @@ class HumanoidRecorder:
             half_height = object_half_height(self.model, geom)
             stack = "stackbox" in self.model.body(body).name
             # push to target: the first object starts 17 cm or more from the disc, on its side
-            far = self.program == "push_to_target" and not placed
+            far = self.program in TARGET_PROGRAMS and not placed
             for attempt in range(200 + 2 * PLACEMENT_RETRIES):
                 # 200 tries at a spacing of 11 cm; a crowded table (props) then relaxes it twice
                 spacing = SPACINGS[0 if attempt < 200 else 1 + (attempt - 200) // PLACEMENT_RETRIES]
