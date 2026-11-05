@@ -6,7 +6,9 @@ Usage:
         [--recal-bn '<pool episodes glob>'] [--horizon H] [--stride S]
     uv run python scripts/fewshot.py sweep <cache.npz> <out_dir> [--k 1 5 10 50] [--seeds 0 1 2]
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
-        --block <name> --encoder ... [--first I] [--episodes N] [--steps 600]
+        --block <name> --encoder ... [--first I] [--episodes N] [--max-steps 600]
+        [--senses all|vision]
+    uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
         --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
         [--kinds hold replay]
@@ -28,6 +30,12 @@ Usage:
   "closed_loop", i, block)``: the demonstrations' seeds hash the policy ``experiment`` instead, so
   the start states are new. Writes each episode's success and sub-goals (``milestones``) and the
   success rate with a Wilson 95% interval.
+  - ``--max-steps`` caps an episode (``cap`` gives a task's value); an episode that reaches it
+    without succeeding is a failure, counted in ``capped``.
+  - ``--senses vision`` skips touch and sound synthesis (zeros in their place) for encoders that
+    read neither, the V arms and DINOv2; it is refused for a layer that reads them.
+- ``cap``: a task's closed-loop step cap, 1.5 x the 95th percentile of the steps at which its
+  demonstrations succeeded, from their generation manifests (metadata only).
 - ``floor``: the task's null-policy floors on the same start states. ``hold`` keeps the start
   posture; ``replay`` plays an unrelated demonstration's actions open loop (episode i replays the
   (i mod n)-th of the demonstrations in ``--demos``, recorded from other seeds). A task one of them
@@ -175,6 +183,7 @@ def summary(outcomes: Sequence[Outcome]) -> dict[str, object]:
         "rate": k / max(len(outcomes), 1),
         "wilson95": [low, high],
         "milestones": reached,
+        "capped": sum(o.capped for o in outcomes),
     }
 
 
@@ -219,20 +228,80 @@ def floor(args: argparse.Namespace) -> None:
         print(f"{args.block} floor {name}: {r['success']}/{r['n']} = {r['rate']:.0%}")
 
 
+SKIPPED = {"all": frozenset(), "vision": frozenset({"touch", "audio"})}
+"""``--senses``: what the recorder skips synthesising (``HumanoidRecorder.skip_senses``)."""
+
+
+def check_senses_needed(spec: str, senses: str) -> None:
+    """Refuse ``--senses vision`` for a layer that reads touch or sound.
+
+    Raises:
+        ValueError: if it does.
+    """
+    kind, _, path = spec.partition(":")
+    if senses == "vision" and kind == "layer":
+        read = set(load_layer(Path(path)).model.senses) & {"touch", "audio"}
+        if read:
+            raise ValueError(f"--senses vision: the layer reads {sorted(read)}")
+
+
+def success_cap(steps: Sequence[int], factor: float = 1.5, q: float = 95.0) -> int:
+    """The closed-loop step cap of a task: ``factor`` x the ``q``-th percentile of the steps at
+    which its demonstrations succeeded (rounded up).
+
+    Raises:
+        ValueError: if there is no success.
+    """
+    if not len(steps):
+        raise ValueError("no successful demonstration to set a cap from")
+    return math.ceil(factor * float(np.percentile(np.asarray(steps, dtype=float), q)))
+
+
+def manifest_success_steps(paths: Sequence[Path]) -> list[int]:
+    """The lengths of the successful episodes in generation manifests (``manifest.json``, or
+    ``manifest.parts/*.jsonl``), one per episode file (a later line for the same file wins):
+    metadata only, no episode is read."""
+    rows: dict[str, dict[str, object]] = {}
+    for path in paths:
+        text = Path(path).read_text()
+        entries = (
+            json.loads(text)["episodes"]
+            if path.suffix == ".json"
+            else [json.loads(x) for x in text.splitlines() if x.strip()]
+        )
+        rows |= {str(e["file"]): e for e in entries}
+    return [int(str(e["steps"])) for e in rows.values() if e.get("end_reason") == "success"]
+
+
+def cap(args: argparse.Namespace) -> None:
+    """Print the step cap of a task from its demonstrations' manifests."""
+    steps = manifest_success_steps(sorted(Path(p) for p in expand(args.manifests)))
+    value = success_cap(steps)
+    p50, p95 = (float(np.percentile(steps, q)) for q in (50, 95))
+    print(  # noqa: T201
+        json.dumps(
+            {"successes": len(steps), "p50": p50, "p95": p95, "cap": value, "max": max(steps)}
+        )
+    )
+
+
 def closed_loop(args: argparse.Namespace) -> None:
     """Run the head on the task and write the outcomes."""
     config = tomllib.loads(args.config.read_text())
     spec = config["humanoid"][args.block]
+    check_senses_needed(args.encoder, args.senses)
     features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     head = fewshot.load_head(args.head)
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
     with HumanoidRecorder(dict(spec["settings"])) as rec:
         rec.render_right = False  # the privileged second eye: never a model input, half the render
+        rec.skip_senses = SKIPPED[args.senses]
         first = fewshot.first_step(DT, substeps)
         outcomes = evaluate(
-            rec, seeds, args.steps, features, head, first, progress(f"{args.block} closed-loop")
+            rec, seeds, args.max_steps, features, head, first, progress(f"{args.block} closed-loop")
         )
     result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
+    result |= {"max_steps": args.max_steps, "senses": args.senses}
     result |= summary(outcomes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
@@ -268,8 +337,11 @@ def main() -> None:
     p.add_argument("--block", required=True)
     p.add_argument("--first", type=int, default=0)
     p.add_argument("--episodes", type=int, default=50)
-    p.add_argument("--steps", type=int, default=600)
+    p.add_argument("--max-steps", "--steps", dest="max_steps", type=int, default=600)
+    p.add_argument("--senses", choices=sorted(SKIPPED), default="all")
     encoder_args(p)
+    p = sub.add_parser("cap")
+    p.add_argument("manifests", help="glob of a task's demonstration manifests")
     p = sub.add_parser("floor")
     p.add_argument("out", type=Path)
     p.add_argument("--config", type=Path, required=True)
@@ -281,7 +353,8 @@ def main() -> None:
     p.add_argument("--no-render", action="store_true", help="skip the cameras (open loop only)")
     p.add_argument("--kinds", nargs="+", choices=["hold", "replay"], default=["hold", "replay"])
     args = parser.parse_args()
-    {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}[args.command](args)
+    commands = {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}
+    {**commands, "cap": cap}[args.command](args)
 
 
 if __name__ == "__main__":

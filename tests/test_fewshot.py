@@ -294,3 +294,77 @@ def test_the_floor_command_runs_one_floor_blind_and_reports_each_episode(tmp_pat
     result = json.loads(out.read_text())
     assert result["rendered"] is False and "replay" not in result
     assert result["hold"]["n"] == 2
+
+
+def test_closed_loop_speed_options_leave_the_model_inputs_and_the_outcome_unchanged() -> None:
+    from sensorium.bodies.h1_closed_loop import LearnedPolicy, Wrap
+    from sensorium.bodies.h1_scene import assets_available
+    from sensorium.bodies.humanoid import HumanoidRecorder
+
+    if not assets_available():
+        pytest.skip("H1 assets missing: run `make h1-assets`")
+    settings: dict[str, object] = {
+        "effector": "hand",
+        "posture": "seated",
+        "program": "push_to_target",
+        "props": ["target_disc"],
+        "task": True,
+    }
+    steps, first = 24, 6
+
+    def run(right: bool, skip: frozenset[str]) -> tuple[list[Episode], Episode]:
+        seen: list[Episode] = []
+
+        def features(episode: Episode, ends: np.ndarray) -> np.ndarray:
+            seen.append(episode)
+            return np.full((len(ends), 4), float(episode.proprio[-1].sum()), dtype=np.float32)
+
+        with HumanoidRecorder(settings) as rec:
+            rec.render_right, rec.skip_senses = right, skip
+            torch.manual_seed(0)
+            head = fewshot.BCHead(dim=4, horizon=3, actions=len(rec.space.names), hidden=8)
+            wrap = Wrap(lambda judge: LearnedPolicy(judge, rec, features, head, first))
+            return seen, rec.record(7, "experiment", steps, wrap=wrap)
+
+    base_seen, base = run(True, frozenset())
+    eye_seen, eye = run(False, frozenset())
+    lean_seen, lean = run(False, frozenset({"touch", "audio"}))
+    assert "rgb_right" in base.privileged and "rgb_right" not in eye.privileged
+    assert len(base_seen) == len(eye_seen) == len(lean_seen) > 1
+    for a, b, c in zip(base_seen, eye_seen, lean_seen, strict=True):
+        assert np.array_equal(a.rgb, b.rgb) and np.array_equal(a.rgb, c.rgb)  # what V reads
+        assert np.array_equal(a.proprio, b.proprio) and np.array_equal(a.proprio, c.proprio)
+        assert np.array_equal(a.touch, b.touch) and np.array_equal(a.audio, b.audio)
+        assert not c.touch.any() and not c.audio.any()  # skipped: zeros of the usual width
+        assert c.touch.shape == a.touch.shape and c.audio.shape == a.audio.shape
+    for other in (eye, lean):  # the same physics, actions and judging
+        np.testing.assert_array_equal(other.action, base.action)
+        np.testing.assert_array_equal(other.privileged["qpos"], base.privileged["qpos"])
+        assert other.meta["success"] == base.meta["success"]
+        assert other.meta.get("milestones") == base.meta.get("milestones")
+
+
+def test_the_step_cap_comes_from_the_demonstrations_success_steps(tmp_path: Path) -> None:
+    import importlib.util
+    import json
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "fewshot.py"
+    spec = importlib.util.spec_from_file_location("fewshot_script_cap", script)
+    assert spec is not None and spec.loader is not None
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    rows = [{"file": f"e{i}.npz", "steps": 100 + i, "end_reason": "success"} for i in range(20)]
+    rows += [{"file": "f.npz", "steps": 600, "end_reason": "steps"}]  # a failure: not counted
+    rows += [{"file": "e0.npz", "steps": 300, "end_reason": "success"}]  # a later line wins
+    part = tmp_path / "manifest.parts" / "block.jsonl"
+    part.parent.mkdir()
+    part.write_text("\n".join(json.dumps(r) for r in rows))
+    steps = cli.manifest_success_steps([part])
+    assert sorted(steps) == sorted([300, *range(101, 120)])
+    want = int(np.ceil(1.5 * np.percentile(np.asarray(steps, dtype=float), 95)))
+    assert cli.success_cap(steps) == want
+    whole = tmp_path / "manifest.json"
+    whole.write_text(json.dumps({"episodes": rows[:3]}))
+    assert cli.manifest_success_steps([whole]) == [100, 101, 102]
+    with pytest.raises(ValueError):
+        cli.success_cap([])

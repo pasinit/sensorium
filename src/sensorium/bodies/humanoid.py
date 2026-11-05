@@ -347,6 +347,11 @@ class HumanoidRecorder:
         # ``blind``. For open-loop runs judged on the physics state only (the null-policy
         # floors, ``scripts/fewshot.py floor --no-render``); never for data.
         self.render_eyes = True
+        # Senses not synthesised, logged as zeros of their usual width: "touch" (skin forces and
+        # contact dynamics; touch_xyz and contact peaks kept; the meta's touch_rate reads 0) and
+        # "audio". For closed-loop runs of encoders that do
+        # not read them; physics, the task program's judging and every other sense are unchanged.
+        self.skip_senses: frozenset[str] = frozenset()
         self.not_foot = np.array(["ankle" not in n for n in self.force_names])
         self.leg_actuators = [
             self.space.index[f"{side}_{joint}"] for side in SIDES for joint in LEG_ACTUATORS
@@ -472,7 +477,8 @@ class HumanoidRecorder:
                     self.data.ctrl[:] = actor.tick(self.data)  # type: ignore[attr-defined]
                 mujoco.mj_step(self.model, self.data)
                 contacts_now = read_contacts(self.model, self.data)
-                self.dynamics.substep(self.data, contacts_now)
+                if "touch" not in self.skip_senses:
+                    self.dynamics.substep(self.data, contacts_now)
                 self.peaks.update(contacts_now)
         plan_stats = getattr(actor, "plan_stats", None)
         episode = self.episode(
@@ -694,14 +700,17 @@ class HumanoidRecorder:
         """Append every sense of the current step (before ``action`` is applied)."""
         model, data = self.model, self.data
         sensordata = data.sensordata
-        force = np.concatenate(
-            [
-                self.skin.normal_force(sensordata)[self.grid_kept],
-                self.dense.read(data, read_contacts(model, data)),
-            ]
-        )
-        log.touch.append(np.concatenate([force, self.dynamics.features()]))
-        self.dynamics.clear()
+        if "touch" in self.skip_senses:
+            log.touch.append(np.zeros(len(self.touch_names), dtype=np.float32))
+        else:
+            force = np.concatenate(
+                [
+                    self.skin.normal_force(sensordata)[self.grid_kept],
+                    self.dense.read(data, read_contacts(model, data)),
+                ]
+            )
+            log.touch.append(np.concatenate([force, self.dynamics.features()]))
+            self.dynamics.clear()
         log.touch_xyz.append(self.skin.force_xyz(sensordata))
         if not self.render_eyes:
             log.rgb.append(BLACK_FRAME)
@@ -732,7 +741,10 @@ class HumanoidRecorder:
             ]
             log.prop_state.append(np.clip(travel, 0.0, 1.0).astype(np.float32))  # soft limits
         log.action.append(action.astype(np.float32))
-        log.audio.append(sound.step(contacts.impact, contacts.slide))
+        if "audio" in self.skip_senses:
+            log.audio.append(np.zeros(sound.n))
+        else:
+            log.audio.append(sound.step(contacts.impact, contacts.slide))
         log.fell.append(fell)
         log.qpos.append(data.qpos.astype(np.float32))
         log.qvel.append(data.qvel.astype(np.float32))
