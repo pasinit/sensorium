@@ -25,6 +25,7 @@ import tomllib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from typing import TextIO
 
 import numpy as np
 import torch
@@ -66,6 +67,8 @@ class DataConfig:
             removes the actuator-effort channels: "proprio without effort").
         event_index: Optional start-weight file of ``sensorium.model.events``: sequences are
             drawn toward event windows (label-free signals) instead of uniformly.
+        heldout_paths: Optional held-out episode files (or patterns), never trained on: the
+            periodic held-out loss and the best checkpoint (``train.heldout_every``).
     """
 
     paths: tuple[str, ...] = ()
@@ -76,6 +79,7 @@ class DataConfig:
     space_paths: tuple[str, ...] = ()
     drop_prefix: tuple[str, ...] = ()
     event_index: str = ""
+    heldout_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,15 @@ class TrainConfig:
             states' per-dimension variance, ``std``²) is above ``mean_stop`` ends the run with
             ``MeanOnlyPredictor``. A predictor that beats the batch mean sits well below 1 (A0 on
             Push-T: 0.01 to 0.04); B-pusht-0's one-pass fix1 sat at 1.00 from step 50.
+        heldout_every, heldout_batches: Every ``heldout_every`` steps and at the last step (0 =
+            never; needs ``data.heldout_paths``), the objective on ``heldout_batches`` batches of
+            16 held-out sequences (``diagnostics.heldout_loss``: eval mode, centre crop, a fixed
+            seed) is logged as ``heldout_pred`` and ``heldout_reg``, with ``heldout_gap`` =
+            ``heldout_pred`` - the step's training ``pred``. The checkpoint of the lowest
+            ``heldout_pred`` so far is kept as ``ckpt-best.pt`` (``heldout_best.json`` says its
+            step). Training still runs to ``steps``: "early stopping" means evaluating the best
+            checkpoint. The torch RNG is restored after each measurement, so training draws the
+            same random numbers as without it.
     """
 
     steps: int = 300
@@ -133,6 +146,8 @@ class TrainConfig:
     resume_every: int = 500
     mean_stop: float = 0.0
     mean_stop_step: int = 2000
+    heldout_every: int = 0
+    heldout_batches: int = 8
 
 
 @dataclass(frozen=True)
@@ -512,6 +527,7 @@ def train(
     out = Path(tc.out_dir) / cfg.name
     out.mkdir(parents=True, exist_ok=True)
     done, before = start_or_resume(out, model, opt, dataset, space, cfg)
+    held = HeldOut(cfg, out)
     batches = _batches(dataset, tc, dataset.seed, device)
     (out / "config.toml").write_text(_dump_config(cfg))
     (out / "run.json").write_text(
@@ -543,8 +559,11 @@ def train(
             model.update_target(ema_at(step, model_cfg, tc.steps))
             elapsed = time.perf_counter() - start
             last = step == tc.steps or 0 < tc.max_seconds <= elapsed
-            if step % tc.log_every == 0 or last:
+            measured = held.due(step, last)
+            if step % tc.log_every == 0 or last or measured:
                 metrics = _record(step, result, tc, elapsed, on_log)
+                if measured:
+                    metrics |= held.measure(model, space, cfg, step, metrics["pred"])
                 journal.write(json.dumps(metrics) + "\n")
                 journal.flush()
                 log.info(_line(metrics, tc.steps))
@@ -558,18 +577,72 @@ def train(
                 save_resume(out, model, opt, step, elapsed)
         save_checkpoint(out / "ckpt.pt", model, space, cfg, int(metrics["step"]))
         (out / RESUME).unlink(missing_ok=True)  # the run is complete
-        if tc.eval_windows:
-            layer = SensoryLayer(model, space, cfg.loader())
-            metrics |= state_statistics(layer, paths, tc.eval_windows)
-            journal.write(json.dumps(metrics) + "\n")
-            log.info("eval states: std %.3f erank %.1f", metrics["eval_std"], metrics["eval_erank"])
-        if tc.probes:
-            scores = run_probes(SensoryLayer(model, space, cfg.loader()), paths)["state"]
-            metrics |= {f"probe_{k}": v for k, v in scores.items()}
-            journal.write(json.dumps(metrics) + "\n")
-            log.info("probes: mean %.3f", metrics["probe_mean"])
+        metrics = final_evaluations(
+            metrics, SensoryLayer(model, space, cfg.loader()), paths, tc, journal
+        )
     log.info("saved %s", out / "ckpt.pt")
     return metrics
+
+
+def final_evaluations(
+    metrics: dict[str, float],
+    layer: SensoryLayer,
+    paths: Sequence[Path],
+    tc: TrainConfig,
+    journal: TextIO,
+) -> dict[str, float]:
+    """The end-of-run state statistics (``eval_windows``) and probes (``probes``), each added to
+    the last metrics and written to the journal as a line of its own."""
+    if tc.eval_windows:
+        metrics |= state_statistics(layer, paths, tc.eval_windows)
+        journal.write(json.dumps(metrics) + "\n")
+        log.info("eval states: std %.3f erank %.1f", metrics["eval_std"], metrics["eval_erank"])
+    if tc.probes:
+        scores = run_probes(layer, paths)["state"]
+        metrics |= {f"probe_{k}": v for k, v in scores.items()}
+        journal.write(json.dumps(metrics) + "\n")
+        log.info("probes: mean %.3f", metrics["probe_mean"])
+    return metrics
+
+
+BEST = "ckpt-best.pt"
+BEST_META = "heldout_best.json"
+
+
+class HeldOut:
+    """``train.heldout_every``: the periodic held-out loss and the best checkpoint by it.
+
+    Args:
+        cfg: The run (``data.heldout_paths``, ``train.heldout_every``, ``train.heldout_batches``).
+        out: The run directory; a resumed run reads its best so far from ``heldout_best.json``.
+    """
+
+    def __init__(self, cfg: RunConfig, out: Path) -> None:
+        self.paths = [f for pattern in cfg.data.heldout_paths for f in expand(pattern)]
+        self.every, self.batches, self.out = cfg.train.heldout_every, cfg.train.heldout_batches, out
+        meta = out / BEST_META
+        self.best = json.loads(meta.read_text())["heldout_pred"] if meta.exists() else math.inf
+
+    def due(self, step: int, last: bool) -> bool:
+        """Whether ``step`` is measured."""
+        return bool(self.paths) and self.every > 0 and (step % self.every == 0 or last)
+
+    def measure(
+        self, model: SensoryModel, space: ChannelSpace, cfg: RunConfig, step: int, pred: float
+    ) -> dict[str, float]:
+        """The held-out metrics of ``step`` (``pred``: its training ``pred``); keeps the best."""
+        from sensorium.model.diagnostics import heldout_loss  # noqa: PLC0415 (it imports torch data)
+
+        rng = torch.get_rng_state()
+        result = heldout_loss(SensoryLayer(model, space, cfg.loader()), self.paths, self.batches)
+        torch.set_rng_state(rng)
+        result["heldout_gap"] = result["heldout_pred"] - pred
+        if result["heldout_pred"] < self.best:
+            self.best = result["heldout_pred"]
+            save_checkpoint(self.out / BEST, model, space, cfg, step)
+            meta = {"step": step, "heldout_pred": self.best}
+            (self.out / BEST_META).write_text(json.dumps(meta))
+        return result
 
 
 def check_mean_stop(metrics: dict[str, float], tc: TrainConfig) -> None:
