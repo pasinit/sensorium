@@ -4229,6 +4229,18 @@ from k demonstrations ([fewshot.md](fewshot.md)). It applies the rules B-pusht-0
     over seven programs (door, knock, lift_drop, press, push, slide, topple), pincers over four
     (knock, lift_drop, push, topple);
   * 56 further episodes (28 hand, 28 pincer) held out.
+* **The two pools differ in contact density** (Track A's per-pool statistics; mean fraction of
+  steps):
+
+  | | touch | object contact |
+  |---|---|---|
+  | expert stand-in, pincer | 0.23 | 0.25 |
+  | babbling, pincer | 0.47 | 0.45 |
+  | expert stand-in, hand | 0.99 | 0.31 |
+  | babbling, hand | 0.99 | 0.45 |
+
+  Babbling touches objects more (pincers: twice as often). H2's contrast is therefore experience
+  kind *and* contact density together; it does not separate the two.
 * Per-pool contact and "caused change" statistics (A1) are reported next to H2.
 
 **Budget:** 10 epochs per run. A 600-step episode has 537 starts of a 64-step sequence, so a pool has
@@ -4286,7 +4298,7 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 | task | demonstrator | successful demos | floors: hold / replay | step cap | parts scored |
 |---|---|---|---|---|---|
 | T1 stack two blocks (pincers) | 64/130 = 49% [41, 58] | 64 | 0/50 [0, 7] / 0/50 [0, 7] | 600 | picked, placed |
-| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] | [n] | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | [from its demonstrations] | pinched, opened |
+| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] (check); 153/352 = 43% [38, 49] (demonstration set) | 153 | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | 465 | pinched, opened |
 | T3b place the object on the target (pincers) | 93/128 = 73% [64, 80] | 93 | 0/50 [0, 7] / 0/50 [0, 7] | 436 | grasped, lifted, at_target, released |
 
 * **Step caps:** 1.5 x the 95th percentile of the demonstrators' success steps (`fewshot.py cap`).
@@ -4297,8 +4309,8 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   * its 128 demonstration seeds share none with the 50 closed-loop start states;
   * a first check of the cell gave 21/30 = 70% [52, 83].
 * **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
-  has 64 and T3b 93. T2's demonstrator succeeds 27% of the time (no plan in 17 of 30 attempts), so
-  its demonstration set needs about 200 attempts.
+  has 64, T3b 93 and T2 153 (of 352 attempts, seed 11; its demonstrator at 43% [38, 49] on the
+  demonstration set, against 27% on the 30-attempt check).
 * **T2 at v3.4** (small low cabinets drawn by their knobs within comfortable reach, the table height
   drawn per episode) is admitted: the demonstrator's lower bound (14%) is 7 points above both
   floors' upper bounds (7%), outside the 5-point near-bar margin. Its cap, from its demonstration
@@ -4336,7 +4348,8 @@ through the same heads, k, seeds and start states.
 **Contrasts, at k = 10** (each per task, never averaged across tasks):
 
 * **H1, senses:** all - V, within each kind of experience.
-* **H2, experience:** babbling - expert stand-in, within each senses condition.
+* **H2, experience:** babbling - expert stand-in, within each senses condition (confounded with the
+  pools' contact density, see "Data").
 * Every arm against DINOv2.
 
 **Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
