@@ -4280,7 +4280,7 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 | task | demonstrator | successful demos | floors: hold / replay | step cap | parts scored |
 |---|---|---|---|---|---|
 | T1 stack two blocks (pincers) | 64/130 = 49% [41, 58] | 64 | 0/50 [0, 7] / 0/50 [0, 7] | 600 | picked, placed |
-| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] | [n] | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | [from its demonstrations] | pinched, opened |
+| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] (check); 153/352 = 43% [38, 49] (demonstration set) | 153 | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | 465 | pinched, opened |
 | T3b place the object on the target (pincers) | 93/128 = 73% [64, 80] | 93 | 0/50 [0, 7] / 0/50 [0, 7] | 436 | grasped, lifted, at_target, released |
 
 * **Step caps:** 1.5 x the 95th percentile of the demonstrators' success steps (`fewshot.py cap`).
@@ -4291,12 +4291,14 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   * its 128 demonstration seeds share none with the 50 closed-loop start states;
   * a first check of the cell gave 21/30 = 70% [52, 83].
 * **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
-  has 64 and T3b 93. T2's demonstrator succeeds 27% of the time (no plan in 17 of 30 attempts), so
-  its demonstration set needs about 200 attempts.
+  has 64, T3b 93 and T2 153 (of 352 attempts, seed 11; its demonstrator at 43% [38, 49] on the
+  demonstration set, against 27% on the 30-attempt check).
 * **T2 at v3.4** (small low cabinets drawn by their knobs within comfortable reach, the table height
   drawn per episode) is admitted: the demonstrator's lower bound (14%) is 7 points above both
-  floors' upper bounds (7%), outside the 5-point near-bar margin. Its median demonstration success
-  step is 146; its cap comes from its demonstration set (`fewshot.py cap`).
+  floors' upper bounds (7%), outside the 5-point near-bar margin. Its cap, from its demonstration
+  set by the rule above (`fewshot.py cap` on the generation manifests), is 1.5 x a 95th-percentile
+  success step of 309 = 465 (median 116; the demonstrations ran with at most 420 steps, and their
+  longest success took 392).
 * **T2's earlier versions failed the validity check.** In both, open-loop replay did as well as the
   demonstrator, so the task could not rank encoders.
   * v3.1, pulled by the knob: demonstrator 62/134 = 46% [38, 55], replay floor 19/50 = 38%
