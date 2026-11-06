@@ -4299,6 +4299,11 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   set by the rule above (`fewshot.py cap` on the generation manifests), is 1.5 x a 95th-percentile
   success step of 309 = 465 (median 116; the demonstrations ran with at most 420 steps, and their
   longest success took 392).
+  * Its demonstrations are at code `9e84ae6`, master seed 11; none of their 352 seeds is among the 50
+    closed-loop start states. The closed loop runs the demonstrations' block settings as they are
+    (`configs/tasks_demos.toml`, `pincer_drawer_open`, with `table_jitter = 0.03`).
+
+  ![T2 v3.4: steps to success of the 153 demonstrations, and the validity table](figures/t2_v34_demos.png)
 * **T2's earlier versions failed the validity check.** In both, open-loop replay did as well as the
   demonstrator, so the task could not rank encoders.
   * v3.1, pulled by the knob: demonstrator 62/134 = 46% [38, 55], replay floor 19/50 = 38%
