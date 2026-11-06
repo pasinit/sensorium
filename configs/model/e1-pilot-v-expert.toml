@@ -4,14 +4,15 @@
 # Step budget: 10 epochs of the babbling pool (e1/pools/e1-pilot-babble.json, content hash
 # f65b5cfdd3b4dfa1: 1,044 episodes of 600 steps, 626,400 steps, 537 starts each for 64-step
 # sequences = 560,628 starts): ceil(10 x 560,628 / 128) = 43,800, the same for all four arms (the
-# expert stand-in pool is to match its 626,400 steps). Held-out split: the pool's 55 episodes
-# (sensorium.pool.link_heldout -> data/pools/<pool>-heldout/). PLACEHOLDER: the expert pool's name.
+# expert stand-in pool matches it: e1/pools/e1-pilot-expert.json, content hash 378a46955d62166d,
+# 1,044 episodes of 600 steps, 522 hand / 522 pincer, from configs/e1_programs.toml at code 077d317).
+# Held-out split: the pool's 56 episodes (sensorium.pool.link_heldout -> data/pools/<pool>-heldout/).
 name = "e1-pilot-v-expert"
 seed = 0
 
 [data]
-pool = "data/pools/e1-pilot-expert.json"  # placeholder
-heldout_paths = ["data/pools/e1-pilot-expert-heldout/*.npz"]  # placeholder: the pool's ~5% held-out split
+pool = "data/pools/e1-pilot-expert.json"
+heldout_paths = ["data/pools/e1-pilot-expert-heldout/*.npz"]  # the pool's 5% held-out split
 
 [augment]
 crop = 0.9

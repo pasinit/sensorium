@@ -4,10 +4,10 @@
 # (626,400 steps, 1,044 episodes, so the arms' 43,800 steps are 10 epochs of either pool), hands and
 # pincers 1:1 by steps, and 5% of each effector's episodes held out first.
 #
-#   uv run sensorium-index data/pools/e1-pilot-programs.parquet data/e1_programs/manifest.json
-#   uv run sensorium-pool data/pools/e1-pilot-programs.parquet configs/pools/e1-pilot-programs.toml \
-#       data/pools/e1-pilot-programs.json --heldout-dir data/pools/e1-pilot-programs-heldout
-name = "e1-pilot-programs"
+#   uv run sensorium-index data/pools/e1-pilot-expert.parquet data/e1_programs/manifest.json
+#   uv run sensorium-pool data/pools/e1-pilot-expert.parquet configs/pools/e1-pilot-expert.toml \
+#       data/pools/e1-pilot-expert.json --heldout-dir data/pools/e1-pilot-expert-heldout
+name = "e1-pilot-expert"
 total_steps = 626_400        # 2 x 522 episodes x 600 steps, as the babbling pool
 senses = ["rgb", "audio_logmel", "proprio", "touch", "action"]  # the arms choose theirs (model.senses)
 seed = 0

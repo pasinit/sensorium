@@ -4217,12 +4217,18 @@ from k demonstrations ([fewshot.md](fewshot.md)). It applies the rules B-pusht-0
 
 **Data** (Track A): two pools of the same size, one per kind of experience.
 
-* **Babbling:** `e1-pilot-babble.json` (content hash `f65b5cfdd3b4dfa1`, split v3.3):
+* **Babbling:** `e1-pilot-babble.json` (content hash `f65b5cfdd3b4dfa1`, split v3.4; first stamped v3.3):
   * event-dense seated babbling with the director, code `077d317`;
   * 1,044 episodes of 600 steps (626,400 steps), hand : pincer 1 : 1 (313,200 steps each);
   * 55 further episodes (28 hand, 27 pincer) held out for the held-out pretraining loss.
-* **Expert stand-in:** to be built the same way and the same size (1,044 episodes of 600 steps), from
-  Track A's scripted programs (pending the decision on regenerating them at `077d317`).
+* **Expert stand-in:** `e1-pilot-expert.json` (content hash `378a46955d62166d`, split v3.4):
+  * the scripted experiment programs (`configs/e1_programs.toml`, 30 blocks of 37), code `077d317`,
+    run over two machines and merged (`scripts/manifest_from_parts.py`; the 77 episodes both made
+    were identical);
+  * 1,044 episodes of 600 steps (626,400 steps), hand : pincer 1 : 1 (313,200 steps each); hands
+    over seven programs (door, knock, lift_drop, press, push, slide, topple), pincers over four
+    (knock, lift_drop, push, topple);
+  * 56 further episodes (28 hand, 28 pincer) held out.
 * Per-pool contact and "caused change" statistics (A1) are reported next to H2.
 
 **Budget:** 10 epochs per run. A 600-step episode has 537 starts of a 64-step sequence, so a pool has
@@ -4280,7 +4286,7 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
 | task | demonstrator | successful demos | floors: hold / replay | step cap | parts scored |
 |---|---|---|---|---|---|
 | T1 stack two blocks (pincers) | 64/130 = 49% [41, 58] | 64 | 0/50 [0, 7] / 0/50 [0, 7] | 600 | picked, placed |
-| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] (check); 153/352 = 43% [38, 49] (demonstration set) | 153 | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | 465 | pinched, opened |
+| T2 open the drawer (pincers; v3.4) | 8/30 = 27% [14, 44] | [n] | 0/50 [0, 7] / 0/50 [0, 7] (a successful demonstration replayed) | [from its demonstrations] | pinched, opened |
 | T3b place the object on the target (pincers) | 93/128 = 73% [64, 80] | 93 | 0/50 [0, 7] / 0/50 [0, 7] | 436 | grasped, lifted, at_target, released |
 
 * **Step caps:** 1.5 x the 95th percentile of the demonstrators' success steps (`fewshot.py cap`).
@@ -4291,8 +4297,8 @@ demonstrator's Wilson 95% lower bound must lie above both floors' upper bounds.
   * its 128 demonstration seeds share none with the 50 closed-loop start states;
   * a first check of the cell gave 21/30 = 70% [52, 83].
 * **Demonstrations:** k = 50 needs at least 51 successes per task, plus some to score offline; T1
-  has 64, T3b 93 and T2 153 (of 352 attempts, seed 11; its demonstrator at 43% [38, 49] on the
-  demonstration set, against 27% on the 30-attempt check).
+  has 64 and T3b 93. T2's demonstrator succeeds 27% of the time (no plan in 17 of 30 attempts), so
+  its demonstration set needs about 200 attempts.
 * **T2 at v3.4** (small low cabinets drawn by their knobs within comfortable reach, the table height
   drawn per episode) is admitted: the demonstrator's lower bound (14%) is 7 points above both
   floors' upper bounds (7%), outside the 5-point near-bar margin. Its cap, from its demonstration
