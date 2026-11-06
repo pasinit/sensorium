@@ -119,3 +119,27 @@ def test_skip_existing_resumes_a_stopped_run(
     CountingRecorder.calls = []
     generate.record_body("humanoid", {**spec, "skip_existing": False}, 7, tmp_path, "hand_x")
     assert len(CountingRecorder.calls) == 4  # off: everything recorded again
+
+
+def test_merged_parts_deduplicate_by_file_and_refuse_differing_hashes(tmp_path: Path) -> None:
+    from sensorium.generate import merged_parts
+
+    def write(directory: Path, name: str, entries: list[dict[str, object]]) -> None:
+        parts = directory / "manifest.parts"
+        parts.mkdir(parents=True, exist_ok=True)
+        (parts / name).write_text("".join(json.dumps(e) + "\n" for e in entries) + '{"cut')
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    write(a, "x.jsonl", [{"file": "humanoid/1.npz", "content_hash": "h1"}])
+    write(
+        b,
+        "y.jsonl",
+        [
+            {"file": "humanoid/1.npz", "content_hash": "h1"},
+            {"file": "humanoid/0.npz", "content_hash": "h0"},
+        ],
+    )
+    assert [e["file"] for e in merged_parts([a, b])] == ["humanoid/0.npz", "humanoid/1.npz"]
+    write(b, "z.jsonl", [{"file": "humanoid/1.npz", "content_hash": "other"}])
+    with pytest.raises(ValueError, match="content hashes differ"):
+        merged_parts([a, b])

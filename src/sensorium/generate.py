@@ -47,6 +47,7 @@ import subprocess
 import sys
 import time
 import tomllib
+from collections.abc import Sequence
 from importlib import metadata
 from pathlib import Path
 
@@ -232,6 +233,24 @@ def previous_entries(parts: Path) -> dict[str, dict[str, object]]:
                 continue
             entries[str(entry["file"])] = entry
     return entries
+
+
+def merged_parts(directories: Sequence[Path]) -> list[dict[str, object]]:
+    """The manifest entries in every ``<dir>/manifest.parts/*.jsonl`` of ``directories``, one per
+    episode file (sorted by file), for a run split over machines or stopped before its manifest.
+
+    Raises:
+        ValueError: if two parts name the same file with different content hashes.
+    """
+    merged: dict[str, dict[str, object]] = {}
+    for directory in directories:
+        for parts in sorted((directory / "manifest.parts").glob("*.jsonl")):
+            for name, entry in previous_entries(parts).items():
+                seen = merged.get(name)
+                if seen is not None and seen["content_hash"] != entry["content_hash"]:
+                    raise ValueError(f"{name}: content hashes differ between parts ({parts})")
+                merged[name] = entry
+    return [merged[name] for name in sorted(merged)]
 
 
 def existing_entry(
