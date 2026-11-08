@@ -4371,6 +4371,10 @@ evaluation result).
   **At the end of training it fails them.** Both are reported. No arm's recipe is changed and v-expert
   is not re-run: with one seed, a re-run would be another draw, not a fix.
 * v-babble trained to the end without an excursion (held-out best 0.0039 at step 42,000).
+* **Code from 2026-11-08 ~11:00 UTC:** the training tarball was rebuilt from `9f9c3c5`, which adds
+  only the logging of the gradient norm before clipping (`grad_norm`). all-expert runs it from its
+  start; any relaunch of all-babble after a preemption from then on runs it too. The recipe is
+  unchanged, so a mid-run switch changes only what is logged.
 
 **Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
 
