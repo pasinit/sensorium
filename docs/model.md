@@ -4351,6 +4351,26 @@ through the same heads, k, seeds and start states.
 * **H2, experience:** babbling - expert stand-in, within each senses condition (confounded with the
   pools' contact density, see "Data").
 * Every arm against DINOv2.
+* **Secondary, step-matched H2 for V** (declared 2026-11-08, after training and before any
+  evaluation result): v-expert is evaluated at its best held-out checkpoint, step 26,000 (see
+  "Training note" below), v-babble at its own, step 42,000. To separate the kind of experience from
+  the checkpoint's age, v-babble's saved step-25,000 checkpoint (`ckpt-25000.pt`) goes through the
+  same offline and closed-loop evaluation, and V-babble(25k) - V-expert(26k) is reported next to the
+  primary contrast. The primary contrast stays the pre-registered one (best checkpoints).
+
+**Training note: v-expert's predictor diverged at step ~29,000** (recorded 2026-11-08, before any
+evaluation result).
+
+* Within one launch, its training `pred` rose from 0.0047 (step 28,600) to 0.031 (29,000) and 0.05 to
+  0.2 to the end; its held-out loss went from 0.0049 (best, step 26,000) to 0.21 at 43,800.
+* SIGReg, std (0.97 to 0.99) and effective rank (112 to 119) did not move: the encoder's states stayed
+  healthy, the predictor broke. The learning rate was falling (1.7e-5, 34% of its peak); gradients are
+  clipped at norm 1, but the norm was not logged (it is from all-expert on).
+* By the pre-registered rule the evaluated checkpoint is the best held-out one, step 26,000. **There
+  it passes the checks** (`pred / std²` far below 0.8, no collapse, train / held-out gap about 4%).
+  **At the end of training it fails them.** Both are reported. No arm's recipe is changed and v-expert
+  is not re-run: with one seed, a re-run would be another draw, not a fix.
+* v-babble trained to the end without an excursion (held-out best 0.0039 at step 42,000).
 
 **Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
 
