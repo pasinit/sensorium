@@ -91,7 +91,7 @@ class TrainConfig:
         batch_size: Sequences per step.
         lr, weight_decay: AdamW settings (LeWM: 5e-5 and 1e-3, bf16 on a GPU).
         warmup: Linear warm-up steps; cosine decay to 10% afterwards.
-        grad_clip: Gradient-norm clip.
+        grad_clip: Gradient-norm clip. The norm before clipping is logged as ``grad_norm``.
         log_every, save_every: Step intervals for the progress line and the checkpoint.
         save_steps: Steps at which to also keep a numbered copy ``ckpt-<step>.pt`` (to probe
             the encoder along training).
@@ -457,7 +457,8 @@ def _record(
         "seq_per_s": step * tc.batch_size / elapsed,
         "elapsed_s": elapsed,
     }
-    metrics |= {k: float(result[k]) for k in ("aux", "teacher_own", "recon") if k in result}
+    extra = ("aux", "teacher_own", "recon", "grad_norm")
+    metrics |= {k: float(result[k]) for k in extra if k in result}
     metrics["pred_var"] = metrics["pred"] / max(metrics["std"] ** 2, 1e-12)
     if on_log is not None:
         metrics |= on_log(metrics)
@@ -560,7 +561,8 @@ def train(
                 result = step_fn(batch)
             opt.zero_grad(set_to_none=True)
             result["loss"].backward()  # type: ignore[no-untyped-call]
-            torch.nn.utils.clip_grad_norm_(model.parameters(), tc.grad_clip)
+            # the norm before clipping; read (a device sync) only on logged steps, by _record
+            result["grad_norm"] = torch.nn.utils.clip_grad_norm_(model.parameters(), tc.grad_clip)
             opt.step()
             model.update_target(ema_at(step, model_cfg, tc.steps))
             elapsed = time.perf_counter() - start

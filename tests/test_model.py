@@ -2337,3 +2337,23 @@ def test_a_compiled_forward_trains_the_same_model(tmp_path: Path) -> None:
     b = torch.load(tmp_path / "runs/c/ckpt.pt", weights_only=True)["model"]
     assert set(a) == set(b)  # no wrapper prefix in the checkpoint
     assert all(torch.allclose(a[k], b[k], atol=1e-5) for k in a)
+
+
+def test_the_gradient_norm_before_clipping_is_logged(tmp_path: Path) -> None:
+    small_pusht_data(tmp_path)
+    tc = TrainConfig(
+        steps=3,
+        batch_size=2,
+        warmup=1,
+        out_dir=str(tmp_path / "runs"),
+        log_every=1,
+        eval_windows=0,
+        device="cpu",
+        grad_clip=1e-6,  # every step clips: the logged norm is the one before clipping
+    )
+    data = parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data
+    model = replace(TINY, senses=("vision", "proprio_effector"))
+    train(RunConfig(name="g", data=data, model=model, train=tc))
+    rows = [json.loads(x) for x in (tmp_path / "runs/g/log.jsonl").read_text().splitlines()]
+    assert len(rows) == 3
+    assert all(np.isfinite(r["grad_norm"]) and r["grad_norm"] > 1e-4 for r in rows)
