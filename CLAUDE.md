@@ -18,5 +18,10 @@ Project rules:
   (see `docs/data-generation.md`).
 - Generated data and runs go under `data/` and `runs/` (git-ignored).
 - When a doc marks a claim *(verify)*, check the primary source before relying on it.
+- Before any training launch, check the input normalisation on the run's actual pool:
+  every channel's statistics come from episodes of its own body (none left at
+  mean 0 / std 1), and the per-channel share of clipped values is looked at.
+  Pools are ordered (by effector, by program), so statistics are never fitted on
+  the first N files. A smoke run that passes on loss and speed does not cover this.
 
 @.claude/dotfiles.md
