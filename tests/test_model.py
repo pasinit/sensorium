@@ -25,10 +25,12 @@ from sensorium.model import probes, subsets  # noqa: E402
 from sensorium.model.data import (  # noqa: E402
     LoaderConfig,
     SequenceDataset,
+    compute_stats,
     header_of,
     load_episode,
     sequence_from_episode,
     spacing,
+    stats_sample,
 )
 from sensorium.model.diagnostics import heldout_loss, sense_reliance  # noqa: E402
 from sensorium.model.gpu_smoke import (  # noqa: E402
@@ -227,6 +229,25 @@ def test_channel_space_shares_body_channels_between_hand_and_pincer(
     assert body_hand == body_pincer
     assert not set(hand.dst["proprio_effector"]) & set(pincer.dst["proprio_effector"])
     assert len(space.keys["vestibular"]) == 3
+
+
+def test_stats_fit_pincer_channels_when_the_pool_lists_hands_first(tmp_path: Path) -> None:
+    paths = []
+    for i, effector in enumerate(["hand"] * 4 + ["pincer"] * 2):
+        paths.append(tmp_path / f"{effector}-{i}.npz")
+        privileged_episode(i, steps=20, effector=effector).save(paths[-1])
+    assert stats_sample(paths, 2) == [paths[0], paths[4]]
+    assert stats_sample(paths, 5) == [paths[0], paths[2], paths[3], paths[4], paths[5]]
+    assert stats_sample(paths, 64) == paths
+    space = ChannelSpace.from_headers(read_header(p) for p in paths)
+    compute_stats(paths, space, 2)  # the first 2 files alone are both hands
+    pincer = space.columns(read_header(paths[4]))
+    dst = pincer.dst["proprio_effector"]
+    with np.load(paths[4]) as data:
+        x = data["proprio"][:, pincer.src["proprio_effector"]].astype(np.float64)
+    stats = space.stats["proprio_effector"]
+    np.testing.assert_allclose(np.asarray(stats["mean"])[dst], x.mean(0), rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(stats["std"])[dst], x.std(0), rtol=1e-5)
 
 
 def test_batch_shapes_for_hands_and_pincers(

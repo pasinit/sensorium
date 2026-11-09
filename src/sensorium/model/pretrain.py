@@ -56,7 +56,8 @@ class DataConfig:
         paths: Episode files or glob patterns (relative to the working directory).
         pool: Optional ``pool.json`` from ``sensorium-pool``; replaces ``paths`` and
             restricts the senses to the pool's.
-        stats_episodes: Episodes used to fit the proprio and audio normalisation.
+        stats_episodes: Episodes used to fit the proprio and audio normalisation, spread
+            over the episode kinds (``data.stats_sample``).
         subset_index: Optional index of ``subsets.build_index``; with ``subset_key`` it restricts
             the sequences drawn to one class of start positions (``conseq``, ``contact``, ``all``).
         subset_key: The class to draw from (needs ``subset_index``).
