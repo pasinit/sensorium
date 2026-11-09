@@ -2357,3 +2357,29 @@ def test_the_gradient_norm_before_clipping_is_logged(tmp_path: Path) -> None:
     rows = [json.loads(x) for x in (tmp_path / "runs/g/log.jsonl").read_text().splitlines()]
     assert len(rows) == 3
     assert all(np.isfinite(r["grad_norm"]) and r["grad_norm"] > 1e-4 for r in rows)
+
+
+def test_steps_above_the_spike_norm_log_their_batch_episodes(tmp_path: Path) -> None:
+    small_pusht_data(tmp_path)
+    tc = TrainConfig(
+        steps=3,
+        batch_size=2,
+        warmup=1,
+        out_dir=str(tmp_path / "runs"),
+        log_every=1,
+        eval_windows=0,
+        device="cpu",
+    )
+    data = parse_config({"data": {"paths": [str(tmp_path / "data" / "*.npz")]}}).data
+    model = replace(TINY, senses=("vision", "proprio_effector"))
+    plain = train(RunConfig(name="p", data=data, model=model, train=tc))
+    spiky = train(
+        RunConfig(name="s", data=data, model=model, train=replace(tc, spike_grad_norm=1e-9))
+    )
+    assert spiky["loss"] == plain["loss"]  # the same sequences
+    assert not (tmp_path / "runs/p/spikes.jsonl").exists()
+    rows = [json.loads(x) for x in (tmp_path / "runs/s/spikes.jsonl").read_text().splitlines()]
+    files = {p.name for p in (tmp_path / "data").glob("*.npz")}
+    assert [r["step"] for r in rows] == [1, 2, 3]
+    assert all(len(r["episodes"]) == 2 and set(r["episodes"]) <= files for r in rows)
+    assert all(r["grad_norm"] > 1e-9 for r in rows)

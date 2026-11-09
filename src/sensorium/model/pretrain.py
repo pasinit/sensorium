@@ -128,6 +128,10 @@ class TrainConfig:
             step). Training still runs to ``steps``: "early stopping" means evaluating the best
             checkpoint. The torch RNG is restored after each measurement, so training draws the
             same random numbers as without it.
+        spike_grad_norm: On a step whose ``grad_norm`` is above this (0 = off), the batch's
+            episode file names go to ``spikes.jsonl`` in the run directory (with the step and the
+            norm), so a blow-up can be traced to its data. Reads the norm on every step (a device
+            sync); the sequences drawn are unchanged. A resumed run may repeat a step's line.
     """
 
     steps: int = 300
@@ -153,6 +157,7 @@ class TrainConfig:
     heldout_every: int = 0
     heldout_batches: int = 8
     compile: str = ""
+    spike_grad_norm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -534,6 +539,7 @@ def train(
     out.mkdir(parents=True, exist_ok=True)
     done, before = start_or_resume(out, model, opt, dataset, space, cfg)
     held = HeldOut(cfg, out)
+    dataset.tag_episodes = tc.spike_grad_norm > 0
     batches = _batches(dataset, tc, dataset.seed, device)
     (out / "config.toml").write_text(_dump_config(cfg))
     (out / "run.json").write_text(
@@ -556,13 +562,16 @@ def train(
         for step in range(done + 1, tc.steps + 1):
             for group in opt.param_groups:
                 group["lr"] = lr_at(step - 1, tc)
-            batch = {k: v.to(device, non_blocking=True) for k, v in next(batches).items()}
+            batch = next(batches)
+            episodes = batch.pop("episode", None)
+            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             with amp:
                 result = step_fn(batch)
             opt.zero_grad(set_to_none=True)
             result["loss"].backward()  # type: ignore[no-untyped-call]
             # the norm before clipping; read (a device sync) only on logged steps, by _record
             result["grad_norm"] = torch.nn.utils.clip_grad_norm_(model.parameters(), tc.grad_clip)
+            note_spike(out, step, result["grad_norm"], episodes, dataset.paths, tc.spike_grad_norm)
             opt.step()
             model.update_target(ema_at(step, model_cfg, tc.steps))
             elapsed = time.perf_counter() - start
@@ -590,6 +599,24 @@ def train(
         )
     log.info("saved %s", out / "ckpt.pt")
     return metrics
+
+
+def note_spike(
+    out: Path,
+    step: int,
+    grad_norm: torch.Tensor,
+    episodes: torch.Tensor | None,
+    paths: Sequence[Path],
+    above: float,
+) -> None:
+    """Append a step's batch episodes to ``spikes.jsonl`` when its gradient norm is above ``above``
+    (``TrainConfig.spike_grad_norm``)."""
+    if episodes is None or above <= 0 or float(grad_norm) <= above:
+        return
+    names = [paths[i].name for i in episodes.tolist()]
+    line = {"step": step, "grad_norm": float(grad_norm), "episodes": names}
+    with (out / "spikes.jsonl").open("a") as f:
+        f.write(json.dumps(line) + "\n")
 
 
 def final_evaluations(

@@ -330,6 +330,7 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
     ) -> None:
         self.paths = [Path(p) for p in paths]
         self.space, self.cfg, self.seed, self.train = space, cfg, seed, train
+        self.tag_episodes = False  # add "episode" (the index into paths) to each sequence
         self.senses = check_senses(senses)
         self._cache: OrderedDict[Path, Loaded] = OrderedDict()
         weights: list[float] = []
@@ -393,7 +394,10 @@ class SequenceDataset(IterableDataset[dict[str, np.ndarray]]):
             i = self._pick(rng)
             loaded = self.load(self.paths[i])
             for _ in range(self.cfg.reuse):
-                yield self._cut(i, loaded, rng)
+                seq = self._cut(i, loaded, rng)
+                if self.tag_episodes:
+                    seq["episode"] = np.array(i, dtype=np.int64)
+                yield seq
 
 
 def to_tensors(batch: Mapping[str, np.ndarray]) -> dict[str, torch.Tensor]:
