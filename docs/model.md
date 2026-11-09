@@ -4376,6 +4376,49 @@ evaluation result).
   start; any relaunch of all-babble after a preemption from then on runs it too. The recipe is
   unchanged, so a mid-run switch changes only what is logged.
 
+**Deviation: a normalisation bug, and a staged re-run of all four arms** (decided 2026-11-09,
+after training and before any evaluation result; no encoder had been evaluated).
+
+* **The bug.** The proprio and audio normalisation was fitted on the first 64 files of each pool
+  (`data.compute_stats`). Both pools list their hand stratum first, so the 64 were all hand
+  episodes. The pincer-only proprio channels kept the identity statistics (mean 0, std 1: they
+  entered the model unnormalised) and the channels shared by both effectors got hand-only
+  statistics. All four arms were affected, babbling and expert alike.
+* **Why it may matter for the expert arms.** The data scan of the two pools found no static
+  windows and no duplicates (largest within-block cosine 0.67). It did find that the expert
+  programs drive some of the shared and pincer joints far from the hand statistics: 0.115% of
+  pincer values reach the input clip in the expert pool vs 0.060% in the babbling pool. Expert
+  windows also move 17 to 25% less. Both expert arms diverged late and neither babbling arm did:
+  v-expert at about step 29,000 (above) and all-expert at about step 24,000. In all-expert, the
+  gradient norm before clipping went from 0.26-0.29 to 0.42 at step 24,000, 4.2 at 24,300 and
+  22 at 24,600; its held-out best is step 22,000. The bug is a plausible cause, not a shown one:
+  the babbling arms had it too and trained cleanly.
+* **The fix.** The normalisation is fitted on a sample spread over the episode kinds and along
+  each kind's files (`data.stats_sample`: 64 episodes, half hand and half pincer). It changes
+  every arm's inputs, so the pilot result comes from **all four arms re-run with the fixed
+  normalisation**, with an otherwise identical recipe. The re-runs add a log of the batch's
+  episodes on any step with a gradient norm above 2 (`train.spike_grad_norm`), so that a blow-up
+  can be traced to its data. The first runs are kept (the old checkpoints carry the old
+  statistics). They are reported as the runs with the bug, and they are not evaluated.
+* **Staged, at the same total cost.**
+  1. Re-run v-expert and all-expert first.
+  2. If both are clean, re-run v-babble and all-babble.
+  3. Evaluate the four re-run encoders once, by the plan above (best held-out checkpoints; the
+     step-matched secondary only if an expert arm's best checkpoint is again before step
+     30,000).
+* **Stop rule.** An expert re-run **diverges** if, from step 2,000 on, either holds:
+  * its training `pred` stays above 3 times its lowest logged value so far for 10 logged steps
+    in a row (1,000 steps);
+  * its gradient norm stays above 2 for 10 logged steps in a row.
+
+  Both first expert runs meet this rule. If either expert re-run diverges, the babbling re-runs
+  are not started, and nothing is evaluated. Instead, a stability change for all four arms (for
+  example a lower learning rate or a tighter gradient clip) is proposed, recorded here and
+  approved before any further training. The spike log and the data scan's worst-episode list
+  inform the proposal.
+* This supersedes the training note's "v-expert is not re-run": the re-run fixes an input bug, so
+  it is not another draw of the same recipe.
+
 **Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
 
 * the closed-loop start states: a paired bootstrap over the 50 start states, which are the same
