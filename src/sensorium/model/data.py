@@ -119,15 +119,43 @@ def load_episode(episode: Episode, space: ChannelSpace, senses: Sequence[str]) -
     return Loaded(header, model_inputs(episode, senses=keys), space.columns(header))
 
 
+def stats_sample(paths: Sequence[Path], limit: int) -> list[Path]:
+    """Up to ``limit`` episodes spread over every episode kind and over each kind's files.
+
+    A kind is a body with its proprio channel set (a hand and a pincer humanoid are two
+    kinds). The kinds share ``limit`` as evenly as their sizes allow, and each kind's share
+    is spaced evenly along its files in the given order, so a pool listed stratum by stratum
+    (all hands, then all pincers) still fits every channel on its own episodes.
+    """
+    kinds: dict[tuple[str, tuple[str, ...]], list[Path]] = {}
+    for path in paths:
+        header = read_header(path)
+        kinds.setdefault((header.body, header.proprio_names), []).append(path)
+    groups = list(kinds.values())
+    share = [0] * len(groups)
+    left = limit
+    while left > 0 and any(k < len(g) for k, g in zip(share, groups, strict=True)):
+        for i, group in enumerate(groups):
+            if left > 0 and share[i] < len(group):
+                share[i] += 1
+                left -= 1
+    picked: set[Path] = set()
+    for k, group in zip(share, groups, strict=True):
+        picked.update(group[int(i)] for i in np.linspace(0, len(group) - 1, k).round())
+    return [p for p in paths if p in picked]
+
+
 def compute_stats(paths: Sequence[Path], space: ChannelSpace, limit: int = 64) -> None:
     """Fit per-channel mean and std of the proprio groups and audio on some episodes.
 
+    The ``limit`` episodes are ``stats_sample``'s: spread over every episode kind, so
+    channels of one kind only (pincer joints) get their own statistics.
     Reads ``proprio`` and ``audio_logmel`` straight from the files (no video decoding);
     these two arrays are model inputs.
     """
     sums = {g: np.zeros((2, space.size(g))) for g in (*PROPRIO_GROUPS, "audio")}
     counts = {g: np.zeros(space.size(g)) for g in sums}
-    for path in list(paths)[:limit]:
+    for path in stats_sample(paths, limit):
         header = read_header(path)
         cols = space.columns(header)
         with np.load(path, allow_pickle=False) as data:
