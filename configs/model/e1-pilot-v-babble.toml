@@ -29,8 +29,8 @@ recon_weight = 0.0  # A0, written out (the default since B-pusht-0)
 [train]
 steps = 43800  # 10 epochs of the 626,400-step pools, identical for the four arms
 batch_size = 128
-lr = 5e-5
-weight_decay = 1e-3
+lr = 2.5e-5  # 5e-5 until the stability deviation of 2026-11-16 (docs/model.md)
+weight_decay = 0.05  # 1e-3 until the same deviation
 warmup = 500
 log_every = 100
 save_every = 2000

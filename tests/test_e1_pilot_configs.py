@@ -41,3 +41,4 @@ def test_the_four_arms_differ_only_in_senses_and_pool() -> None:
         500,
     )
     assert t.save_steps[-1] == t.steps and t.batch_size == 128
+    assert (t.lr, t.weight_decay) == (2.5e-5, 0.05)  # the stability deviation of 2026-11-16

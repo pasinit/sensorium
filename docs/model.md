@@ -4419,6 +4419,47 @@ after training and before any evaluation result; no encoder had been evaluated).
 * This supersedes the training note's "v-expert is not re-run": the re-run fixes an input bug, so
   it is not another draw of the same recipe.
 
+**Deviation: a stability change to the recipe of all four arms** (decided 2026-11-16, after the
+first fixed-normalisation re-run and before any evaluation result).
+
+* **What diverged.** The v-expert re-run with the fixed normalisation passed the pre-launch
+  normalisation check (CLAUDE.md, #108): every used channel was fitted on episodes of its own
+  kind. It still diverged by the stop rule above. Its gradient norm before clipping went from
+  about 0.3 to 14.7 at step 25,200. The STOP RULE ended it at step 25,800. Its best held-out
+  `pred` was 0.0055, at step 24,000. By the stage plan, all-expert and the babbling arms were
+  not re-run.
+* **The spikes point to the optimisation state, not the inputs** (the batches of every step with
+  a gradient norm above 2, `spikes.jsonl`, read against the pool):
+  * the first spike is at step 24,938, and every step spikes from 24,977 on;
+  * over the first 40 spike steps the norm rises smoothly from 2.0 to 3.5, through batches of
+    every mix;
+  * from step 20,000 on, every program and effector appears in the spike batches at its share of
+    the pool (ratios 0.97 to 1.06);
+  * the correlation of log gradient norm with any program's share of a batch lies between -0.11
+    and +0.09.
+
+  No batch triggers it. A single bad episode is 1/16 of a batch (8 sequences of 128) and would
+  show as a jump, and there is none. With the normalisation check passed, the input
+  normalisation is ruled out as the cause.
+* **The change, for all four arms** (`configs/model/e1-pilot-*.toml`):
+  * `weight_decay` 0.001 to 0.05. Published JEPA recipes use about 0.04 to 0.05; 0.001 was
+    LeWM's value.
+  * `lr` 5e-5 to 2.5e-5: a smaller step at the same schedule.
+
+  Nothing else changes: warm-up 500 steps, cosine decay to 10%, gradient clip 1.0, bf16, and
+  43,800 steps. Every arm trains under the same recipe, so the contrasts stay within one
+  recipe.
+* **The stop rule is unchanged** (the definition of divergence above). If an arm diverges again,
+  nothing further trains or is evaluated until a new change is recorded here and approved.
+* **The staged plan is unchanged.**
+  1. v-expert.
+  2. all-expert, if v-expert is clean.
+  3. The two babbling arms, if both expert arms are clean.
+  4. One evaluation of the four encoders.
+
+  The re-runs with the fixed normalisation and the old recipe (v-expert only) are kept, and
+  are not evaluated. The same holds for the first runs.
+
 **Uncertainty.** With one pretraining seed, a contrast's uncertainty covers only:
 
 * the closed-loop start states: a paired bootstrap over the 50 start states, which are the same
