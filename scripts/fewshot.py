@@ -20,7 +20,8 @@ Usage:
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
     and senses), or the frozen DINOv2 baseline (``model.controls.load_dino``; the frame at each
     step, plus proprio unless ``--no-proprio``), or ``state``: the oracle diagnostic, proprio and
-    the privileged simulator state (``fewshot.state_features``), no encoder.
+    the privileged simulator state (``fewshot.state_features``), no encoder; its closed loop skips
+    the cameras (it reads no frame; the physics and the success test are the same).
   - ``--recal-bn``: a layer's BatchNorm statistics re-estimated on clean sequences of the given
     pool episodes first (``model.recalibrate``; B-pusht-0's BatchNorm rule). Pass the same value
     to ``closed-loop``, so the head runs on the features it was trained on.
@@ -313,12 +314,14 @@ def closed_loop(args: argparse.Namespace) -> None:
     features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     head = fewshot.load_head(args.head)
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
+    oracle = args.encoder.partition(":")[0] == "state"
     with HumanoidRecorder(dict(spec["settings"])) as rec:
         rec.render_right = False  # the privileged second eye: never a model input, half the render
         rec.skip_senses = SKIPPED[args.senses]
+        if oracle:
+            rec.render_eyes = False  # the state oracle reads no frame: judged on the same physics
         first = fewshot.first_step(DT, substeps)
         report = progress(f"{args.block} closed-loop")
-        oracle = args.encoder.partition(":")[0] == "state"
         outcomes = evaluate(rec, seeds, args.max_steps, features, head, first, report, oracle)
     result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
     result |= {"max_steps": args.max_steps, "senses": args.senses}

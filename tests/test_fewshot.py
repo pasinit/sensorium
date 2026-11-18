@@ -427,6 +427,9 @@ def test_the_oracle_sees_in_closed_loop_the_state_a_saved_episode_has() -> None:
         scripted = rec.record(7, "experiment", steps)
         oracle = evaluate(rec, [7], steps, features, head, first, privileged=True)
         program = evaluate_program(rec, [7], steps)
+        rec.render_eyes = False  # the oracle reads no frame: blind, the same features and outcome
+        seen_rendered = list(seen)
+        blind = evaluate(rec, [7], steps, features, head, first, privileged=True)
     # the first query saw step ``first``: the same state as the saved episode at that step
     saved = fewshot.state_features(learned, np.array([first]))
     np.testing.assert_allclose(seen[0], saved, atol=1e-6)
@@ -435,6 +438,8 @@ def test_the_oracle_sees_in_closed_loop_the_state_a_saved_episode_has() -> None:
     assert program[0].queries == 0 and program[0].steps == scripted.length
     assert program[0].success == bool(scripted.meta["success"])
     assert program[0].milestones == scripted.meta.get("milestones", {})
+    assert blind == oracle
+    np.testing.assert_allclose(seen[len(seen_rendered)], seen_rendered[-oracle[0].queries])
 
 
 def test_the_expert_command_runs_the_program_blind_and_reports_each_episode(tmp_path: Path) -> None:
