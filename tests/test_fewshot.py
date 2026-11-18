@@ -368,3 +368,90 @@ def test_the_step_cap_comes_from_the_demonstrations_success_steps(tmp_path: Path
     assert cli.manifest_success_steps([whole]) == [100, 101, 102]
     with pytest.raises(ValueError):
         cli.success_cap([])
+
+
+def test_state_features_are_proprio_and_the_privileged_state_in_order() -> None:
+    ep = demo(0, steps=20)
+    rng = np.random.default_rng(1)
+    ep.privileged = {
+        "target": rng.normal(size=(20, 3)).astype(np.float32),
+        "object_pose": rng.normal(size=(20, 2, 7)).astype(np.float32),
+        "tip_position": rng.normal(size=(20, 2, 3)).astype(np.float32),
+        "qpos": rng.normal(size=(20, 5)).astype(np.float32),  # not a state key: left out
+    }
+    ends = np.array([3, 11])
+    out = fewshot.state_features(ep, ends)
+    assert out.shape == (2, 3 + 14 + 6 + 3)
+    want = np.concatenate(
+        [ep.proprio[ends], ep.privileged["object_pose"][ends].reshape(2, -1)]
+        + [ep.privileged["tip_position"][ends].reshape(2, -1), ep.privileged["target"][ends]],
+        axis=1,
+    )
+    np.testing.assert_allclose(out, want)
+    with pytest.raises(ValueError, match="privileged"):
+        fewshot.state_features(demo(0), ends)
+
+
+def test_the_oracle_sees_in_closed_loop_the_state_a_saved_episode_has() -> None:
+    from sensorium.bodies.h1_closed_loop import (
+        LearnedPolicy,
+        Wrap,
+        evaluate,
+        evaluate_program,
+    )
+    from sensorium.bodies.h1_scene import assets_available
+    from sensorium.bodies.humanoid import HumanoidRecorder
+
+    if not assets_available():
+        pytest.skip("H1 assets missing: run `make h1-assets`")
+    settings: dict[str, object] = {
+        "effector": "hand",
+        "posture": "seated",
+        "program": "push_to_target",
+        "props": ["target_disc"],
+        "task": True,
+    }
+    steps, first = 20, 6
+    seen: list[np.ndarray] = []
+
+    def features(episode: Episode, ends: np.ndarray) -> np.ndarray:
+        out = fewshot.state_features(episode, ends)
+        seen.append(out)
+        return out
+
+    with HumanoidRecorder(settings) as rec:
+        dim = fewshot.state_features(rec.record(7, "experiment", 2), np.array([0])).shape[1]
+        head = fewshot.BCHead(dim=dim, horizon=4, actions=len(rec.space.names), hidden=8)
+        wrap = Wrap(lambda judge: LearnedPolicy(judge, rec, features, head, first, True))
+        learned = rec.record(7, "experiment", steps, wrap=wrap)
+        scripted = rec.record(7, "experiment", steps)
+        oracle = evaluate(rec, [7], steps, features, head, first, privileged=True)
+        program = evaluate_program(rec, [7], steps)
+    # the first query saw step ``first``: the same state as the saved episode at that step
+    saved = fewshot.state_features(learned, np.array([first]))
+    np.testing.assert_allclose(seen[0], saved, atol=1e-6)
+    assert "target" in learned.privileged and seen[0].shape[1] == dim
+    assert oracle[0].queries == -(-(steps - first) // 4)
+    assert program[0].queries == 0 and program[0].steps == scripted.length
+    assert program[0].success == bool(scripted.meta["success"])
+    assert program[0].milestones == scripted.meta.get("milestones", {})
+
+
+def test_the_expert_command_runs_the_program_blind_and_reports_each_episode(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+
+    from sensorium.bodies.h1_scene import assets_available
+
+    if not assets_available():
+        pytest.skip("H1 assets not fetched (make h1-assets)")
+    root = Path(__file__).resolve().parent.parent
+    out = tmp_path / "expert.json"
+    cmd = [sys.executable, str(root / "scripts" / "fewshot.py"), "expert", str(out)]
+    cmd += ["--config", str(root / "configs" / "tasks_demos.toml"), "--block", "pincer_stack"]
+    cmd += ["--episodes", "2", "--max-steps", "3", "--no-render"]
+    run = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    assert run.stdout.count("pincer_stack expert episode seed ") == 2
+    result = json.loads(out.read_text())
+    assert result["rendered"] is False and result["n"] == 2 and result["max_steps"] == 3

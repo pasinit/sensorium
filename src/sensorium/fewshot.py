@@ -8,7 +8,8 @@ demonstrations, and in closed loop by the task's success test in the simulator
 - **Features** (``FeatureFn``): the state of a pretrained sensory layer for the window ending at
   each step (``layer_features``: ``model.planning.encode_at``, eval mode, centre crop), or the
   frozen DINOv2 baseline on the frame at each step (``dino_features_fn``), optionally with the
-  proprio vector.
+  proprio vector. ``state_features`` is the oracle: proprio and the privileged simulator state (no
+  encoder), a diagnostic of the task and the head, never a model.
 - **Cache** (``DemoCache``, ``build_cache``): features at every window end of the demonstrations
   that succeeded, and the ``horizon`` actions that follow each (the action chunk the head predicts).
 - **Head** (``BCHead``, ``train_head``): a two-layer MLP on standardised features, trained with mean
@@ -54,6 +55,32 @@ def dino_features_fn(model: nn.Module, proprio: bool = True) -> FeatureFn:
         return np.asarray(out, dtype=np.float32)
 
     return features
+
+
+STATE_KEYS = ("object_pose", "tip_position", "prop_state", "target")
+"""The privileged arrays of the oracle features, in this order, those the episode has: the props'
+poses, the effector tips, a prop's articulation (the drawer) and the target position."""
+
+
+def state_features(episode: Episode, ends: np.ndarray) -> np.ndarray:
+    """The oracle features: proprio and the privileged state (``STATE_KEYS``) at each window end.
+
+    A diagnostic of whether a task and the head can be learnt from ``k`` demonstrations at all;
+    privileged state is never a model input.
+
+    Raises:
+        ValueError: if the episode carries no privileged state.
+    """
+    if "object_pose" not in episode.privileged:
+        raise ValueError("state features need the privileged state (object_pose)")
+    n = len(ends)
+    parts = [np.asarray(episode.proprio)[ends].reshape(n, -1)]
+    parts += [
+        np.asarray(episode.privileged[k])[ends].reshape(n, -1)
+        for k in STATE_KEYS
+        if k in episode.privileged
+    ]
+    return np.concatenate(parts, axis=1).astype(np.float32)
 
 
 def first_step(dt: float, substeps: int) -> int:
