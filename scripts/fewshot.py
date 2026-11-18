@@ -14,7 +14,7 @@ Usage:
     uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
         --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
-        [--kinds hold replay] [--successful]
+        [--kinds hold replay self] [--successful]
 
 - ``cache``: features and action chunks of the successful demonstrations.
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
@@ -52,6 +52,10 @@ Usage:
   ``--kinds`` runs only some of them (a VM shard of one start state and one floor).
   ``--successful`` replays only the successful demonstrations: the floor a task's start variation
   must keep low (an open-loop copy of a success should not succeed from another start state).
+  ``self`` (only when asked for) is not a floor but a check of the action pipeline: each
+  demonstration in ``--demos`` (sorted; ``--first``/``--episodes`` pick them) replays its own
+  recorded actions from its own seed (``h1_closed_loop.self_replay``), with the drift of the physics
+  from the recording per step (``divergence``). A sound pipeline gives the recording back.
 
 ``closed-loop`` and ``floor`` print one line per finished episode (for a VM's stall rule).
 ``closed-loop`` renders the model's eye only: the second eye is privileged (``RestoredScene``).
@@ -74,6 +78,7 @@ from sensorium.bodies.h1_closed_loop import (
     evaluate,
     evaluate_program,
     evaluate_with,
+    self_replay,
 )
 from sensorium.bodies.humanoid import DT, HumanoidRecorder
 from sensorium.episode import Episode
@@ -241,12 +246,39 @@ def floor(args: argparse.Namespace) -> None:
                     rec, [seed], args.steps, lambda judge, a=actions: ReplayPolicy(judge, a), report
                 )
             result["replay"] = summary(replayed)
+        if "self" in args.kinds:
+            result["self"] = self_check(rec, args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
     for name in args.kinds:
         r = result[name]
         assert isinstance(r, dict)
         print(f"{args.block} floor {name}: {r['success']}/{r['n']} = {r['rate']:.0%}")
+
+
+def self_check(rec: HumanoidRecorder, args: argparse.Namespace) -> dict[str, object]:
+    """``floor --kinds self``: each picked demonstration replays its own actions from its own seed;
+    the outcomes (``summary``) with, per episode, the demonstration and the physics' drift."""
+    paths = sorted(expand(args.demos))[args.first : args.first + args.episodes]
+    if not paths:
+        raise SystemExit(f"no demonstrations match {args.demos} at {args.first}")
+    report = progress(f"{args.block} self")
+    outcomes, rows = [], []
+    for path in paths:
+        demo = Episode.load(path)
+        outcome, drift = self_replay(rec, demo, args.steps)
+        report(outcome)
+        outcomes.append(outcome)
+        rows.append(
+            {
+                "demo": path.name,
+                "demo_success": bool(demo.meta.get("success")),
+                "demo_steps": demo.length,
+            }
+            | drift
+        )
+        print(f"{path.name}: first divergence {drift['first_step']}", flush=True)
+    return summary(outcomes) | {"replays": rows}
 
 
 SKIPPED = {"all": frozenset(), "vision": frozenset({"touch", "audio"})}
@@ -399,7 +431,9 @@ def main() -> None:
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--steps", type=int, default=600)
     p.add_argument("--no-render", action="store_true", help="skip the cameras (open loop only)")
-    p.add_argument("--kinds", nargs="+", choices=["hold", "replay"], default=["hold", "replay"])
+    p.add_argument(
+        "--kinds", nargs="+", choices=["hold", "replay", "self"], default=["hold", "replay"]
+    )
     p.add_argument("--successful", action="store_true", help="replay successful demos only")
     args = parser.parse_args()
     commands = {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}
