@@ -4522,13 +4522,26 @@ evaluation and before any of these runs).
   (T1, T2, T3b, all pincer) and caps (600, 465 and 436 steps). The same 50 closed-loop start
   states per task.
 * **1. Expert.** The task's scripted program runs itself from the 50 start states, judged by its
-  own success test with the same cap (`fewshot.py expert`): 150 episodes. It should reproduce the
-  demonstrators' pre-registered rates within their Wilson intervals: T1 49% [41, 58], T2 43%
-  [38, 49] on the demo set (27% [14, 44] on the check), T3b 73% [64, 80]. If it does not, the
-  start states or the caps are at fault, and checks 2 and 3 cannot be read.
+  own success test with the same cap (`fewshot.py expert`): 150 episodes, rendering off (it is
+  judged on the physics). Its rate is reported per task next to the demonstrators'
+  pre-registered rates (Wilson 95%):
+
+  | task | demonstrator (pre-registered) | expert from the 50 start states |
+  |---|---|---|
+  | T1 | 49% [41, 58] | to be measured |
+  | T2 | 43% [38, 49] demo set, 27% [14, 44] check | to be measured |
+  | T3b | 73% [64, 80] | to be measured |
+
+  It should reproduce them within their intervals. If it does not, the start states or the caps
+  are at fault, and checks 2 and 3 cannot be read.
+* **The expert is the ceiling.** The demonstrator succeeds 27 to 73% of the time. A BC head
+  trained on its successful demonstrations imitates that same program, so it cannot be expected
+  to beat the expert's rate from the same start states. Every closed-loop rate here, the
+  pilot's included, is read against that ceiling, not against 100%.
 * **2. State oracle.** The same head, on proprio and the privileged simulator state instead of an
   encoder: the props' poses, the effector tips, the drawer's travel and the target
-  (`fewshot.state_features`). It is a diagnostic, never a model. Runs:
+  (`fewshot.state_features`). It is a diagnostic, never a model. It reads no frame, so its
+  closed loop runs with the cameras off. Runs:
   * k = 10, k = 50 and k = all;
   * "all" is every successful demonstration but one, because the offline score needs one held
     out: 63, 152 and 92;
@@ -4543,11 +4556,18 @@ evaluation and before any of these runs).
   * If the oracle stays at the floors on every task, the tasks or the head go back to Track A's
     D0.6 before any new pretraining.
   * If DINOv2 or V-babble clears the floors at k = 50 where k = 10 did not, k is part of the gap.
-  * Success is compared with the expert's rate, the most the task allows.
-* **Budget.** About 6 VM-hours on two n2-standard-32 spot VMs: the oracle on one, k = 50 and the
-  expert on the other. That is about $2.3 to $2.5 at the estimated price. The per-episode times
-  are the pilot's (about 0.55 s per step). The stop rules are the evaluation's: a re-cost check
-  on the first 31 episodes, a per-episode cap, and a total cap of 6 h per VM.
+  * Each rate is also reported as a fraction of the expert's rate on the same task. That
+    fraction says how much of the ceiling a head reaches; the floors' bound decides only whether
+    the task is learnt at all.
+* **Budget.** About 4.5 to 6 VM-hours on two n2-standard-32 spot VMs: the oracle on one, k = 50
+  and the expert on the other. That is at most about $2.5 at the estimated price, with a
+  ceiling of $4.8 under the 6 h caps. The per-episode times are the pilot's (about 0.55 s per
+  step with a camera; the oracle runs without one).
+* **Stop rules.** The evaluation's:
+  * a smoke test of one episode of each kind before the fan-out;
+  * a re-cost check on the first 31 episodes;
+  * a per-episode cap;
+  * a total cap of 6 h per VM.
 
 ## GPU smoke test (prepared, not run)
 
