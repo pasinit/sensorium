@@ -470,6 +470,16 @@ def test_a_checkpoint_saved_on_a_gpu_loads_on_a_cpu_only_machine(
     assert load_layer(tmp_path / "c.pt").space.to_json() == space.to_json()
 
 
+def test_a_loaded_layer_decodes_episodes_without_the_training_frame_cache(
+    tmp_path: Path, space: ChannelSpace
+) -> None:
+    cfg = parse_config({"augment": {"frame_cache": str(tmp_path / "training-machine-cache")}})
+    assert cfg.loader().frame_cache
+    model = SensoryModel(TINY, space)
+    save_checkpoint(tmp_path / "c.pt", model, space, replace(cfg, model=TINY), 0)
+    assert load_layer(tmp_path / "c.pt").loader.frame_cache == ""
+
+
 EMA = replace(TINY, objective="ema_vicreg")
 
 
