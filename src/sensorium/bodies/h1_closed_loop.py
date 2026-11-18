@@ -191,6 +191,55 @@ def evaluate_program(
     return out
 
 
+DIVERGENCE_STEPS = (0, 1, 2, 5, 10, 25, 50, 100, 200, 400)
+"""Steps at which ``divergence`` reports the gap (those within the compared length)."""
+
+
+def divergence(
+    recorded: Episode, replayed: Episode, tol_qpos: float = 1e-3, tol_pos: float = 1e-3
+) -> dict[str, object]:
+    """How far a replay's physics drifts from the recorded episode, step by step.
+
+    ``qpos`` is the largest absolute joint-position gap (all of ``privileged["qpos"]``) and ``pos``
+    the largest gap in the props' positions (metres) at each step, over the steps both have.
+    ``first_step`` is the first step at which either exceeds its tolerance (``None``: never).
+    """
+    n = min(recorded.length, replayed.length)
+    dq = np.abs(
+        np.asarray(recorded.privileged["qpos"])[:n] - np.asarray(replayed.privileged["qpos"])[:n]
+    )
+    dq = dq.reshape(n, -1).max(1)
+    a = np.asarray(recorded.privileged["object_pose"])[:n, :, :3]
+    b = np.asarray(replayed.privileged["object_pose"])[:n, :, :3]
+    dp = np.abs(a - b).reshape(n, -1).max(1) if a.size else np.zeros(n)
+    over = np.flatnonzero((dq > tol_qpos) | (dp > tol_pos))
+    first = int(over[0]) if len(over) else None
+    return {
+        "steps_compared": int(n),
+        "first_step": first,
+        "qpos_max": float(dq.max()) if n else 0.0,
+        "pos_max": float(dp.max()) if n else 0.0,
+        "at": {str(s): [float(dq[s]), float(dp[s])] for s in DIVERGENCE_STEPS if s < n},
+        "at_first": None if first is None else [float(dq[first]), float(dp[first])],
+    }
+
+
+def self_replay(
+    recorder: HumanoidRecorder, demo: Episode, steps: int
+) -> tuple[Outcome, dict[str, object]]:
+    """Replay a demonstration's own recorded actions open loop from its own seed, judged by the task
+    program, and measure the physics' drift from the recording (``divergence``).
+
+    With a deterministic simulator and actions logged at the step they are applied, the replay is
+    the recording again: same success, zero drift. A drift points at the step where logging,
+    timing or determinism breaks.
+    """
+    seed = int(str(demo.meta["seed"]))
+    wrap = Wrap(lambda judge: ReplayPolicy(judge, demo.action))
+    episode = recorder.record(seed, "experiment", steps, wrap=wrap)
+    return _outcome(seed, episode, 0), divergence(demo, episode)
+
+
 def _outcome(seed: int, episode: Episode, queries: int) -> Outcome:
     """An episode's outcome: success, length, sub-goals, and whether it ran into the cap."""
     milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))

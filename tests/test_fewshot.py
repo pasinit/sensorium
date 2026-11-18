@@ -460,3 +460,59 @@ def test_the_expert_command_runs_the_program_blind_and_reports_each_episode(tmp_
     assert run.stdout.count("pincer_stack expert episode seed ") == 2
     result = json.loads(out.read_text())
     assert result["rendered"] is False and result["n"] == 2 and result["max_steps"] == 3
+
+
+def test_divergence_is_nil_for_an_episode_and_itself_and_finds_the_first_drift() -> None:
+    from sensorium.bodies.h1_closed_loop import divergence
+
+    ep = demo(0, steps=30)
+    rng = np.random.default_rng(2)
+    ep.privileged = {
+        "qpos": rng.normal(size=(30, 6)).astype(np.float32),
+        "object_pose": rng.normal(size=(30, 2, 7)).astype(np.float32),
+    }
+    same = divergence(ep, ep)
+    assert same["first_step"] is None and same["qpos_max"] == 0.0 and same["pos_max"] == 0.0
+    moved = demo(0, steps=30)
+    moved.privileged = {k: v.copy() for k, v in ep.privileged.items()}
+    moved.privileged["object_pose"][12:, 1, 0] += 0.01  # a prop slides from step 12
+    d = divergence(ep, moved)
+    assert d["first_step"] == 12 and d["pos_max"] == pytest.approx(0.01, abs=1e-6)
+    at = d["at"]
+    assert d["qpos_max"] == 0.0 and isinstance(at, dict) and at["10"] == [0.0, 0.0]
+
+
+def test_a_demonstration_replays_its_own_actions_into_the_same_episode(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+    import tomllib
+
+    from sensorium.bodies.h1_closed_loop import self_replay
+    from sensorium.bodies.h1_scene import assets_available
+    from sensorium.bodies.humanoid import HumanoidRecorder
+
+    if not assets_available():
+        pytest.skip("H1 assets missing: run `make h1-assets`")
+    root = Path(__file__).resolve().parent.parent
+    config = root / "configs" / "tasks_demos.toml"
+    settings = tomllib.loads(config.read_text())["humanoid"]["pincer_stack"]["settings"]
+    steps = 12
+    with HumanoidRecorder(dict(settings)) as rec:
+        rec.render_eyes = False
+        recorded = rec.record(11, "experiment", steps)
+        outcome, drift = self_replay(rec, recorded, steps)
+    assert outcome.seed == 11 and outcome.steps == recorded.length
+    assert outcome.success == bool(recorded.meta["success"])
+    assert drift["first_step"] is None, drift  # deterministic, actions logged at the applied step
+    path = tmp_path / "demo-0.npz"
+    recorded.save(path)
+    out = tmp_path / "self.json"
+    cmd = [sys.executable, str(root / "scripts" / "fewshot.py"), "floor", str(out)]
+    cmd += ["--config", str(config), "--block", "pincer_stack", "--demos", str(path)]
+    cmd += ["--steps", str(steps), "--kinds", "self", "--no-render"]
+    run = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    assert run.stdout.count("pincer_stack self episode seed 11") == 1
+    result = json.loads(out.read_text())["self"]
+    assert result["n"] == 1 and result["replays"][0]["demo"] == "demo-0.npz"
+    assert result["replays"][0]["first_step"] is None
