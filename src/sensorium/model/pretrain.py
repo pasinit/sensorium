@@ -313,7 +313,7 @@ def save_checkpoint(
 
 def load_layer(path: Path) -> SensoryLayer:
     """Rebuild a trained layer from a checkpoint written by ``save_checkpoint``."""
-    raw = torch.load(path, weights_only=True)
+    raw = torch.load(path, map_location="cpu", weights_only=True)  # saved on a GPU, read anywhere
     mc = dict(raw["model_config"])
     mc["senses"] = tuple(mc["senses"])
     # checkpoints older than the options: no reconstruction (B-fix-0), two passes (B-fix-1)

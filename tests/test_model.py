@@ -455,6 +455,21 @@ def test_checkpoint_round_trip_reproduces_the_states(
     assert np.allclose(a, b, atol=1e-5)
 
 
+def test_a_checkpoint_saved_on_a_gpu_loads_on_a_cpu_only_machine(
+    tmp_path: Path, space: ChannelSpace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_checkpoint(tmp_path / "c.pt", SensoryModel(TINY, space), space, RunConfig(model=TINY), 7)
+    load = torch.load
+
+    def cpu_only(*args: Any, **kwargs: Any) -> Any:  # what a CUDA-saved file does without a GPU
+        if kwargs.get("map_location") != "cpu":
+            raise RuntimeError("Attempting to deserialize object on a CUDA device")
+        return load(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "load", cpu_only)
+    assert load_layer(tmp_path / "c.pt").space.to_json() == space.to_json()
+
+
 EMA = replace(TINY, objective="ema_vicreg")
 
 

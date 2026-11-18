@@ -279,7 +279,7 @@ def save_head(head: BCHead, cfg: BCConfig, path: Path, meta: dict[str, object]) 
 
 def load_head(path: Path) -> BCHead:
     """Rebuild a head written by ``save_head``."""
-    raw = torch.load(path, weights_only=True)
+    raw = torch.load(path, map_location="cpu", weights_only=True)
     head = BCHead(raw["dim"], raw["horizon"], raw["actions"], raw["config"]["hidden"])
     head.load_state_dict(raw["state"])
     return head.eval()
