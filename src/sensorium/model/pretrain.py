@@ -322,7 +322,9 @@ def load_layer(path: Path) -> SensoryLayer:
     space = ChannelSpace.from_json(raw["space"])
     model = SensoryModel(ModelConfig(**mc), space)
     model.load_state_dict(raw["model"])
-    return SensoryLayer(model, space, LoaderConfig(**raw["loader_config"]))
+    # the frame cache is a directory of the training machine: a loaded layer decodes episodes itself
+    loader = LoaderConfig(**{**raw["loader_config"], "frame_cache": ""})
+    return SensoryLayer(model, space, loader)
 
 
 RESUME = "resume.pt"
