@@ -2,12 +2,15 @@
 
 Usage:
     uv run python scripts/fewshot.py cache <out.npz> --demos 'data/tasks_demos/humanoid/*.npz'
-        --encoder layer:<checkpoint.pt> | dino:<weights.pth> [--no-proprio] [--drop SENSE ...]
+        --encoder layer:<checkpoint.pt> | dino:<weights.pth> | state
+        [--no-proprio] [--drop SENSE ...]
         [--recal-bn '<pool episodes glob>'] [--horizon H] [--stride S]
     uv run python scripts/fewshot.py sweep <cache.npz> <out_dir> [--k 1 5 10 50] [--seeds 0 1 2]
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
         --block <name> --encoder ... [--first I] [--episodes N] [--max-steps 600]
         [--senses all|vision]
+    uv run python scripts/fewshot.py expert <out.json> --config <demos.toml> --block <name>
+        [--first I] [--episodes N] [--max-steps 600] [--no-render]
     uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
         --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
@@ -16,7 +19,9 @@ Usage:
 - ``cache``: features and action chunks of the successful demonstrations.
   - The encoder is a pretrained layer's checkpoint (``model.pretrain.save_checkpoint``; its windows
     and senses), or the frozen DINOv2 baseline (``model.controls.load_dino``; the frame at each
-    step, plus proprio unless ``--no-proprio``).
+    step, plus proprio unless ``--no-proprio``), or ``state``: the oracle diagnostic, proprio and
+    the privileged simulator state (``fewshot.state_features``), no encoder; its closed loop skips
+    the cameras (it reads no frame; the physics and the success test are the same).
   - ``--recal-bn``: a layer's BatchNorm statistics re-estimated on clean sequences of the given
     pool episodes first (``model.recalibrate``; B-pusht-0's BatchNorm rule). Pass the same value
     to ``closed-loop``, so the head runs on the features it was trained on.
@@ -34,6 +39,9 @@ Usage:
     without succeeding is a failure, counted in ``capped``.
   - ``--senses vision`` skips touch and sound synthesis (zeros in their place) for encoders that
     read neither, the V arms and DINOv2; it is refused for a layer that reads them.
+- ``expert``: the task's scripted program itself on the closed-loop start states, judged and capped
+  as the heads are (``h1_closed_loop.evaluate_program``): the ceiling the task allows. Judged on the
+  physics state, so ``--no-render`` skips the cameras.
 - ``cap``: a task's closed-loop step cap, 1.5 x the 95th percentile of the steps at which its
   demonstrations succeeded, from their generation manifests (metadata only).
 - ``floor``: the task's null-policy floors on the same start states. ``hold`` keeps the start
@@ -60,7 +68,13 @@ from pathlib import Path
 import numpy as np
 
 from sensorium import fewshot
-from sensorium.bodies.h1_closed_loop import Outcome, ReplayPolicy, evaluate, evaluate_with
+from sensorium.bodies.h1_closed_loop import (
+    Outcome,
+    ReplayPolicy,
+    evaluate,
+    evaluate_program,
+    evaluate_with,
+)
 from sensorium.bodies.humanoid import DT, HumanoidRecorder
 from sensorium.episode import Episode
 from sensorium.generate import episode_seed
@@ -82,14 +96,18 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def make_encoder(
     spec: str, proprio: bool, drop: Sequence[str], recal: str = ""
 ) -> tuple[fewshot.FeatureFn, int]:
-    """``(features, substeps)`` of ``layer:<checkpoint>`` or ``dino:<weights>``. With ``recal`` (a
-    glob of pool episodes), a layer's BatchNorm statistics are re-estimated on clean sequences of
-    them first (``model.recalibrate``).
+    """``(features, substeps)`` of ``layer:<checkpoint>``, ``dino:<weights>`` or ``state`` (the
+    oracle, ``fewshot.state_features``). With ``recal`` (a glob of pool episodes), a layer's
+    BatchNorm statistics are re-estimated on clean sequences of them first (``model.recalibrate``).
 
     Raises:
-        ValueError: for another kind, or ``recal`` with DINOv2.
+        ValueError: for another kind, or ``recal`` with DINOv2 or the state.
     """
     kind, _, path = spec.partition(":")
+    if kind == "state":
+        if recal:
+            raise ValueError("--recal-bn applies to a sensory layer only")
+        return fewshot.state_features, 1
     if kind == "layer":
         layer = load_layer(Path(path))
         if recal:
@@ -296,19 +314,38 @@ def closed_loop(args: argparse.Namespace) -> None:
     features, substeps = make_encoder(args.encoder, not args.no_proprio, args.drop, args.recal_bn)
     head = fewshot.load_head(args.head)
     seeds = eval_seeds(config, args.block, args.episodes, args.first)
+    oracle = args.encoder.partition(":")[0] == "state"
     with HumanoidRecorder(dict(spec["settings"])) as rec:
         rec.render_right = False  # the privileged second eye: never a model input, half the render
         rec.skip_senses = SKIPPED[args.senses]
+        if oracle:
+            rec.render_eyes = False  # the state oracle reads no frame: judged on the same physics
         first = fewshot.first_step(DT, substeps)
-        outcomes = evaluate(
-            rec, seeds, args.max_steps, features, head, first, progress(f"{args.block} closed-loop")
-        )
+        report = progress(f"{args.block} closed-loop")
+        outcomes = evaluate(rec, seeds, args.max_steps, features, head, first, report, oracle)
     result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
     result |= {"max_steps": args.max_steps, "senses": args.senses}
     result |= summary(outcomes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
     print(f"{args.block}: {result['success']}/{result['n']} = {result['rate']:.0%}")
+
+
+def expert(args: argparse.Namespace) -> None:
+    """Run the task's scripted program on the closed-loop start states and write the outcomes."""
+    config = tomllib.loads(args.config.read_text())
+    spec = config["humanoid"][args.block]
+    seeds = eval_seeds(config, args.block, args.episodes, args.first)
+    with HumanoidRecorder(dict(spec["settings"])) as rec:
+        rec.render_right = False
+        if args.no_render:
+            rec.render_eyes = False
+        outcomes = evaluate_program(rec, seeds, args.max_steps, progress(f"{args.block} expert"))
+    result = {"block": args.block, "max_steps": args.max_steps, "rendered": not args.no_render}
+    result |= summary(outcomes)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(result, indent=1))
+    print(f"{args.block} expert: {result['success']}/{result['n']} = {result['rate']:.0%}")
 
 
 def main() -> None:
@@ -343,6 +380,14 @@ def main() -> None:
     p.add_argument("--max-steps", "--steps", dest="max_steps", type=int, default=600)
     p.add_argument("--senses", choices=sorted(SKIPPED), default="all")
     encoder_args(p)
+    p = sub.add_parser("expert")
+    p.add_argument("out", type=Path)
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--block", required=True)
+    p.add_argument("--first", type=int, default=0)
+    p.add_argument("--episodes", type=int, default=50)
+    p.add_argument("--max-steps", "--steps", dest="max_steps", type=int, default=600)
+    p.add_argument("--no-render", action="store_true", help="skip the cameras (judged on physics)")
     p = sub.add_parser("cap")
     p.add_argument("manifests", help="glob of a task's demonstration manifests")
     p = sub.add_parser("floor")
@@ -358,7 +403,7 @@ def main() -> None:
     p.add_argument("--successful", action="store_true", help="replay successful demos only")
     args = parser.parse_args()
     commands = {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}
-    {**commands, "cap": cap}[args.command](args)
+    {**commands, "cap": cap, "expert": expert}[args.command](args)
 
 
 if __name__ == "__main__":

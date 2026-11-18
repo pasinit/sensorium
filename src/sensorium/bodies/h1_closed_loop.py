@@ -20,6 +20,7 @@ import numpy as np
 
 from sensorium.bodies.h1_experiments import ExperimentPolicy
 from sensorium.bodies.humanoid import HumanoidRecorder, Log
+from sensorium.episode import Episode
 from sensorium.fewshot import BCHead, FeatureFn
 
 
@@ -32,6 +33,8 @@ class LearnedPolicy:
         features: The frozen encoder (``fewshot.FeatureFn``).
         head: The trained head; its ``horizon`` actions are played before it is asked again.
         first: The first step a window can end at (``fewshot.first_end``).
+        privileged: Hand the features the privileged state too (the oracle diagnostic,
+            ``fewshot.state_features``); off for every encoder.
     """
 
     needs_observation = True
@@ -43,9 +46,11 @@ class LearnedPolicy:
         features: FeatureFn,
         head: BCHead,
         first: int,
+        privileged: bool = False,
     ) -> None:
         self.judge, self.recorder, self.features, self.head = judge, recorder, features, head
         self.first, self.window = first, first + 1
+        self.privileged = privileged
         self.plan: list[np.ndarray] = []
         self.log: Log | None = None
         self.hold: np.ndarray | None = None
@@ -68,7 +73,7 @@ class LearnedPolicy:
         if step < self.first:
             return self.hold
         if not self.plan:
-            recent = self.recorder.recent_episode(self.log, self.window)
+            recent = self.recorder.recent_episode(self.log, self.window, self.privileged)
             feats = self.features(recent, np.array([recent.length - 1]))
             self.plan = list(self.head.predict(feats)[0])
             self.queries += 1
@@ -149,15 +154,49 @@ def evaluate(
     head: BCHead,
     first: int,
     on_episode: Callable[[Outcome], None] | None = None,
+    privileged: bool = False,
 ) -> list[Outcome]:
-    """Run the learned controller on the recorder's task from each seed (``evaluate_with``)."""
+    """Run the learned controller on the recorder's task from each seed (``evaluate_with``);
+    ``privileged`` for the oracle features (``LearnedPolicy``)."""
     return evaluate_with(
         recorder,
         seeds,
         steps,
-        lambda judge: LearnedPolicy(judge, recorder, features, head, first),
+        lambda judge: LearnedPolicy(judge, recorder, features, head, first, privileged),
         on_episode,
     )
+
+
+def evaluate_program(
+    recorder: HumanoidRecorder,
+    seeds: Sequence[int],
+    steps: int,
+    on_episode: Callable[[Outcome], None] | None = None,
+) -> list[Outcome]:
+    """Run the task's scripted program itself from each seed: the demonstrator on the closed-loop
+    start states, judged by its own success test with the same step cap (the reachable ceiling of
+    the task; ``queries`` is 0).
+
+    Raises:
+        ValueError: if the recorder has no task program.
+    """
+    if not recorder.program:
+        raise ValueError("the expert needs a task program (the program setting)")
+    out = []
+    for seed in seeds:
+        outcome = _outcome(seed, recorder.record(seed, "experiment", steps), 0)
+        out.append(outcome)
+        if on_episode is not None:
+            on_episode(outcome)
+    return out
+
+
+def _outcome(seed: int, episode: Episode, queries: int) -> Outcome:
+    """An episode's outcome: success, length, sub-goals, and whether it ran into the cap."""
+    milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))
+    success = bool(episode.meta["success"])
+    capped = not success and episode.meta.get("end_reason") == "steps"
+    return Outcome(seed, success, episode.length, queries, dict(milestones), capped)
 
 
 def evaluate_with(
@@ -184,16 +223,7 @@ def evaluate_with(
         wrap = Wrap(make)
         episode = recorder.record(seed, "experiment", steps, wrap=wrap)
         assert wrap.policy is not None
-        milestones = cast(dict[str, bool], episode.meta.get("milestones", {}))
-        success = bool(episode.meta["success"])
-        outcome = Outcome(
-            seed,
-            success,
-            episode.length,
-            wrap.policy.queries,
-            dict(milestones),
-            not success and episode.meta.get("end_reason") == "steps",
-        )
+        outcome = _outcome(seed, episode, wrap.policy.queries)
         out.append(outcome)
         if on_episode is not None:
             on_episode(outcome)

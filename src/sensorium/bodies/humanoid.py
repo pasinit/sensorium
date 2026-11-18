@@ -955,11 +955,21 @@ class HumanoidRecorder:
             meta=meta,
         )
 
-    def recent_episode(self, log: Log, steps: int) -> Episode:
-        """The model inputs of the last ``steps`` logged steps as an ``Episode`` (no privileged
-        state, no text): what a learned controller encodes while the episode runs."""
+    def recent_episode(self, log: Log, steps: int, privileged: bool = False) -> Episode:
+        """The model inputs of the last ``steps`` logged steps as an ``Episode`` (no text): what a
+        learned controller encodes while the episode runs. No privileged state unless
+        ``privileged`` (the oracle diagnostic, ``fewshot.state_features``): then the props' poses,
+        the tips, the articulation and the target, as the saved episode has them."""
         n = min(steps, len(log.rgb))
         audio = np.stack(log.audio[-n:])
+        state: dict[str, np.ndarray] = {}
+        if privileged:
+            state["object_pose"] = np.stack(log.objects[-n:])
+            state["tip_position"] = np.stack(log.tips[-n:])
+            if log.prop_state:
+                state["prop_state"] = np.stack(log.prop_state[-n:])
+            if self.target_geom is not None:
+                state["target"] = np.tile(self.target.astype(np.float32), (n, 1))
         return Episode(
             body="humanoid",
             dt=DT,
@@ -972,6 +982,7 @@ class HumanoidRecorder:
             proprio_names=self.proprio_names,
             touch_names=self.touch_names,
             action_names=self.space.names,
+            privileged=state,
             text=[""] * n,
         )
 
