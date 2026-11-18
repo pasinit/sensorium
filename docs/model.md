@@ -4568,6 +4568,23 @@ evaluation and before any of these runs).
   * a re-cost check on the first 31 episodes;
   * a per-episode cap;
   * a total cap of 6 h per VM.
+* **Addendum: demo self-replay** (added 2026-11-18, after the oracle's result and before this
+  check's run). The state oracle reached an offline action RMSE of 0.03 with every demonstration,
+  yet succeeded in 2 of 1,350 closed-loop episodes. This check separates the two explanations.
+  * **Run.** Each successful demonstration of T1, T2 and T3b replays its own recorded actions,
+    open loop, from its own seed (`fewshot.py floor --kinds self`, no render): about 310 episodes,
+    each judged by the task's success test with the task's cap.
+  * **Per-step drift.** Each replay also logs how far its physics drifts from the recording: the
+    largest joint-position and prop-position gaps at each step, and the first step where either
+    exceeds 1e-3. A failure then points at a step.
+  * **Reading, per task, written before the run.**
+    * At least 90% of the replays succeed: the action pipeline is sound (the simulator is
+      deterministic, and actions are logged at the step they are applied). The oracle's failure
+      is then closed-loop compounding error, and the fix is the head or protocol, not the data.
+    * Below 90%: a logging, timing or determinism bug. The pilot's closed-loop numbers, and the
+      oracle's, are then not interpretable until it is fixed.
+  * **Budget.** One n2-standard-32 spot VM, under 15 minutes and under $0.2 (estimated), inside
+    the diagnosis budget. A one-episode smoke test runs first.
 
 ## GPU smoke test (prepared, not run)
 
