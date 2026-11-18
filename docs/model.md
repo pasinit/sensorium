@@ -4509,6 +4509,46 @@ effect; contrasts feed the go/no-go and the full sweep's power estimate.
 pretraining run at v0's 69 GFLOPs per sequence, plus minutes per frozen head and the closed-loop
 runs on CPU.
 
+**D-diag-0: diagnosing the pilot's no-go** (pre-registered 2026-11-18, after the pilot's
+evaluation and before any of these runs).
+
+* **Why.** The pilot evaluation finished 14 of its 15 (encoder, task) pairs; DINOv2 on T2 is
+  still running. Closed-loop success at k = 10 was 2 of 2,100 episodes, one each for All-babble
+  and DINOv2 on T1. No encoder rose above the floors on any task, so the go / no-go rule fails at
+  check 2 on every task, and at check 3. Offline action RMSE did separate the encoders. Three
+  cheap checks say whether the blocker is the tasks and the protocol (the success test, the caps,
+  the BC head) or the representations.
+* **Shared settings.** The pilot's harness (`scripts/fewshot.py`), BC head (`BCConfig`), tasks
+  (T1, T2, T3b, all pincer) and caps (600, 465 and 436 steps). The same 50 closed-loop start
+  states per task.
+* **1. Expert.** The task's scripted program runs itself from the 50 start states, judged by its
+  own success test with the same cap (`fewshot.py expert`): 150 episodes. It should reproduce the
+  demonstrators' pre-registered rates within their Wilson intervals: T1 49% [41, 58], T2 43%
+  [38, 49] on the demo set (27% [14, 44] on the check), T3b 73% [64, 80]. If it does not, the
+  start states or the caps are at fault, and checks 2 and 3 cannot be read.
+* **2. State oracle.** The same head, on proprio and the privileged simulator state instead of an
+  encoder: the props' poses, the effector tips, the drawer's travel and the target
+  (`fewshot.state_features`). It is a diagnostic, never a model. Runs:
+  * k = 10, k = 50 and k = all;
+  * "all" is every successful demonstration but one, because the offline score needs one held
+    out: 63, 152 and 92;
+  * 3 head seeds and 50 start states per (task, k): 1,350 episodes in all.
+* **3. More demonstrations.** DINOv2 and V-babble, the two best encoders offline, run in closed
+  loop at k = 50 with the pilot's existing k = 50 heads: 3 tasks, 3 head seeds and 50 start
+  states each, 900 episodes.
+* **Reading, per task.**
+  * If the state oracle at k = 50 or all is above the floors' upper Wilson bound (0.071), the
+    task and the head can be learnt from demonstrations. The pilot's gap is then the
+    representation or k.
+  * If the oracle stays at the floors on every task, the tasks or the head go back to Track A's
+    D0.6 before any new pretraining.
+  * If DINOv2 or V-babble clears the floors at k = 50 where k = 10 did not, k is part of the gap.
+  * Success is compared with the expert's rate, the most the task allows.
+* **Budget.** About 6 VM-hours on two n2-standard-32 spot VMs: the oracle on one, k = 50 and the
+  expert on the other. That is about $2.3 to $2.5 at the estimated price. The per-episode times
+  are the pilot's (about 0.55 s per step). The stop rules are the evaluation's: a re-cost check
+  on the first 31 episodes, a per-episode cap, and a total cap of 6 h per VM.
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
