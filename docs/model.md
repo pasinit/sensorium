@@ -4586,6 +4586,70 @@ evaluation and before any of these runs).
   * **Budget.** One n2-standard-32 spot VM, under 15 minutes and under $0.2 (estimated), inside
     the diagnosis budget. A one-episode smoke test runs first.
 
+**D-diag-0 results** (the runs finished 2026-11-19):
+
+* The expert, from the 50 start states, reproduced the demonstrators' rates: T1 27/50, T2 21/50
+  and T3b 38/50.
+* The state oracle stayed at the floors on every task and every k: 2 of 1,350 episodes
+  succeeded. Its offline action RMSE was 0.03 with every demonstration.
+* DINOv2 and V-babble at k = 50 succeeded in 0 of 900 episodes.
+* The self-replays of the successful demonstrations succeeded 52/64 on T1 (below the 90% rule),
+  150/153 on T2 and 92/93 on T3b. The drift was traced to the recorder: it applied float64
+  actions but logged them as float32. The drift starts near 1e-7 at step 1 and passes 1e-3 near
+  step 70.
+* So the representations are not the blocker. The tasks amplify small deviations within about
+  70 steps, and a head cloned from clean expert trajectories has no recovery data.
+
+**D-diag-1: a closed-loop protocol check on the state oracle** (pre-registered 2026-11-21, before
+any of its runs; option A of the D-diag-0 follow-ups, total cap $1.5).
+
+* **Fixed settings.**
+  * The state oracle (`fewshot.state_features`) at k = all: 63, 152 and 92 successful
+    demonstrations.
+  * The pilot's BC head configuration, caps and 50 closed-loop start states.
+  * 3 head seeds, so 150 episodes per task and 450 per arm.
+  * The existing demonstration sets. Nothing is regenerated in stage 1. These demonstrations
+    were recorded before the recorder was fixed to apply the action exactly as logged; the fix
+    changes future demonstrations only at the 1e-7 level.
+* **Baseline**, already measured in D-diag-0: chunks of 4 actions played open loop, then the
+  head is asked again. 0/150, 2/150 and 0/150.
+* **Stage 1: how the head's actions are executed** (no new data).
+  * **A1, chunk length 1.** A head trained on horizon-1 action chunks, asked again at every
+    step.
+  * **A2, temporal ensembling.** The baseline's horizon-4 heads, asked at every step. Each step
+    executes a weighted mean of every prediction made for that step by the last 4 queries. The
+    weights are ACT's, exp(-0.01 i), with i = 0 for the oldest prediction, so the mean is close
+    to uniform.
+* **Reading, per arm and task.** The arm lifts the oracle on a task if its success's Wilson 95%
+  lower bound exceeds the floors' upper bound, 0.071. Each rate is also reported as a fraction
+  of the expert's on the same starts: 54%, 42% and 76%.
+* **Stage-2 trigger.** Stage 2 runs only if no stage-1 arm lifts the oracle on at least 2 of the
+  3 tasks.
+* **Stage 2: recovery data, DART first.**
+  * **Demonstrations.** The scripted expert records new demonstrations with Gaussian noise
+    added to each executed action, while the clean action it intended is logged as the label.
+    The noise is fixed now, before any data: σ = 0.03 per action dimension, the state oracle's
+    offline RMSE at k = all (0.030, 0.029 and 0.029).
+  * **Demo success floor.** If the noisy expert succeeds less than half as often as the clean
+    demonstrator (below 24.5% on T1, 21.5% on T2, 36.5% on T3b), σ is halved once, to 0.015.
+  * **Attempts.** Recording continues per task until there are as many successes as in the
+    clean sets (64, 153 and 93), with a cap of 3 times that number in attempts.
+  * **Heads and runs.** Heads at k = all on the DART demonstrations. They execute in the
+    stage-1 arm with the higher mean success over the three tasks, or the baseline's chunks of 4
+    if neither stage-1 arm succeeds. 450 closed-loop episodes, read by the same rule.
+  * **DAgger is optional.** It runs only after DART, and only after a label-quality smoke check
+    passes: labelling from the expert program, run on 10 episodes of its own, must return
+    exactly the actions it executed. The check's design is recorded here before DAgger runs.
+* **Budget.** Stage 1 is 900 episodes: about 0.5 h on one n2-standard-32 spot VM, about $0.3
+  (estimated from D-diag-0's 39 s per unrendered oracle episode, 31 at once). Stage 2 is about
+  2,300 episodes, about $0.5 to $0.8. The total cap is $1.5, and anything beyond it is escalated
+  before it is spent.
+* **Stop rules.** As in D-diag-0:
+  * a smoke test of one episode per arm before the fan-out;
+  * a per-episode cap;
+  * a total cap per VM;
+  * a completeness check before "done".
+
 ## GPU smoke test (prepared, not run)
 
 `sensorium.model.gpu_smoke` measures, on one GPU, in three phases so a slow run says why:
