@@ -23,6 +23,10 @@ from sensorium.bodies.humanoid import HumanoidRecorder, Log
 from sensorium.episode import Episode
 from sensorium.fewshot import BCHead, FeatureFn
 
+ENSEMBLE_M = 0.01
+"""Temporal ensembling's weight decay (ACT's ``m``): close to a uniform mean of the overlapping
+predictions, the oldest weighted most."""
+
 
 class LearnedPolicy:
     """A head on frozen features drives the arms; the task program ``judge`` only judges.
@@ -35,6 +39,11 @@ class LearnedPolicy:
         first: The first step a window can end at (``fewshot.first_end``).
         privileged: Hand the features the privileged state too (the oracle diagnostic,
             ``fewshot.state_features``); off for every encoder.
+        query_every: Steps between queries (``None``: the head's ``horizon``, each chunk played
+            in full). A query replaces the chunk being played unless ``ensemble``.
+        ensemble: Temporal ensembling (ACT): each step plays the weighted mean of every
+            prediction for that step from the chunks still covering it, weights
+            ``exp(-ENSEMBLE_M * i)`` with ``i = 0`` for the oldest.
     """
 
     needs_observation = True
@@ -47,11 +56,15 @@ class LearnedPolicy:
         head: BCHead,
         first: int,
         privileged: bool = False,
+        query_every: int | None = None,
+        ensemble: bool = False,
     ) -> None:
         self.judge, self.recorder, self.features, self.head = judge, recorder, features, head
         self.first, self.window = first, first + 1
         self.privileged = privileged
-        self.plan: list[np.ndarray] = []
+        self.query_every = query_every or head.horizon
+        self.ensemble = ensemble
+        self.chunks: list[tuple[int, np.ndarray]] = []  # (query step, [horizon, A]), oldest first
         self.log: Log | None = None
         self.hold: np.ndarray | None = None
         self.queries = 0
@@ -60,7 +73,7 @@ class LearnedPolicy:
         """The judge's start (props, layout, arms), as for the demonstrations."""
         home = self.judge.reset(data)
         self.hold = np.asarray(self.judge.space.to_action(home), dtype=np.float32)
-        self.plan = []
+        self.chunks = []
         return home
 
     def see(self, log: Log) -> None:
@@ -68,16 +81,24 @@ class LearnedPolicy:
         self.log = log
 
     def act(self, step: int, data: mujoco.MjData) -> np.ndarray:
-        """The next action of the current chunk; a new chunk every ``horizon`` steps."""
+        """This step's action: from the newest chunk, or the ensemble of the chunks covering it;
+        a new chunk every ``query_every`` steps."""
         assert self.log is not None and self.hold is not None
         if step < self.first:
             return self.hold
-        if not self.plan:
+        if (step - self.first) % self.query_every == 0:
             recent = self.recorder.recent_episode(self.log, self.window, self.privileged)
             feats = self.features(recent, np.array([recent.length - 1]))
-            self.plan = list(self.head.predict(feats)[0])
+            self.chunks.append((step, np.asarray(self.head.predict(feats)[0])))
             self.queries += 1
-        return np.asarray(self.plan.pop(0), dtype=np.float32)
+        live = [(s, c) for s, c in self.chunks if step - s < len(c)]
+        self.chunks = live or self.chunks[-1:]
+        if not self.ensemble or not live:
+            s, chunk = self.chunks[-1]
+            return np.asarray(chunk[min(step - s, len(chunk) - 1)], dtype=np.float32)
+        weights = np.exp(-ENSEMBLE_M * np.arange(len(live)))
+        preds = np.stack([c[step - s] for s, c in live])
+        return np.asarray(weights @ preds / weights.sum(), dtype=np.float32)
 
     def done(self, data: mujoco.MjData) -> bool:
         """The judge's success test (held ``SUCCESS_STEPS``)."""
@@ -155,14 +176,18 @@ def evaluate(
     first: int,
     on_episode: Callable[[Outcome], None] | None = None,
     privileged: bool = False,
+    query_every: int | None = None,
+    ensemble: bool = False,
 ) -> list[Outcome]:
     """Run the learned controller on the recorder's task from each seed (``evaluate_with``);
-    ``privileged`` for the oracle features (``LearnedPolicy``)."""
+    ``privileged``, ``query_every`` and ``ensemble`` as for ``LearnedPolicy``."""
     return evaluate_with(
         recorder,
         seeds,
         steps,
-        lambda judge: LearnedPolicy(judge, recorder, features, head, first, privileged),
+        lambda judge: LearnedPolicy(
+            judge, recorder, features, head, first, privileged, query_every, ensemble
+        ),
         on_episode,
     )
 

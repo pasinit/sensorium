@@ -2,6 +2,7 @@
 short closed-loop episode in the simulator."""
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -536,3 +537,62 @@ def test_a_replay_of_an_episodes_own_actions_is_bit_exact() -> None:
         _, drift = self_replay(rec, recorded, steps)
     # the applied action is the logged float32 one: no drift at all, not just below tolerance
     assert drift["qpos_max"] == 0.0 and drift["pos_max"] == 0.0, drift
+
+
+class _CountingHead:
+    """A stand-in head: query ``q`` (from 0) predicts ``q`` for every step of its chunk."""
+
+    horizon = 4
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        out = np.full((1, self.horizon, 2), float(self.calls), dtype=np.float32)
+        self.calls += 1
+        return out
+
+
+class _Recent:
+    """A stand-in recorder whose recent episode is a one-step synthetic demonstration."""
+
+    def recent_episode(self, log: object, steps: int, privileged: bool = False) -> Episode:
+        return demo(0, steps=1)
+
+
+def _policy(**options: object) -> Any:
+    from sensorium.bodies.h1_closed_loop import LearnedPolicy
+
+    policy = LearnedPolicy(
+        judge=None,  # type: ignore[arg-type]
+        recorder=_Recent(),  # type: ignore[arg-type]
+        features=proprio_features,
+        head=_CountingHead(),  # type: ignore[arg-type]
+        first=2,
+        **options,  # type: ignore[arg-type]
+    )
+    policy.log = []  # type: ignore[assignment]
+    policy.hold = np.zeros(2, dtype=np.float32)
+    return policy
+
+
+def test_chunks_are_played_in_full_by_default_and_replaced_when_queried_more_often() -> None:
+    chunked = _policy()
+    played = [float(chunked.act(t, None)[0]) for t in range(2, 12)]
+    assert played == [0, 0, 0, 0, 1, 1, 1, 1, 2, 2] and chunked.queries == 3
+    every = _policy(query_every=1)
+    played = [float(every.act(t, None)[0]) for t in range(2, 8)]
+    assert played == [0, 1, 2, 3, 4, 5] and every.queries == 6
+    assert float(chunked.act(0, None)[0]) == 0.0  # held before the first window
+
+
+def test_temporal_ensembling_averages_the_chunks_covering_each_step() -> None:
+    from sensorium.bodies.h1_closed_loop import ENSEMBLE_M
+
+    policy = _policy(query_every=1, ensemble=True)
+    played = [float(policy.act(t, None)[0]) for t in range(2, 9)]
+    for i, value in enumerate(played):
+        live = np.arange(max(0, i - 3), i + 1)  # the queries whose 4-step chunks cover this step
+        w = np.exp(-ENSEMBLE_M * np.arange(len(live)))  # oldest first, weighted most
+        assert value == pytest.approx(float(w @ live / w.sum()), abs=1e-5)
+    assert len(policy.chunks) == 4
