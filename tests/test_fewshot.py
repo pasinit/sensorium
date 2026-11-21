@@ -596,3 +596,46 @@ def test_temporal_ensembling_averages_the_chunks_covering_each_step() -> None:
         w = np.exp(-ENSEMBLE_M * np.arange(len(live)))  # oldest first, weighted most
         assert value == pytest.approx(float(w @ live / w.sum()), abs=1e-5)
     assert len(policy.chunks) == 4
+
+
+def test_dart_noise_perturbs_the_executed_action_and_logs_the_clean_one(tmp_path: Path) -> None:
+    import json
+    import subprocess
+    import sys
+    import tomllib
+
+    from sensorium.bodies.h1_scene import assets_available
+    from sensorium.bodies.humanoid import HumanoidRecorder
+
+    if not assets_available():
+        pytest.skip("H1 assets missing: run `make h1-assets`")
+    root = Path(__file__).resolve().parent.parent
+    config = root / "configs" / "tasks_demos.toml"
+    settings = dict(tomllib.loads(config.read_text())["humanoid"]["pincer_stack"]["settings"])
+    steps = 20
+    episodes = []
+    for noise in (0.0, 0.05, 0.05):
+        with HumanoidRecorder({**settings, "action_noise": noise}) as rec:
+            rec.render_eyes = False
+            episodes.append(rec.record(11, "experiment", steps))
+    clean, noisy, again = episodes
+    assert "executed_action" not in clean.privileged
+    executed = noisy.privileged["executed_action"]
+    assert executed.shape == noisy.action.shape and np.abs(executed).max() <= 1.0
+    gap = executed - noisy.action  # the logged label is the clean action; the noise was applied
+    assert 0.02 < float(gap.std()) < 0.08
+    np.testing.assert_array_equal(executed, again.privileged["executed_action"])  # seeded
+    np.testing.assert_array_equal(noisy.privileged["qpos"], again.privileged["qpos"])
+    assert not np.allclose(noisy.privileged["qpos"][-1], clean.privileged["qpos"][-1])
+    out = tmp_path / "dart"
+    cmd = [sys.executable, str(root / "scripts" / "fewshot.py"), "dart", str(out)]
+    cmd += ["--config", str(config), "--block", "pincer_stack", "--noise", "0.03"]
+    cmd += ["--first", "3", "--episodes", "2", "--steps", "5"]
+    run = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    assert run.stdout.count("pincer_stack dart ") == 2
+    saved = Episode.load(out / "pincer_stack-dart-00004.npz")
+    assert saved.privileged["executed_action"].shape == saved.action.shape
+    assert (
+        json.loads(json.dumps(saved.meta))["seed"]
+        != Episode.load(out / "pincer_stack-dart-00003.npz").meta["seed"]
+    )

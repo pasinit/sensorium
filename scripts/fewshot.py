@@ -11,6 +11,8 @@ Usage:
         [--senses all|vision] [--query-every N] [--ensemble]
     uv run python scripts/fewshot.py expert <out.json> --config <demos.toml> --block <name>
         [--first I] [--episodes N] [--max-steps 600] [--no-render]
+    uv run python scripts/fewshot.py dart <out_dir> --config <demos.toml> --block <name> --noise S
+        [--first I] [--episodes N] [--steps 600]
     uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
     uv run python scripts/fewshot.py floor <out.json> --config <demos.toml> --block <name>
         --demos '<glob>' [--first I] [--episodes N] [--steps 600] [--no-render]
@@ -45,6 +47,12 @@ Usage:
 - ``expert``: the task's scripted program itself on the closed-loop start states, judged and capped
   as the heads are (``h1_closed_loop.evaluate_program``): the ceiling the task allows. Judged on the
   physics state, so ``--no-render`` skips the cameras.
+- ``dart``: noise-injected demonstrations (DART): the task's scripted program on its own start
+  states (seeds hashing the policy ``dart``, index ``--first`` on), Gaussian noise of standard
+  deviation ``--noise`` on every executed action (the recorder's ``action_noise``), the clean
+  intended action logged as the label and the executed one in ``privileged["executed_action"]``.
+  No cameras: for the state oracle only (``--encoder state``). One file per episode,
+  ``<block>-dart-<i>.npz``.
 - ``cap``: a task's closed-loop step cap, 1.5 x the 95th percentile of the steps at which its
   demonstrations succeeded, from their generation manifests (metadata only).
 - ``floor``: the task's null-policy floors on the same start states. ``hold`` keeps the start
@@ -395,6 +403,23 @@ def expert(args: argparse.Namespace) -> None:
     print(f"{args.block} expert: {result['success']}/{result['n']} = {result['rate']:.0%}")
 
 
+def dart(args: argparse.Namespace) -> None:
+    """Record noise-injected demonstrations of the task program (no cameras)."""
+    config = tomllib.loads(args.config.read_text())
+    settings = {**config["humanoid"][args.block]["settings"], "action_noise": args.noise}
+    master = int(config["master_seed"])
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    with HumanoidRecorder(settings) as rec:
+        rec.render_eyes = False
+        rec.render_right = False
+        for i in range(args.first, args.first + args.episodes):
+            seed = episode_seed(master, "humanoid", "dart", i, args.block)
+            episode = rec.record(seed, "experiment", args.steps)
+            episode.save(args.out_dir / f"{args.block}-dart-{i:05d}.npz")
+            success = bool(episode.meta["success"])
+            print(f"{args.block} dart {i} seed {seed}: success {success}, {episode.length} steps")
+
+
 def main() -> None:
     """Dispatch the subcommands."""
     parser = argparse.ArgumentParser()
@@ -437,6 +462,14 @@ def main() -> None:
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--max-steps", "--steps", dest="max_steps", type=int, default=600)
     p.add_argument("--no-render", action="store_true", help="skip the cameras (judged on physics)")
+    p = sub.add_parser("dart")
+    p.add_argument("out_dir", type=Path)
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--block", required=True)
+    p.add_argument("--noise", type=float, required=True, help="action noise standard deviation")
+    p.add_argument("--first", type=int, default=0)
+    p.add_argument("--episodes", type=int, default=1)
+    p.add_argument("--steps", type=int, default=600)
     p = sub.add_parser("cap")
     p.add_argument("manifests", help="glob of a task's demonstration manifests")
     p = sub.add_parser("floor")
@@ -454,7 +487,7 @@ def main() -> None:
     p.add_argument("--successful", action="store_true", help="replay successful demos only")
     args = parser.parse_args()
     commands = {"cache": cache, "sweep": sweep, "closed-loop": closed_loop, "floor": floor}
-    {**commands, "cap": cap, "expert": expert}[args.command](args)
+    {**commands, "cap": cap, "expert": expert, "dart": dart}[args.command](args)
 
 
 if __name__ == "__main__":

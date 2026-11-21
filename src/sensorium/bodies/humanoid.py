@@ -173,6 +173,7 @@ class Log:
     prop_state: list[np.ndarray] = field(default_factory=list)
     phase: list[list[int]] = field(default_factory=list)
     intervention: list[int] = field(default_factory=list)
+    executed: list[np.ndarray] = field(default_factory=list)  # with action noise: what was applied
     fell: list[bool] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
     skin_touched: list[bool] = field(default_factory=list)
@@ -217,6 +218,9 @@ class HumanoidRecorder:
         self.task = bool(settings.get("task", False))  # demonstrator mode of an experiment program
         self.hidden_properties = bool(settings.get("hidden_properties", False))
         self.effort = bool(settings.get("effort", False))
+        # DART (D-diag-1): Gaussian noise of this standard deviation on every executed action
+        # dimension; the policy's clean action is still the one logged (the label)
+        self.action_noise = float(settings.get("action_noise", 0.0))  # type: ignore[arg-type]
         # Event-dense scenes (h1_director): a scene director, and a cap on the babbling planner's
         # goals per plan (fewer retries: less wall-clock spent planning, more spent acting).
         director = settings.get("director")
@@ -440,6 +444,16 @@ class HumanoidRecorder:
             self.dynamics.substep(self.data, contacts_now)
         self.peaks.update(contacts_now)
 
+    def perturbed(self, action: np.ndarray, log: Log) -> np.ndarray:
+        """The action the arms get: ``action`` itself, or with ``action_noise`` (DART) Gaussian
+        noise added and clipped to [-1, 1], kept in ``log.executed`` (the label stays clean)."""
+        if not self.action_noise:
+            return action
+        noise = self.noise_rng.normal(0.0, self.action_noise, action.shape)
+        executed = np.clip(action + noise, -1.0, 1.0).astype(np.float32)
+        log.executed.append(executed)
+        return executed
+
     def record(
         self,
         seed: int,
@@ -459,11 +473,12 @@ class HumanoidRecorder:
         """
         self.check_policy(policy)
         # Later streams are new; the first ones are unchanged by adding them.
-        streams = np.random.SeedSequence(seed).spawn(8)
+        streams = np.random.SeedSequence(seed).spawn(9)
         layout_rng, policy_rng, sound_rng, look_rng, self.props_rng, self.effort_rng = (
             np.random.default_rng(child) for child in streams[:6]
         )
         self.director_rng = np.random.default_rng(streams[6])
+        self.noise_rng = np.random.default_rng(streams[8])
         if self.table_jitter:  # before the policy: its planner works at this episode's height
             jitter = np.random.default_rng(streams[7]).uniform(
                 -self.table_jitter, self.table_jitter
@@ -506,6 +521,7 @@ class HumanoidRecorder:
                 action = np.asarray(actor.act(step, self.data), dtype=np.float32)
                 self.observe(log, contacts, gravity, bool(fell), action, sound)
             self.note_phase(log, actor)
+            action = self.perturbed(action, log)
             stop = self.stop_reason(actor, bool(fell))
             if stop:
                 end_reason = stop
@@ -887,6 +903,8 @@ class HumanoidRecorder:
             privileged["phase"] = np.array(log.phase, dtype=np.int8)
         if log.intervention:
             privileged["intervention"] = np.array(log.intervention, dtype=np.int8)
+        if log.executed:
+            privileged["executed_action"] = np.stack(log.executed)
         if self.target_geom is not None:
             privileged["target"] = np.tile(self.target.astype(np.float32), (steps, 1))
         if self.hidden_properties and self.objects:
