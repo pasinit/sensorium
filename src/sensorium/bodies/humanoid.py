@@ -498,10 +498,12 @@ class HumanoidRecorder:
                     log, contacts, gravity, bool(fell), np.zeros(len(self.space.names)), sound
                 )
                 actor.see(log)  # type: ignore[attr-defined]
-                action = actor.act(step, self.data)
-                log.action[-1] = action.astype(np.float32)
+                # float32, as logged: the applied action is the recorded one, so a replay of the
+                # episode's actions reproduces it exactly (float64 here drifted ~1e-7 a step)
+                action = np.asarray(actor.act(step, self.data), dtype=np.float32)
+                log.action[-1] = action
             else:
-                action = actor.act(step, self.data)
+                action = np.asarray(actor.act(step, self.data), dtype=np.float32)
                 self.observe(log, contacts, gravity, bool(fell), action, sound)
             self.note_phase(log, actor)
             stop = self.stop_reason(actor, bool(fell))
