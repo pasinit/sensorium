@@ -8,7 +8,7 @@ Usage:
     uv run python scripts/fewshot.py sweep <cache.npz> <out_dir> [--k 1 5 10 50] [--seeds 0 1 2]
     uv run python scripts/fewshot.py closed-loop <head.pt> <out.json> --config <demos.toml>
         --block <name> --encoder ... [--first I] [--episodes N] [--max-steps 600]
-        [--senses all|vision]
+        [--senses all|vision] [--query-every N] [--ensemble]
     uv run python scripts/fewshot.py expert <out.json> --config <demos.toml> --block <name>
         [--first I] [--episodes N] [--max-steps 600] [--no-render]
     uv run python scripts/fewshot.py cap '<task demos>/manifest.parts/*.jsonl'
@@ -39,6 +39,9 @@ Usage:
     without succeeding is a failure, counted in ``capped``.
   - ``--senses vision`` skips touch and sound synthesis (zeros in their place) for encoders that
     read neither, the V arms and DINOv2; it is refused for a layer that reads them.
+  - ``--query-every N`` asks the head every N steps instead of once per chunk; ``--ensemble``
+    plays the weighted mean of the overlapping chunks' predictions for each step (temporal
+    ensembling, ``h1_closed_loop.LearnedPolicy``).
 - ``expert``: the task's scripted program itself on the closed-loop start states, judged and capped
   as the heads are (``h1_closed_loop.evaluate_program``): the ceiling the task allows. Judged on the
   physics state, so ``--no-render`` skips the cameras.
@@ -354,9 +357,21 @@ def closed_loop(args: argparse.Namespace) -> None:
             rec.render_eyes = False  # the state oracle reads no frame: judged on the same physics
         first = fewshot.first_step(DT, substeps)
         report = progress(f"{args.block} closed-loop")
-        outcomes = evaluate(rec, seeds, args.max_steps, features, head, first, report, oracle)
+        outcomes = evaluate(
+            rec,
+            seeds,
+            args.max_steps,
+            features,
+            head,
+            first,
+            report,
+            oracle,
+            args.query_every,
+            args.ensemble,
+        )
     result = {"head": str(args.head), "block": args.block, "encoder": args.encoder}
     result |= {"max_steps": args.max_steps, "senses": args.senses}
+    result |= {"query_every": args.query_every or head.horizon, "ensemble": args.ensemble}
     result |= summary(outcomes)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=1))
@@ -411,6 +426,8 @@ def main() -> None:
     p.add_argument("--episodes", type=int, default=50)
     p.add_argument("--max-steps", "--steps", dest="max_steps", type=int, default=600)
     p.add_argument("--senses", choices=sorted(SKIPPED), default="all")
+    p.add_argument("--query-every", type=int, default=None, help="steps between queries")
+    p.add_argument("--ensemble", action="store_true", help="temporal ensembling (ACT)")
     encoder_args(p)
     p = sub.add_parser("expert")
     p.add_argument("out", type=Path)
