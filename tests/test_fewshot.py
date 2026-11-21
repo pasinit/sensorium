@@ -516,3 +516,23 @@ def test_a_demonstration_replays_its_own_actions_into_the_same_episode(tmp_path:
     result = json.loads(out.read_text())["self"]
     assert result["n"] == 1 and result["replays"][0]["demo"] == "demo-0.npz"
     assert result["replays"][0]["first_step"] is None
+
+
+def test_a_replay_of_an_episodes_own_actions_is_bit_exact() -> None:
+    import tomllib
+
+    from sensorium.bodies.h1_closed_loop import self_replay
+    from sensorium.bodies.h1_scene import assets_available
+    from sensorium.bodies.humanoid import HumanoidRecorder
+
+    if not assets_available():
+        pytest.skip("H1 assets missing: run `make h1-assets`")
+    root = Path(__file__).resolve().parent.parent
+    config = tomllib.loads((root / "configs" / "tasks_demos.toml").read_text())
+    steps = 60
+    with HumanoidRecorder(dict(config["humanoid"]["pincer_stack"]["settings"])) as rec:
+        rec.render_eyes = False
+        recorded = rec.record(11, "experiment", steps)
+        _, drift = self_replay(rec, recorded, steps)
+    # the applied action is the logged float32 one: no drift at all, not just below tolerance
+    assert drift["qpos_max"] == 0.0 and drift["pos_max"] == 0.0, drift
